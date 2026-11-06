@@ -1,0 +1,128 @@
+"""The nick list: 19 px rows, XChat's 7x7 status lights near the top of the row, away nicks grey."""
+from __future__ import annotations
+
+from PySide6.QtCore import QAbstractListModel, QModelIndex, QRect, QSize, Qt
+from PySide6.QtCore import QPointF
+from PySide6.QtGui import QColor, QPainter, QPixmap
+from PySide6.QtWidgets import QAbstractItemView, QListView, QStyle, QStyledItemDelegate
+
+from .config import Theme
+from .session import Buffer, User
+from .widgets import ASSETS
+
+
+
+def icon_name(order: str, prefixes: str) -> str | None:
+    """XChat's get_user_icon: @ % + are fixed, one level above @ is red, two above is purple, higher has none."""
+    rank = next((c for c in order if c in prefixes), None)
+    if rank is None:
+        return None
+    fixed = {"@": "op", "%": "hop", "+": "voice"}.get(rank)
+    if fixed or "@" not in order:
+        return fixed
+    level = order.index("@") - order.index(rank) - 1
+    return {0: "red", 1: "purple"}.get(level)
+
+
+LIGHT_SIZES = (7, 9, 11, 12, 14, 18, 21)
+_lights: dict[tuple[str, int], QPixmap] = {}
+
+
+def light_pixmap(name: str | None, dpr: float) -> QPixmap | None:
+    """The status light made for this display scale, so it is drawn pixel for pixel with no blur."""
+    if name is None:
+        return None
+    px = min(LIGHT_SIZES, key=lambda s: abs(s - 7 * dpr))
+    key = (name, round(dpr * 100))
+    pm = _lights.get(key)
+    if pm is None:
+        pm = QPixmap(str(ASSETS / "lights" / f"{name}-{px}.png"))
+        pm.setDevicePixelRatio(dpr)
+        _lights[key] = pm
+    return pm
+
+
+class UserModel(QAbstractListModel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.users: list[User] = []
+        self.buffer: Buffer | None = None
+
+    def set_buffer(self, b: Buffer | None) -> None:
+        self.beginResetModel()
+        self.buffer = b
+        self.users = b.sorted_users() if b is not None else []
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.users)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        u = self.users[index.row()]
+        if role == Qt.ItemDataRole.DisplayRole:
+            return u.nick
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return u.host or None
+        if role == Qt.ItemDataRole.UserRole:
+            return u
+        return None
+
+
+class UserDelegate(QStyledItemDelegate):
+    ROW = 19
+    ICON = 7
+
+    def __init__(self, theme: Theme, parent=None):
+        super().__init__(parent)
+        self.theme = theme
+
+    def sizeHint(self, option, index):
+        return QSize(40, self.ROW)
+
+    def paint(self, p: QPainter, option, index):
+        u: User = index.data(Qt.ItemDataRole.UserRole)
+        r = option.rect
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        if selected:
+            p.fillRect(r, QColor(self.theme.selected))
+        # highest rank wins when the server sends several prefixes
+        model = index.model()
+        order = model.buffer.session.prefix_order if model.buffer else "@%+"
+        dpr = p.device().devicePixelRatioF()
+        pm = light_pixmap(icon_name(order, u.prefixes), dpr)
+        if pm is not None:
+            # lined up with real screen pixels, or the shine would smear at 125 and 150 %
+            x, y = round((r.x() + 3) * dpr) / dpr, round((r.y() + 3) * dpr) / dpr
+            p.drawPixmap(QPointF(x, y), pm)
+        col = "#ffffff" if selected else (self.theme.away if u.away else self.theme.text)
+        p.setPen(QColor(col))
+        tr = QRect(r.x() + 3 + self.ICON + 7, r.y(), r.width() - 3 - self.ICON - 7, r.height())
+        p.drawText(tr, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, u.nick)
+
+
+class UserList(QListView):
+    def __init__(self, theme: Theme, parent=None):
+        super().__init__(parent)
+        self.model_ = UserModel(self)
+        self.setModel(self.model_)
+        self.setItemDelegate(UserDelegate(theme, self))
+        self.setUniformItemSizes(True)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+
+    def set_buffer(self, b: Buffer | None) -> None:
+        keep = {u.nick for u in self.selected_users()}
+        top = self.verticalScrollBar().value()
+        self.model_.set_buffer(b)
+        sm = self.selectionModel()
+        for i, u in enumerate(self.model_.users):
+            if u.nick in keep:
+                sm.select(self.model_.index(i), sm.SelectionFlag.Select)
+        self.verticalScrollBar().setValue(top)
+
+    def selected_users(self) -> list[User]:
+        return [i.data(Qt.ItemDataRole.UserRole) for i in self.selectedIndexes()]
