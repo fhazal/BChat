@@ -7,6 +7,10 @@ The JSON file ("manifest") looks like:
                 "notes": ["Colours 16-98", ...], "notes_url": "https://..."},
      "test":   {... same, for TEST builds ...}}
 dev-tools/make_manifest.py writes it and signs with the release key, which never leaves the owner's PC.
+
+On GitHub, UPDATE_URL is the repository's releases list (the GitHub API). Each release carries one asset,
+bchat-update.json, holding that release's single signed entry; stable releases are normal releases and TEST
+builds are pre-releases. BChat picks the newest release it wants from the list, then reads only that one asset.
 """
 from __future__ import annotations
 
@@ -25,8 +29,9 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequ
 
 from . import full_version
 
-# Where the manifest lives. Empty until the owner picks a home for releases (GitHub or bajubesi.org).
-UPDATE_URL = ""
+# Where updates are listed: the GitHub releases of fhazal/BChat (a plain manifest URL works too).
+UPDATE_URL = "https://api.github.com/repos/fhazal/BChat/releases?per_page=30"
+UPDATE_ASSET = "bchat-update.json"
 PUBLIC_KEY = "ARhI0vJdhDtK1QX6sN1F7jKkLS0mataG0pUi7uN2830="
 DAY_MS = 24 * 3600 * 1000
 RETRY_MS = 3600 * 1000
@@ -73,6 +78,26 @@ def pick(manifest: dict, current: str, want_test: bool) -> dict | None:
         return None
     best = max(choices, key=lambda c: version_key(c["version"]))
     return best if version_key(best["version"]) > version_key(current) else None
+
+
+def tag_version(tag: str) -> str:
+    return re.sub(r"^[vV]", "", (tag or "").strip())
+
+
+def from_github(releases: list, current: str, want_test: bool) -> tuple[str, str] | None:
+    """(version, address of its bchat-update.json) for the newest wanted release newer than this one."""
+    best = None
+    for r in releases:
+        if not isinstance(r, dict) or r.get("draft"):
+            continue
+        v = tag_version(r.get("tag_name", ""))
+        if version_key(v)[0] == () or (is_test(v) or r.get("prerelease")) and not want_test:
+            continue
+        asset = next((a.get("browser_download_url") for a in r.get("assets") or []
+                      if isinstance(a, dict) and a.get("name") == UPDATE_ASSET), None)
+        if asset and version_key(v) > version_key(current) and (best is None or version_key(v) > version_key(best[0])):
+            best = (v, asset)
+    return best
 
 
 def launch_installer(path: str, restart: bool) -> None:
@@ -179,11 +204,7 @@ class Updater(QObject):
                 self._set(FAILED, "This build has no update address yet, so it can't look for updates.")
             return
         self._set(CHECKING)
-        req = QNetworkRequest(QUrl(self.url))
-        req.setRawHeader(b"User-Agent", f"BChat/{self.current}".encode())
-        req.setAttribute(QNetworkRequest.Attribute.CacheLoadControlAttribute, QNetworkRequest.CacheLoadControl.AlwaysNetwork)
-        req.setTransferTimeout(20000)
-        reply = self.net.get(req)
+        reply = self.net.get(self._request(self.url))
         reply.finished.connect(lambda: self._checked(reply))
 
     def _checked(self, reply: QNetworkReply) -> None:
@@ -195,7 +216,37 @@ class Updater(QObject):
             manifest = json.loads(bytes(reply.readAll()).decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             return self._check_failed("Couldn't check for updates: the update file is damaged.")
-        entry = pick(manifest, self.current, self.want_test())
+        if isinstance(manifest, list):                       # GitHub releases list
+            found = from_github(manifest, self.current, self.want_test())
+            if found is None:
+                return self._offer(None)
+            req = self._request(found[1])
+            asset = self.net.get(req)
+            asset.finished.connect(lambda: self._checked_asset(asset, found[0]))
+            return
+        self._offer(pick(manifest, self.current, self.want_test()) if isinstance(manifest, dict) else None)
+
+    def _checked_asset(self, reply: QNetworkReply, version: str) -> None:
+        reply.deleteLater()
+        if reply.error() != QNetworkReply.NetworkError.NoError:
+            return self._check_failed(f"Couldn't check for updates: {_why(reply)}")
+        try:
+            entry = json.loads(bytes(reply.readAll()).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return self._check_failed("Couldn't check for updates: the update file is damaged.")
+        if not isinstance(entry, dict) or entry.get("version") != version:
+            return self._check_failed(f"BChat {version} isn't signed by BajuBesi Labs, so it was left alone.")
+        self._offer(entry)
+
+    def _request(self, url: str) -> QNetworkRequest:
+        req = QNetworkRequest(QUrl(url))
+        req.setRawHeader(b"User-Agent", f"BChat/{self.current}".encode())
+        req.setRawHeader(b"Accept", b"application/vnd.github+json, application/json, */*")
+        req.setAttribute(QNetworkRequest.Attribute.CacheLoadControlAttribute, QNetworkRequest.CacheLoadControl.AlwaysNetwork)
+        req.setTransferTimeout(20000)
+        return req
+
+    def _offer(self, entry: dict | None) -> None:
         if entry is None:
             self.entry = None
             self._set(UPTODATE if self.manual else NONE)

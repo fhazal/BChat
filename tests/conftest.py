@@ -8,6 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pytest
+import bchat.updater
+bchat.updater.UPDATE_URL = ""      # tests never ask the real GitHub for releases
 from PySide6.QtWidgets import QApplication
 
 

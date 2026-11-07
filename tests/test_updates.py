@@ -380,3 +380,82 @@ def test_failure_reasons_are_short(app, tmp_path, server):
     u.check(manual=True)
     assert wait(app, lambda: u.state == up.FAILED)
     assert u.reason == "Couldn't check for updates: the update server answered 404 File not found." and "http" not in u.reason
+
+
+# --- GitHub releases list (what UPDATE_URL points at) ------------------------------------
+
+def github(base, www, releases):
+    """releases: (tag, prerelease, draft, entry-or-None). Writes the API list + one bchat-update.json per release."""
+    out = []
+    for i, (tag, pre, draft, entry) in enumerate(releases):
+        assets = []
+        if entry is not None:
+            (www / f"u{i}.json").write_text(json.dumps(entry))
+            assets.append({"name": up.UPDATE_ASSET, "browser_download_url": f"{base}/u{i}.json"})
+        assets.append({"name": f"BChat-{tag}-setup.exe", "browser_download_url": f"{base}/x.exe"})
+        out.append({"tag_name": tag, "prerelease": pre, "draft": draft, "assets": assets})
+    (www / "releases.json").write_text(json.dumps(out))
+    return f"{base}/releases.json"
+
+
+def gh_make(app, tmp_path, url, current="0.1.0", **cfg):
+    u = make(app, tmp_path, "", current=current, **cfg)
+    u.url = url
+    return u
+
+
+def test_url_is_the_github_releases_list():
+    import importlib, bchat.updater as fresh
+    src = Path(fresh.__file__).read_text(encoding="utf-8")
+    assert 'UPDATE_URL = "https://api.github.com/repos/fhazal/BChat/releases?per_page=30"' in src
+
+
+def test_github_newest_stable_is_offered_and_downloads(app, tmp_path, server):
+    base, release = server
+    www = tmp_path / "www"
+    old, new = release("0.1.1"), release("0.1.2")
+    url = github(base, www, [("v0.1.2", False, False, new), ("v0.1.1", False, False, old)])
+    u = gh_make(app, tmp_path, url)
+    u.check()
+    assert wait(app, lambda: u.state == up.AVAILABLE) and u.entry["version"] == "0.1.2"
+    u.download()
+    assert wait(app, lambda: u.state == up.READY)
+    assert hashlib.sha256(Path(u.cfg.update_ready_file).read_bytes()).hexdigest() == new["sha256"]
+
+
+def test_github_test_prereleases_only_when_wanted_drafts_never(app, tmp_path, server):
+    base, release = server
+    www = tmp_path / "www"
+    t, d = release("0.1.1-TEST22"), release("0.1.3")
+    url = github(base, www, [("v0.1.3", False, True, d), ("v0.1.1-TEST22", True, False, t)])
+    u = gh_make(app, tmp_path, url)
+    u.check(manual=True)
+    assert wait(app, lambda: u.state == up.UPTODATE)          # draft hidden, test not wanted
+    u2 = gh_make(app, tmp_path, url, current="0.1.0-TEST21")   # a TEST build follows test releases
+    u2.check()
+    assert wait(app, lambda: u2.state == up.AVAILABLE) and u2.entry["version"] == "0.1.1-TEST22"
+
+
+def test_github_asset_must_match_its_release_and_be_signed(app, tmp_path, server):
+    base, release = server
+    www = tmp_path / "www"
+    real = release("0.1.1")
+    url = github(base, www, [("v0.2.0", False, False, real)])  # release says 0.2.0, signed file says 0.1.1
+    u = gh_make(app, tmp_path, url)
+    u.check(manual=True)
+    assert wait(app, lambda: u.state == up.FAILED) and "isn't signed" in u.reason
+    bad = release("0.1.4", sign=False)
+    u2 = gh_make(app, tmp_path, github(base, www, [("v0.1.4", False, False, bad)]))
+    u2.check(manual=True)
+    assert wait(app, lambda: u2.state == up.FAILED) and "isn't signed" in u2.reason
+
+
+def test_github_empty_list_and_no_asset_are_up_to_date(app, tmp_path, server):
+    base, release = server
+    www = tmp_path / "www"
+    u = gh_make(app, tmp_path, github(base, www, []))
+    u.check(manual=True)
+    assert wait(app, lambda: u.state == up.UPTODATE)
+    u2 = gh_make(app, tmp_path, github(base, www, [("v0.9.0", False, False, None)]))
+    u2.check(manual=True)
+    assert wait(app, lambda: u2.state == up.UPTODATE)
