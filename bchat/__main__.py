@@ -57,7 +57,11 @@ def main(argv: list[str] | None = None) -> int:
         win.updater.start()
         if not args.no_autoconnect:
             win.autoconnect()
-        if not win.sessions and not cfg.skip_network_list:
+        from .welcome import first_start_action, run_welcome
+        action = first_start_action(cfg, bool(win.sessions))
+        if action == "welcome":
+            run_welcome(win)
+        elif action == "netlist":
             win.open_network_list()
 
     QTimer.singleShot(0, start)

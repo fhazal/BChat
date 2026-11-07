@@ -25,9 +25,15 @@ def _target(folder: Path, i: int) -> str:
 
 def _memory_mode(folder: Path | None = None) -> bool:
     """Tests, developer tools and the build checks run BChat with throwaway settings in the temp folder:
-    those never write to the real Credential Manager. A real install keeps its settings in AppData."""
-    if os.environ.get("BCHAT_VAULT") == "memory" or os.name != "nt":
+    those never write to the real Credential Manager. The installed program ALWAYS uses Credential Manager,
+    wherever its settings folder is, unless a build check asks for the stand-in with BCHAT_VAULT=file
+    (a password must never end up in a plain file just because someone used --config-dir in %TEMP%)."""
+    import sys
+    mode = os.environ.get("BCHAT_VAULT", "")
+    if mode == "memory" or os.name != "nt":
         return True
+    if getattr(sys, "frozen", False) and mode != "file":
+        return False
     if folder is not None:
         import tempfile
         try:

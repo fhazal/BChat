@@ -31,6 +31,10 @@ ChangesAssociations=yes
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
+[InstallDelete]
+; program files only (settings and logs live in AppData): clears icons and libraries an older build left behind
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Files]
 Source: "..\dist\BChat\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 

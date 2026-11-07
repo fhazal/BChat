@@ -86,3 +86,17 @@ def test_throwaway_folders_never_touch_the_real_credential_manager(monkeypatch, 
     vault.put(tmp_path, "kept")
     vault._memory.clear()
     assert vault.get(tmp_path) == "kept" and (tmp_path / "vault-test.json").exists()
+
+
+def test_installed_program_always_uses_credential_manager(monkeypatch, tmp_path):
+    """The real exe with --config-dir in %TEMP% must not drop passwords into a plain file (found 11-08)."""
+    import sys
+    monkeypatch.delenv("BCHAT_VAULT", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    if __import__("os").name == "nt":
+        assert not vault._memory_mode(tmp_path)
+        assert not vault._memory_mode(Path(tempfile.gettempdir()) / "bchat-welcome")
+    monkeypatch.setenv("BCHAT_VAULT", "file")                         # only the build checks ask for the stand-in
+    assert vault._memory_mode(tmp_path)
+    monkeypatch.setenv("BCHAT_VAULT", "memory")
+    assert vault._memory_mode(tmp_path)

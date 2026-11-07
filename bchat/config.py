@@ -327,6 +327,7 @@ class Config:
     skip_network_list: bool = False
     sts: dict = field(default_factory=dict)  # host -> {port, expires}
     imported: bool = False
+    welcome_done: bool = False   # the first-start welcome window was answered (only shown with no networks)
 
 
 def default_dir() -> Path:
