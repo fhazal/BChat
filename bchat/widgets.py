@@ -1,6 +1,7 @@
 """Theme, icons, the macOS-style title bar and the frameless window base."""
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, Signal
@@ -31,6 +32,13 @@ def pixmap(name: str) -> QPixmap:
     return QPixmap(str(p))
 
 
+def header_logo(dpr: float) -> QPixmap:
+    height = min((16, 20, 24, 28, 32, 40, 48), key=lambda h: abs(h - 16 * dpr))
+    pm = QPixmap(str(ASSETS / "header" / f"logo-{height}.png"))
+    pm.setDevicePixelRatio(dpr)
+    return pm
+
+
 def stylesheet(t: Theme) -> str:
     return f"""
     * {{ font-family: Tahoma, Verdana, sans-serif; font-size: 8pt; color: {t.text}; }}
@@ -47,7 +55,7 @@ def stylesheet(t: Theme) -> str:
     QMenu::item:selected {{ background: {t.selected}; color: #fff; }}
     QMenu::item:disabled {{ color: {t.disabled}; }}
     QMenu::separator {{ height: 1px; background: {t.border}; margin: 3px 2px; }}
-    QTreeWidget, QListView, QListWidget, QLineEdit, QPlainTextEdit, QComboBox, QTableWidget {{
+    QTreeWidget, QListView, QListWidget, QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QTableWidget {{
         background: {t.panel}; border: 1px solid {t.border}; selection-background-color: {t.selected};
         selection-color: #fff; outline: 0; }}
     QTreeWidget::item {{ height: 17px; }}
@@ -61,8 +69,11 @@ def stylesheet(t: Theme) -> str:
     QPushButton:hover {{ background: {t.popup}; }}
     QPushButton:pressed {{ background: {t.selected}; }}
     QPushButton:disabled {{ color: {t.disabled}; }}
-    QCheckBox::indicator {{ width: 11px; height: 11px; border: 1px solid {t.border}; background: {t.panel}; }}
-    QCheckBox::indicator:checked {{ background: {t.selected}; }}
+    QToolButton:disabled {{ color: {t.disabled}; }}
+    QCheckBox::indicator {{ width: 12px; height: 12px; border: 1px solid {t.border}; border-radius: 2px; background: {t.panel}; }}
+    QCheckBox::indicator:hover {{ border: 1px solid {t.check}; }}
+    QCheckBox::indicator:checked {{ background: {t.check}; border: 1px solid {t.check}; image: url({(ASSETS / "tick.png").as_posix()}); }}
+    QCheckBox::indicator:checked:disabled {{ background: {t.disabled}; border: 1px solid {t.disabled}; }}
     QScrollBar:vertical {{ background: {t.bar}; width: 13px; margin: 0; }}
     QScrollBar::handle:vertical {{ background: {t.thumb}; min-height: 24px; }}
     QScrollBar::handle:vertical:hover {{ background: {t.thumb_hover}; }}
@@ -146,10 +157,11 @@ class TitleBar(QWidget):
             self.lights.append(b)
         g.insertWidget(1, self.lights[2]) if full else None
         self.group.installEventFilter(self)
-        # 16 px like XChat's title bar; the .ico holds a frame made for each display scale
+        # 16 px tall like XChat's title bar icon, no background, drawn for this display scale
         self.logo = QLabel(self)
-        self.logo.setFixedSize(16, 16)
-        self.logo.setPixmap(QIcon(str(ASSETS / "bchat.ico")).pixmap(QSize(16, 16), self.devicePixelRatioF()))
+        pm = header_logo(self.devicePixelRatioF())
+        self.logo.setFixedSize(math.ceil(pm.width() / pm.devicePixelRatio()), 16)
+        self.logo.setPixmap(pm)
         self.logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         lay.addWidget(self.logo)
         self.title = QLabel(self)

@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QPlainTextEdit, QPushButton, QVBoxLayout)
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+                               QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout)
 
 from . import config
 from .config import NetworkConfig, Server
@@ -11,11 +11,26 @@ from .widgets import FramedDialog, icon
 from .xchat_import import parse_server
 
 
+def ask_save(parent, name: str) -> str:
+    """'save', 'discard' or 'stay' when the Edit window is closed with unsaved changes (tests replace this)."""
+    box = QMessageBox(QMessageBox.Icon.Question, "BChat", f"Save changes to {name}?",
+                      QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard |
+                      QMessageBox.StandardButton.Cancel, parent)
+    box.setDefaultButton(QMessageBox.StandardButton.Save)
+    r = box.exec()
+    return {QMessageBox.StandardButton.Save: "save", QMessageBox.StandardButton.Discard: "discard"}.get(
+        QMessageBox.StandardButton(r), "stay")
+
+
 class NetworkEditDialog(FramedDialog):
     def __init__(self, net: NetworkConfig, parent=None):
         super().__init__(f"BChat: Edit {net.name}", parent)
         self.net = net
-        self.resize(420, 580)
+        self.resize(420, 600)
+        top = QFormLayout()
+        self.name = QLineEdit(net.name, self)
+        top.addRow("Network name:", self.name)
+        self.body.addLayout(top)
         self.body.addWidget(QLabel("Servers, one per line: host/port. Use /+port for SSL."))
         self.servers = QPlainTextEdit(self)
         self.servers.setPlainText("\n".join(f"{s.host}/{'+' if s.ssl else ''}{s.port}" for s in net.servers))
@@ -51,14 +66,43 @@ class NetworkEditDialog(FramedDialog):
         for c in (self.use_global, self.auto, self.cycle, self.invalid):
             self.body.addWidget(c)
         row = QHBoxLayout()
+        cancel = QPushButton(icon("close-light"), "&Cancel", self)
+        cancel.setAutoDefault(False)
+        cancel.clicked.connect(lambda: FramedDialog.reject(self))   # throw changes away, no question
+        save = QPushButton(icon("save"), "&Save", self)   # XChat's floppy icon, bottom right next to Cancel
+        save.setDefault(True)
+        save.clicked.connect(self.accept)
         row.addStretch(1)
-        close = QPushButton(icon("close-light"), "Close", self)
-        close.clicked.connect(self.accept)
-        row.addWidget(close)
+        row.addWidget(cancel)
+        row.addWidget(save)
         self.body.addLayout(row)
+        self._start = self._state()
+
+    def _state(self) -> tuple:
+        return (self.name.text(), self.servers.toPlainText(), self.autojoin.text(), self.commands.text(), self.nick.text(),
+                self.nick2.text(), self.username.text(), self.realname.text(), self.password.text(), self.nickserv.text(),
+                self.sasl_user.text(), self.sasl_password.text(), self.use_global.isChecked(), self.auto.isChecked(),
+                self.cycle.isChecked(), self.invalid.isChecked())
+
+    def reject(self) -> None:
+        """Red button or Esc: ask before losing changes (it used to drop them silently)."""
+        if self._state() != self._start:
+            choice = ask_save(self, self.net.name)
+            if choice == "save":
+                self.accept()
+                return
+            if choice == "stay":
+                return
+        super().reject()
 
     def accept(self) -> None:
         n = self.net
+        win = getattr(self.parent(), "win", self.parent())
+        if self.name.text().strip() != n.name and hasattr(win, "rename_network"):
+            if not win.rename_network(n, self.name.text()):
+                self.name.setText(n.name)   # empty or already used: keep the old name, stay open
+                self.name.setFocus()
+                return
         n.servers = [parse_server(l.strip(), False) for l in self.servers.toPlainText().splitlines() if l.strip()]
         n.autojoin = self.autojoin.text().strip()
         n.commands = [c.strip() for c in self.commands.text().split(";") if c.strip()]
@@ -95,6 +139,9 @@ class NetworkListDialog(FramedDialog):
         mid = QHBoxLayout()
         self.list = QListWidget(self)
         self.list.itemDoubleClicked.connect(lambda _: self._connect())
+        # XChat: click the selected name (or F2) to rename it
+        self.list.setEditTriggers(QAbstractItemView.EditTrigger.SelectedClicked | QAbstractItemView.EditTrigger.EditKeyPressed)
+        self.list.itemChanged.connect(self._renamed)
         mid.addWidget(self.list, 1)
         buttons = QVBoxLayout()
         buttons.setSpacing(5)
@@ -144,11 +191,24 @@ class NetworkListDialog(FramedDialog):
                 continue
             it = QListWidgetItem(("* " if n.favorite else "") + n.name)
             it.setData(Qt.ItemDataRole.UserRole, n)
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsEditable)
             self.list.addItem(it)
             if n is cur:
                 self.list.setCurrentItem(it)
         if self.list.currentItem() is None and self.list.count():
             self.list.setCurrentRow(0)
+
+    def _renamed(self, it: QListWidgetItem) -> None:
+        n = it.data(Qt.ItemDataRole.UserRole)
+        if n is None:
+            return
+        text = it.text()
+        if n.favorite and text.startswith("* "):
+            text = text[2:]
+        self.win.rename_network(n, text)
+        self.list.blockSignals(True)
+        it.setText(("* " if n.favorite else "") + n.name)   # taken or empty names snap back
+        self.list.blockSignals(False)
 
     def _current(self) -> NetworkConfig | None:
         lst = getattr(self, "list", None)

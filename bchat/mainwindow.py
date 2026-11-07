@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import html
+import re
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPixmap, QTextDocument
-from PySide6.QtWidgets import (QApplication, QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence, QPixmap, QTextDocument
+from PySide6.QtWidgets import (QToolButton, QApplication, QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction)
 
@@ -20,6 +21,7 @@ from .countries import country_of
 from .userlist import UserList, icon_name, light_pixmap
 from .widgets import ASSETS, FramedDialog, FramelessWindow, icon, stylesheet
 from . import xchat_import
+from .topicbar import TopicBar, emoji_popup
 
 
 class _CopyLabel(QLabel):
@@ -53,6 +55,7 @@ class InputBox(QLineEdit):
         self._cycle: list[str] = []
         self._cycle_i = 0
         self._cycle_start = 0
+        self._cycle_text = ""
 
     def event(self, ev):
         if ev.type() == QEvent.Type.KeyPress and ev.key() == Qt.Key.Key_Tab:
@@ -60,8 +63,23 @@ class InputBox(QLineEdit):
             return True
         return super().event(ev)
 
+    FORMAT_KEYS = {Qt.Key.Key_B: "\x02", Qt.Key.Key_K: "\x03", Qt.Key.Key_U: "\x1f", Qt.Key.Key_O: "\x0f"}
+
     def keyPressEvent(self, ev):
-        if ev.key() == Qt.Key.Key_Up and self.history:
+        mods = ev.modifiers()
+        bar = self.win.chat.verticalScrollBar()
+        if ev.matches(QKeySequence.StandardKey.Paste):
+            pasted = QApplication.clipboard().text()
+            if "\n" in pasted.strip():
+                self.win.paste_lines(pasted)
+                return
+        if ev.key() in (Qt.Key.Key_PageUp, Qt.Key.Key_PageDown) and mods == Qt.KeyboardModifier.NoModifier:
+            bar.setValue(bar.value() + (bar.pageStep() if ev.key() == Qt.Key.Key_PageDown else -bar.pageStep()))
+        elif mods == Qt.KeyboardModifier.ShiftModifier and ev.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            bar.setValue(bar.value() + (bar.singleStep() if ev.key() == Qt.Key.Key_Down else -bar.singleStep()))
+        elif mods == Qt.KeyboardModifier.ControlModifier and ev.key() in self.FORMAT_KEYS:
+            self.insert(self.FORMAT_KEYS[ev.key()])  # bold, colour, underline, reset
+        elif ev.key() == Qt.Key.Key_Up and self.history:
             self.pos_ = max(0, self.pos_ - 1)
             self.setText(self.history[self.pos_])
         elif ev.key() == Qt.Key.Key_Down:
@@ -76,25 +94,42 @@ class InputBox(QLineEdit):
         del self.history[:-200]
         self.pos_ = len(self.history)
 
+    def _candidates(self, word: str, at_start: bool) -> list[str]:
+        b = self.win.buf
+        s = b.session
+        low = lower(word)
+        if at_start and word.startswith("/"):
+            return ["/" + c for c in commands.COMMAND_NAMES if c.startswith(low[1:])]
+        if s.is_channel(word):
+            return [x.name for x in s.buffers.values() if x.kind == CHANNEL and lower(x.name).startswith(low)]
+        names = [u.nick for u in b.sorted_users() if lower(u.nick).startswith(low)]
+        if b.kind == QUERY and lower(b.name).startswith(low):
+            names.append(b.name)
+        return names
+
     def _complete(self) -> None:
         b = self.win.buf
         if b is None:
             return
         text = self.text()
+        # the text changed since the last Tab (typing, history), so this is a new completion
+        if text != self._cycle_text:
+            self._cycle = []
         if not self._cycle:
             cur = self.cursorPosition()
             self._cycle_start = text.rfind(" ", 0, cur) + 1
-            word = lower(text[self._cycle_start:cur])
+            word = text[self._cycle_start:cur]
             if not word:
                 return
-            self._cycle = [u.nick for u in b.sorted_users() if lower(u.nick).startswith(word)]
+            self._cycle = self._candidates(word, self._cycle_start == 0)
             self._cycle_i = 0
             if not self._cycle:
                 return
-        nick = self._cycle[self._cycle_i % len(self._cycle)]
+        item = self._cycle[self._cycle_i % len(self._cycle)]
         self._cycle_i += 1
-        suffix = ": " if self._cycle_start == 0 else " "
-        self.setText(text[: self._cycle_start] + nick + suffix)
+        is_nick = not item.startswith("/") and not b.session.is_channel(item)
+        self.setText(text[: self._cycle_start] + item + (": " if is_nick and self._cycle_start == 0 else " "))
+        self._cycle_text = self.text()
 
 
 class MainWindow(FramelessWindow):
@@ -110,6 +145,8 @@ class MainWindow(FramelessWindow):
         self.setWindowIcon(QIcon(str(ASSETS / "bchat.ico")))
         self.setStyleSheet(stylesheet(cfg.theme))
         self.resize(cfg.win_width, cfg.win_height)
+        if cfg.win_x >= 0 and QGuiApplication.screenAt(QPoint(cfg.win_x + 50, cfg.win_y + 10)) is not None:
+            self.move(cfg.win_x, cfg.win_y)
         self._build()
         self._build_menus()
         self._refresh_all()
@@ -141,10 +178,12 @@ class MainWindow(FramelessWindow):
         ml = QVBoxLayout(mid)
         ml.setContentsMargins(0, 0, 0, 0)
         ml.setSpacing(3)
-        self.topic = QLineEdit(mid)
-        self.topic.returnPressed.connect(self._topic_entered)
+        self.topic = TopicBar(self.cfg.theme, mid)
+        self.topic.submitted.connect(self._topic_entered)
         ml.addWidget(self.topic)
         self.chat = ChatView(self.cfg, mid)
+        self.chat.menu_provider = self._chat_menu
+        self.chat.channel_double_clicked.connect(self._join_clicked)
         ml.addWidget(self.chat, 1)
 
         right = QWidget(self.split)
@@ -166,7 +205,7 @@ class MainWindow(FramelessWindow):
         self.split.setStretchFactor(0, 0)
         self.split.setStretchFactor(1, 1)
         self.split.setStretchFactor(2, 0)
-        self.split.setSizes([104, 720, 124])
+        self.split.setSizes([self.cfg.pane_left, 720, self.cfg.pane_right])
         lay.addWidget(self.split, 1)
 
         bottom = QHBoxLayout()
@@ -177,11 +216,19 @@ class MainWindow(FramelessWindow):
         bottom.addSpacing(4)
         bottom.addWidget(self.own_light)
         self.nick_label = QLabel(body, objectName="nicklabel")
+        self.nick_label.installEventFilter(self)
+        self.nick_label.setToolTip("Click to change your nick")
         self.nick_label.setTextFormat(Qt.TextFormat.PlainText)
         bottom.addWidget(self.nick_label)
         self.input = InputBox(self)
         self.input.returnPressed.connect(self._entered)
         bottom.addWidget(self.input, 1)
+        self.emoji_btn = QToolButton(body)
+        self.emoji_btn.setText("\U0001F642")
+        self.emoji_btn.setToolTip("Emoji (Windows: Win + . for all of them)")
+        self.emoji_btn.setStyleSheet("QToolButton { font-family: 'Segoe UI Emoji'; }")
+        self.emoji_btn.clicked.connect(self._emoji_for_input)
+        bottom.addWidget(self.emoji_btn)
         self.status_strip = QLabel(body)
         self.status_strip.setFixedWidth(3)
         self._status_colour = ""
@@ -193,7 +240,6 @@ class MainWindow(FramelessWindow):
         self.outer.addWidget(body, 1)
 
         self.topic.setVisible(self.cfg.show_topic)
-        self.right_panel.setVisible(self.cfg.show_userlist)
         self.menubar_.setVisible(self.cfg.show_menu)
 
     def _act(self, menu: QMenu, text: str, slot=None, shortcut: str = "", ico: str = "", checkable=False, checked=False) -> QAction:
@@ -257,7 +303,7 @@ class MainWindow(FramelessWindow):
         self.away_act = self._act(s, "Marked Away", self._toggle_away, "Alt+A", checkable=True)
 
         st = m.addMenu("S&ettings")
-        self._act(st, "&Preferences", None, "", "preferences")
+        self._act(st, "&Preferences", self.open_preferences, "", "preferences")
         adv = st.addMenu(icon("justify"), "Advanced")
         for name in ("Auto Replace...", "CTCP Replies...", "Dialog Buttons...", "Keyboard Shortcuts...", "Text Events...",
                      "URL Handlers...", "User Commands...", "Userlist Buttons...", "Userlist Popup..."):
@@ -306,6 +352,8 @@ class MainWindow(FramelessWindow):
             s.buffer_changed.connect(self._buffer_changed)
             s.users_changed.connect(self._users_changed)
             s.line_added.connect(self.chat.add_line)
+            s.line_added.connect(self._log_line)
+            s.alert.connect(self._flash)
             s.state_changed.connect(self._state_changed)
             s.raw_line.connect(self._raw)
             self._buffer_added(s.server_buffer)
@@ -396,14 +444,15 @@ class MainWindow(FramelessWindow):
                 colour = t.away
             it.setForeground(0, QColor(colour))
         if b is self.buf:
-            if not self.topic.hasFocus():
-                self.topic.setText(strip_format(b.topic))
+            self.topic.set_topic(b.topic)
+            self._topic_permission()
             self._refresh_title()
             if not b.lines:
                 self.chat.reload(b)
 
     def _users_changed(self, b: Buffer) -> None:
         if b is self.buf:
+            self._topic_permission()   # own op/deop changes who may set the topic
             self.userlist.set_buffer(b)
             self._refresh_count()
             self._refresh_title()
@@ -447,6 +496,11 @@ class MainWindow(FramelessWindow):
             return
         s = b.session
         if b.kind == SERVER:
+            others = len(s.buffers)
+            if others and not getattr(self, "skip_quit_prompt", False):
+                r = QMessageBox.question(self, "Close server tab", f"This server still has {others} channels or dialogs associated with it. Close them all?")
+                if r != QMessageBox.StandardButton.Yes:
+                    return
             s.disconnect_from_network()
             for other in list(s.buffers.values()):
                 s.close_buffer(other)
@@ -471,10 +525,17 @@ class MainWindow(FramelessWindow):
                 self.chat.show_buffer(None)
                 self._refresh_all()
 
+    def _decide_userlist(self) -> None:
+        """XChat's mg_decide_userlist: only channel tabs have a nick list, so server and private tabs get the full width."""
+        self.right_panel.setVisible(self.cfg.show_userlist and self.buf is not None and self.buf.kind == CHANNEL)
+
     def _refresh_all(self) -> None:
         b = self.buf
-        self.topic.setText(strip_format(b.topic) if b else "")
+        self._decide_userlist()
+        self.topic.edit.clearFocus()
+        self.topic.set_topic(b.topic if b else "")
         self.topic.setEnabled(bool(b and b.kind == CHANNEL))
+        self._topic_permission()
         self.userlist.set_buffer(b if b and b.kind == CHANNEL else None)
         self._refresh_count()
         self._refresh_title()
@@ -490,6 +551,8 @@ class MainWindow(FramelessWindow):
     def _refresh_nick(self) -> None:
         s = self.session
         self.nick_label.setText(s.nick if s else (self.cfg.nick or "BChat"))
+        # greyed while away, as in XChat
+        self.nick_label.setStyleSheet(f"color: {self.cfg.theme.away};" if s and s.away and s.state == "connected" else "")
         name = icon_name(s.prefix_order, s.own_rank(self.buf)) if s and self.buf.kind == CHANNEL else None
         self.own_light.setPixmap(light_pixmap(name, self.devicePixelRatioF()) or QPixmap())
 
@@ -541,7 +604,7 @@ class MainWindow(FramelessWindow):
             return
         host = s.server_name or s.net.name
         if b.kind == CHANNEL:
-            modes = f"+{b.modes}" if b.modes else ""
+            modes = b.mode_text()
             inside = " ".join(x for x in (modes, str(len(b.users)) if b.users else "") if x)
             tail = f" ({inside})" if inside else ""
             self.setWindowTitle(f"BChat: {s.nick} @ {host} / {b.name}{tail}")
@@ -567,11 +630,29 @@ class MainWindow(FramelessWindow):
             return
         commands.run(self, self.buf.session, self.buf, text)
 
-    def _topic_entered(self) -> None:
+    def _topic_entered(self, text: str) -> None:
         b = self.buf
         if b is not None and b.kind == CHANNEL:
-            b.session.send("TOPIC", b.name, self.topic.text())
+            b.session.send("TOPIC", b.name, text)
             self.input.setFocus()
+
+    def _emoji_for_input(self) -> None:
+        p = emoji_popup(self.cfg.theme, self)
+        p.picked.connect(lambda e: (self.input.insert(e), self.input.setFocus()))
+        p.show_below(self.emoji_btn)
+        self._emoji_popup = p
+
+    def _topic_permission(self) -> None:
+        """+t channels: only halfop and up may set the topic (Unreal and InspIRCd allow % too)."""
+        b = self.buf
+        if b is None or b.kind != CHANNEL:
+            return
+        s = b.session
+        order = s.prefix_order or "@+"
+        rank = s.own_rank(b)
+        top = order.index("%") if "%" in order else (order.index("@") if "@" in order else -1)
+        ok = "t" not in b.modes or (rank != "" and order.index(rank) <= top)
+        self.topic.set_allowed(ok, "Only channel operators can change the topic here (+t)")
 
     # --- nick list actions ---------------------------------------------------------
 
@@ -708,6 +789,16 @@ class MainWindow(FramelessWindow):
             menu.addAction("Reconnect", s.reconnect)
             menu.addAction("Disconnect", s.disconnect_from_network)
             menu.addAction("Server Links", lambda: s.send("LINKS"))
+            menu.addSeparator()
+            if s.net in self.cfg.networks:   # AdiIRC: Edit Network once it is saved, Add Network before
+                menu.addAction("Edit Network...", lambda: self.edit_network(s.net))
+            elif s.net.servers:
+                menu.addAction(icon("connect"), "Add Network", lambda: self.add_network_from(s))
+        menu.addSeparator()
+        log = menu.addAction("Log to Disk")
+        log.setCheckable(True)
+        log.setChecked(self._log_key(b) in self.cfg.log_tabs)
+        log.toggled.connect(lambda on: self._set_logging(b, on))
         menu.addSeparator()
         menu.addAction(icon("close-light"), "Close", lambda: self.close_buffer(b))
         menu.exec(self.tree.viewport().mapToGlobal(pos))
@@ -731,6 +822,109 @@ class MainWindow(FramelessWindow):
         at = order.index(cur) if cur in order else 0
         self.tree.setCurrentItem(order[(at + delta) % len(order)])
 
+    # --- chat clicks ---------------------------------------------------------------
+
+    def open_url(self, url: str) -> None:
+        link = QUrl(url if "://" in url else "http://" + url)
+        if link.scheme().lower() in ("http", "https", "ftp"):
+            QDesktopServices.openUrl(link)
+
+    def _join_clicked(self, name: str) -> None:
+        s = self.session
+        if s is None or not s.is_channel(name):
+            return
+        existing = s.buffers.get(lower(name))
+        if existing is not None:
+            self.select_buffer(existing)
+        else:
+            s.focus_next = lower(name)
+        s.send("JOIN", name)
+
+    def _chat_menu(self, pos) -> QMenu:
+        """Right click in the chat: on a link, a nick or a channel it offers those, as in XChat."""
+        b, s = self.buf, self.session
+        href = self.chat.anchorAt(pos)
+        word = self.chat.word_at(pos)
+        user = b.users.get(lower(word)) if b is not None and word else None
+        if user is not None and not href:
+            return self.build_nick_menu(b, [user])
+        menu = QMenu(self)
+        if href:
+            menu.addAction("Open Link in Browser", lambda: self.open_url(href))
+            menu.addAction("Copy Link", lambda: QApplication.clipboard().setText(href))
+            menu.addSeparator()
+        elif s is not None and word and s.is_channel(word):
+            menu.addAction(f"Join {word}", lambda: self._join_clicked(word))
+            menu.addSeparator()
+        copy = menu.addAction(icon("copy"), "Copy Selection", self.chat.copy)
+        copy.setEnabled(self.chat.textCursor().hasSelection())
+        menu.addAction("Select All", self.chat.selectAll)
+        menu.addSeparator()
+        menu.addAction(icon("clear"), "Clear Text", self._clear_current)
+        menu.addAction(icon("find"), "Search Text...", self._search)
+        return menu
+
+    def eventFilter(self, obj, ev):
+        if obj is getattr(self, "nick_label", None) and ev.type() == QEvent.Type.MouseButtonPress:
+            s = self.session
+            if s is not None and s.state == "connected":
+                nick, ok = QInputDialog.getText(self, "Change nick", "Enter new nickname:", text=s.nick)
+                if ok and nick.strip():
+                    s.send("NICK", nick.strip().split()[0])
+            return True
+        return super().eventFilter(obj, ev)
+
+    def _flash(self, b: Buffer) -> None:
+        if not self.isActiveWindow():
+            QApplication.alert(self)
+
+    # --- logging: per tab, from the tab's right-click menu ----------------------------
+
+    @staticmethod
+    def _log_key(b: Buffer) -> str:
+        return f"{lower(b.session.net.name)}/{lower(b.name)}"
+
+    def _set_logging(self, b: Buffer, on: bool) -> None:
+        key = self._log_key(b)
+        if on and key not in self.cfg.log_tabs:
+            self.cfg.log_tabs.append(key)
+        elif not on and key in self.cfg.log_tabs:
+            self.cfg.log_tabs.remove(key)
+        config.save(self.cfg, self.cfg_dir)
+
+    def log_path(self, b: Buffer) -> Path:
+        # names come from the network, so nothing in them may reach outside the logs folder
+        clean = lambda name: re.sub(r"[^\w#&+-]", "_", name) or "_"
+        return self.cfg_dir / "logs" / clean(b.session.net.name) / f"{clean(b.name)}.log"
+
+    def _log_line(self, b: Buffer, ln) -> None:
+        if self._log_key(b) not in self.cfg.log_tabs:
+            return
+        path = self.log_path(b)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%b %d %H:%M:%S', time.localtime(ln.ts))} {ln.left}\t{strip_format(ln.text)}\n")
+        except OSError as e:
+            b.session.add(b.session.server_buffer, "error", "*", f"Couldn't write the log: {e}")
+            self.cfg.log_tabs.remove(self._log_key(b))
+
+    def paste_lines(self, text: str) -> None:
+        """Multi-line paste: each line goes as a message. They are never run as commands, so a paste can't /quit."""
+        lines = [l for l in text.splitlines() if l.strip()]
+        b = self.buf
+        if b is None or not lines:
+            return
+        if b.kind == SERVER:
+            b.session.add(b, "error", "*", "No channel joined. Try /join #channel")
+            return
+        if len(lines) > 5 and not getattr(self, "skip_quit_prompt", False):
+            r = QMessageBox.question(self, "Paste", f"Send {len(lines)} lines to {b.name}?")
+            if r != QMessageBox.StandardButton.Yes:
+                return
+        for line in lines:
+            b.session.say(b.name, line)
+
     def _toggle_menu(self, on: bool) -> None:
         self.cfg.show_menu = on
         self.menubar_.setVisible(on)
@@ -741,7 +935,7 @@ class MainWindow(FramelessWindow):
 
     def _toggle_userlist(self, on: bool) -> None:
         self.cfg.show_userlist = on
-        self.right_panel.setVisible(on)
+        self._decide_userlist()
 
     def _toggle_away(self, on: bool) -> None:
         if self.session:
@@ -809,6 +1003,81 @@ class MainWindow(FramelessWindow):
         config.save(self.cfg, self.cfg_dir)
         QMessageBox.information(self, "Import XChat Settings", "\n".join(report))
 
+    def _rekey(self, s: Session, name: str) -> None:
+        """Sessions are filed by network name; keep that in step when a tab gets a new name."""
+        for key, value in list(self.sessions.items()):
+            if value is s:
+                del self.sessions[key]
+        self.sessions[name] = s
+
+    def rename_network(self, net: NetworkConfig, new: str) -> bool:
+        """Network List: click the selected name to rename it, as in XChat. False when the name is empty or taken."""
+        new = new.strip()
+        old = net.name
+        if not new or (lower(new) != lower(old) and any(lower(n.name) == lower(new) for n in self.cfg.networks)):
+            return False
+        if new == old:
+            return True
+        net.name = new
+        prefix_old, prefix_new = f"{lower(old)}/", f"{lower(new)}/"
+        self.cfg.log_tabs = [prefix_new + k[len(prefix_old):] if k.startswith(prefix_old) else k for k in self.cfg.log_tabs]
+        for s in list(self.sessions.values()):
+            if s.net is net:
+                self._rekey(s, new)
+                if s.server_buffer.name == old:
+                    s.server_buffer.name = new
+                    self._buffer_changed(s.server_buffer)
+        config.save(self.cfg, self.cfg_dir)
+        return True
+
+    def edit_network(self, net: NetworkConfig) -> None:
+        """Server tab menu > Edit Network: the Network List's Edit window for this network, saved on OK."""
+        from .networklist import NetworkEditDialog
+        if NetworkEditDialog(net, self).exec():
+            config.save(self.cfg, self.cfg_dir)
+
+    def add_network_from(self, s: Session) -> NetworkConfig:
+        """AdiIRC's one-click save: this /server connection becomes a network in the Network List."""
+        base = s.network_token or s.net.servers[0].host
+        taken = {lower(n.name) for n in self.cfg.networks}
+        name, i = base, 0
+        while lower(name) in taken:
+            i += 1
+            name = f"{base}({i})"
+        chans = [b.name for b in s.buffers.values() if b.kind == CHANNEL and b.joined]
+        net = NetworkConfig(name, [Server(sv.host, sv.port, sv.ssl) for sv in s.net.servers],
+                            password=s.net.password, autojoin=",".join(chans))
+        if s.nick and lower(s.nick) != lower(self.cfg.nick):
+            net.nick, net.use_global = s.nick, False
+        self.cfg.networks.append(net)
+        config.save(self.cfg, self.cfg_dir)
+        s.net, s.typed_by_hand = net, False   # this tab now is that network (no second save, reconnect uses it)
+        self._rekey(s, name)
+        what = f"channels {' '.join(chans)}" if chans else "no channels"
+        s.add(s.server_buffer, INFO, "*", f"Saved as network {name} in the Network List (server, nick, {what}).")
+        if not getattr(self, "skip_dialogs", False):
+            from .networklist import NetworkListDialog
+            d = NetworkListDialog(self)
+            for row in range(d.list.count()):
+                if d.list.item(row).data(Qt.ItemDataRole.UserRole) is net:
+                    d.list.setCurrentRow(row)
+            d.exec()
+        return net
+
+    def open_preferences(self, page: str = "Text box") -> None:
+        from .preferences import PreferencesDialog
+        PreferencesDialog(self, page).exec()
+
+    def apply_preferences(self) -> None:
+        """After Preferences > OK: new colours everywhere, chat redrawn with the new font and text settings."""
+        self.setStyleSheet(stylesheet(self.cfg.theme))
+        self.chat.apply_font()
+        self.chat.reload_all()
+        self.userlist.viewport().update()
+        for b in [b for s in self.sessions.values() for b in s.all_buffers()]:
+            self._buffer_changed(b)
+        config.save(self.cfg, self.cfg_dir)
+
     def open_network_list(self) -> None:
         from .networklist import NetworkListDialog
         NetworkListDialog(self).exec()
@@ -822,7 +1091,14 @@ class MainWindow(FramelessWindow):
                 return
         for s in self.sessions.values():
             s.disconnect_from_network()
+        self.cfg.win_maximized = self.isMaximized()
         if not self.isMaximized():
             self.cfg.win_width, self.cfg.win_height = self.width(), self.height()
+            self.cfg.win_x, self.cfg.win_y = self.x(), self.y()
+        left, _, right = self.split.sizes()
+        if left > 0:
+            self.cfg.pane_left = left
+        if right > 0:
+            self.cfg.pane_right = right
         config.save(self.cfg, self.cfg_dir)
         super().closeEvent(ev)

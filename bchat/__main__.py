@@ -39,7 +39,10 @@ def main(argv: list[str] | None = None) -> int:
             xchat_import.import_into(cfg, sources)
             config.save(cfg, args.config_dir)
     win = MainWindow(cfg, args.config_dir)
-    win.show()
+    if cfg.win_maximized:
+        win.showMaximized()
+    else:
+        win.show()
 
     def start():
         if not args.no_autoconnect:

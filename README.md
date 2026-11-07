@@ -25,4 +25,4 @@ python -m pytest
 
 ## Licence
 
-GPL-2.0-or-later, see `LICENSE`. Menu, chat and dialog icons come from XChat 2 and its GTK build, both GPL/LGPL. The BChat logo and the user list lights are BChat's own, the lights drawn by `packaging/make_lights.py`. Colours are [Catppuccin Mocha](https://catppuccin.com) (MIT).
+GPL-2.0-or-later, see `LICENSE`. Menu, chat and dialog icons come from XChat 2 and its GTK build, both GPL/LGPL. The BChat logo and the user list lights are BChat's own, the lights drawn by `packaging/make_lights.py` and every logo file (icon, title bar, installer pictures) built from the user's transparent set by `packaging/make_logo_assets.py`. Colours are [Catppuccin Mocha](https://catppuccin.com) (MIT).

@@ -78,6 +78,17 @@ class Theme:
     status_on: str = _m["green"]
     status_op: str = _m["sapphire"]
     status_lag: str = _m["peach"]
+    check: str = _m["sapphire"]        # ticked checkbox: this box with a dark tick (was only a lighter grey)
+    self_nick: str = _m["teal"]        # your own nick, no brackets (user's pick)
+    self_text: str = "#bcdaeb"         # your own text: text with a light teal tint (30 % teal)
+    server_mark: str = _m["mauve"]     # server tab: "*" before server lines (XChat %C22 purple)
+    connect: str = _m["mauve"]         # Connecting / Connected lines, whole line (XChat %C22)
+    send_bracket: str = _m["green"]    # >nick< you sent (XChat %C19)
+    notice_bracket: str = _m["blue"]   # -nick- notice dashes (XChat %C28)
+    notice_nick: str = _m["pink"]      # -nick- notice name (XChat %C29)
+    motd_mark: str = _m["overlay0"]    # server tab: "-" before MOTD lines
+    motd_text: str = _m["subtext1"]
+    ssl_mark: str = _m["sapphire"]     # server tab: "SSL" before certificate lines
     palette: list[str] = field(default_factory=lambda: list(DEFAULT_PALETTE))
 
 
@@ -95,6 +106,21 @@ class Config:
     chat_font: str = "Consolas"
     chat_font_size: int = 9
     timestamps: bool = True
+    stamp_format: str = "[%H:%M]"
+    line_spacing: int = 112        # percent
+    max_lines: int = 5000          # scrollback per tab
+    marker_line: bool = True       # red "read up to here" line
+    rank_lights: str = "off"       # off | lights | slot (lights + empty slot so text lines up)
+    color_nicks: bool = False      # each nick a fixed colour, XChat's "Colored nick names"
+    strip_colors: bool = False     # drop mIRC colours from what people say
+    nick_width: int = 0  # unused since 0.1.0-TEST9 (no nick column); kept so older settings load
+    win_x: int = -1
+    win_y: int = -1
+    win_maximized: bool = False
+    pane_left: int = 104
+    pane_right: int = 124
+    ignores: list[str] = field(default_factory=list)
+    log_tabs: list[str] = field(default_factory=list)
     show_menu: bool = True
     show_topic: bool = True
     show_userlist: bool = True

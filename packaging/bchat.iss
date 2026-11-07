@@ -25,6 +25,8 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 WizardStyle=modern
+; tell Windows icons changed at the end, so a new logo shows without a stale icon cache
+ChangesAssociations=yes
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
@@ -33,8 +35,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 Source: "..\dist\BChat\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 [Icons]
-Name: "{group}\BChat"; Filename: "{app}\BChat.exe"
-Name: "{autodesktop}\BChat"; Filename: "{app}\BChat.exe"; Tasks: desktopicon
+Name: "{group}\BChat"; Filename: "{app}\BChat.exe"; IconFilename: "{app}\BChat.exe"
+Name: "{autodesktop}\BChat"; Filename: "{app}\BChat.exe"; IconFilename: "{app}\BChat.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\BChat.exe"; Description: "Start BChat"; Flags: nowait postinstall skipifsilent

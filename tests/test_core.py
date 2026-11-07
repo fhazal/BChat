@@ -195,4 +195,59 @@ def test_app_icon_has_small_sizes_and_clear_corners(app):
     w = png.width
     for c in ((0, 0), (w - 1, 0), (0, w - 1), (w - 1, w - 1)):
         assert png.getpixel(c)[3] == 0
-    assert png.getpixel((w // 2, w // 2))[3] == 255
+    assert png.getpixel((w // 2, w // 2))[3] > 200
+
+
+def test_header_logo_has_no_background_and_every_scale(app):
+    from PIL import Image
+    from bchat.widgets import ASSETS, header_logo
+    for h in (16, 20, 24, 28, 32, 40, 48):
+        im = Image.open(ASSETS / "header" / f"logo-{h}.png").convert("RGBA")
+        assert im.height == h
+        w = im.width
+        for c in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
+            assert im.getpixel(c)[3] < 40, (h, c)
+    big = Image.open(ASSETS / "header/logo-48.png").convert("RGBA")
+    assert any(p[3] > 200 for p in big.getdata())
+    assert sum(p[3] < 10 for p in big.getdata()) > big.width * big.height * 0.1  # transparent around the B, no box
+    for dpr, h in ((1.0, 16), (1.25, 20), (1.5, 24), (2.0, 32), (3.0, 48)):
+        pm = header_logo(dpr)
+        assert pm.height() == h and pm.devicePixelRatio() == dpr
+
+
+def test_taskbar_icon_is_the_users_bold_logo():
+    """The user's current transparent set (assets/logo/pinkblue since 11-07 ~11:30) is the app, taskbar and installer icon."""
+    from PIL import Image, ImageChops
+    from bchat.widgets import ASSETS
+    root = ASSETS.parents[1] / "assets/logo/pinkblue/transparent"
+    shipped = Image.open(ASSETS / "bchat.png").convert("RGBA")
+    theirs = Image.open(root / "BChat_256.png").convert("RGBA")
+    assert ImageChops.difference(shipped, theirs).getbbox() is None
+    assert (ASSETS / "bchat.ico").read_bytes() == (root / "BChat.ico").read_bytes()
+
+def test_ticked_checkbox_has_a_real_tick():
+    """User: ticked boxes were only a slightly lighter grey. Now a sapphire box with a dark tick."""
+    from bchat.config import Theme
+    from bchat.widgets import ASSETS, stylesheet
+    t = Theme()
+    css = stylesheet(t)
+    assert (ASSETS / "tick.png").exists()
+    assert f"QCheckBox::indicator:checked {{ background: {t.check};" in css and "tick.png" in css
+
+
+def test_popup_opens_above_when_no_room_below():
+    """User: the emoji popup by the input box went under the taskbar when maximized."""
+    from PySide6.QtCore import QRect, QSize
+    from bchat.topicbar import place
+    screen = QRect(0, 0, 1920, 1040)                       # work area above a 40 px taskbar
+    size = QSize(180, 170)
+    # topic bar button near the top: opens below
+    assert place(QRect(1500, 80, 26, 24), size, screen).y() == 104
+    # input box button at the bottom, maximized: opens above, fully on screen
+    p = place(QRect(1880, 1010, 26, 24), size, screen)
+    assert p.y() == 1010 - 170 and p.y() + size.height() <= 1040
+    assert p.x() + size.width() <= 1920                    # pushed in from the right edge
+    # odd case: no room either way still stays inside the screen
+    small = QRect(0, 0, 400, 200)
+    p = place(QRect(10, 90, 26, 24), size, small)
+    assert 0 <= p.y() and p.y() + size.height() <= 200

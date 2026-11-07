@@ -1,22 +1,30 @@
-"""The chat area: stamp, right-aligned nick column, separator line, text that wraps past the separator."""
+"""The chat area, inline like XChat with the column off / AdiIRC: stamp, nick or marker, text. No column, no line.
+Wrapped lines continue under the line's own text."""
 from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetrics, QPainter, QPen, QTextBlockFormat,
-                           QTextCharFormat, QTextCursor, QTextDocument, QTextImageFormat, QTextOption)
+import re
+
+import zlib
+
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetrics, QImage, QPainter, QPen, QTextBlockFormat,
+                           QTextCharFormat, QTextCursor, QTextDocument, QTextImageFormat)
 from PySide6.QtWidgets import QTextBrowser
 
 from .config import Config
 from .protocol import parse_format, split_urls
-from .session import (ACTION, ERROR, HILITE, INFO, JOIN, MSG, NOTICE, NOW_TALKING, PART, SELF, TOPIC, WHOIS, Buffer,
-                      Line)
+from .session import (ACTION, CONNECT, ERROR, HILITE, INFO, JOIN, MSG, NOTICE, NOW_TALKING, PART, SELF, SERVER, TOPIC,
+                      WHOIS, Buffer, Line)
 from .widgets import ASSETS
 
 
 class ChatView(QTextBrowser):
-    NICK_CHARS = 13
+    channel_double_clicked = Signal(str)
+    menu_provider = None  # set by the main window; builds the right-click menu
+
+    PICTURES = {WHOIS: "info", JOIN: "te-join", NOW_TALKING: "te-join", PART: "te-part", ACTION: "te-action"}
     MAX_BLOCKS = 5000
 
     def __init__(self, cfg: Config, parent=None):
@@ -40,11 +48,6 @@ class ChatView(QTextBrowser):
         self.chat_font = QFont(self.cfg.chat_font, self.cfg.chat_font_size)
         self.chat_font.setStyleHint(QFont.StyleHint.Monospace)
         fm = QFontMetrics(self.chat_font)
-        self.char_w = fm.horizontalAdvance("0")
-        self.stamp_w = (self.char_w * 8) if self.cfg.timestamps else 0
-        self.nick_w = self.char_w * self.NICK_CHARS
-        self.sep_x = self.stamp_w + self.nick_w + self.char_w // 2
-        self.text_x = self.sep_x + self.char_w // 2 + 2
         self.fm = fm
 
     def _new_doc(self) -> QTextDocument:
@@ -52,7 +55,10 @@ class ChatView(QTextBrowser):
         d.setDefaultFont(self.chat_font)
         d.setUndoRedoEnabled(False)
         d.setDocumentMargin(3)
-        d.setMaximumBlockCount(self.MAX_BLOCKS)
+        d.setMaximumBlockCount(max(100, self.cfg.max_lines or self.MAX_BLOCKS))
+        blank = QImage(4, 4, QImage.Format.Format_ARGB32)
+        blank.fill(0)
+        d.addResource(QTextDocument.ResourceType.ImageResource, QUrl("bchat:blank"), blank)
         return d
 
     def doc_for(self, b: Buffer) -> QTextDocument:
@@ -61,7 +67,7 @@ class ChatView(QTextBrowser):
             d = self._new_doc()
             self.docs[id(b)] = d
             for ln in b.lines:
-                self._render(d, ln)
+                self._render(d, b, ln)
         return d
 
     def forget(self, b: Buffer) -> None:
@@ -80,6 +86,7 @@ class ChatView(QTextBrowser):
         self.current = b
         d = self.doc_for(b) if b is not None else self._empty
         self.setDocument(d)
+        d.setDefaultFont(self.chat_font)  # setDocument hands the document the widget's UI font
         self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
         self.viewport().update()
 
@@ -92,6 +99,16 @@ class ChatView(QTextBrowser):
         if d is not None:
             d.deleteLater()
 
+    def reload_all(self) -> None:
+        """Rebuild every tab, e.g. after Preferences: the shown one now, the others when next shown."""
+        cur = self.current
+        self.current = None
+        self.setDocument(self._empty)
+        for key in list(self.docs):
+            self.docs.pop(key).deleteLater()
+        if cur is not None:
+            self.show_buffer(cur)
+
     def reset_marker(self) -> None:
         if self.current is not None:
             self.current.marker = None
@@ -103,7 +120,7 @@ class ChatView(QTextBrowser):
             return
         sb = self.verticalScrollBar()
         at_end = b is not self.current or sb.value() >= sb.maximum() - 4
-        self._render(d, ln)
+        self._render(d, b, ln)
         if at_end and b is self.current:
             sb.setValue(sb.maximum())
 
@@ -113,7 +130,7 @@ class ChatView(QTextBrowser):
         t = self.cfg.theme
         return {
             MSG: (t.nick, t.chat_fg),
-            SELF: (t.nick, t.chat_fg),
+            SELF: (t.self_nick, t.self_text),
             ACTION: (t.topic, t.topic),
             JOIN: (t.join, t.join),
             PART: (t.marker, t.join),
@@ -124,51 +141,128 @@ class ChatView(QTextBrowser):
             HILITE: (t.highlight, t.highlight),
             NOTICE: (t.highlight, t.chat_fg),
             ERROR: (t.marker, t.chat_fg),
+            CONNECT: (t.connect, t.connect),
         }.get(kind, (t.nick, t.chat_fg))
 
-    def _render(self, d: QTextDocument, ln: Line) -> None:
+    def _render(self, d: QTextDocument, b: Buffer, ln: Line) -> None:
+        self._render_flow(d, ln, server=b.kind == SERVER)
+
+    def _left_parts(self, ln: Line, colour: str) -> list[tuple[str, str]]:
+        """XChat's text events colour the brackets apart from the name (textevents.in):
+        >nick< you sent: green brackets, plain name; -nick- notices: blue dashes, pink name."""
+        t, left = self.cfg.theme, ln.left
+        if len(left) > 2 and left[0] == ">" and left[-1] == "<":
+            return [(">", t.send_bracket), (left[1:-1], t.chat_fg), ("<", t.send_bracket)]  # /msg target: plain
+        if ln.kind == NOTICE and len(left) > 2 and left[0] == "-" and left[-1] == "-":
+            return [("-", t.notice_bracket), (left[1:-1], t.notice_nick), ("-", t.notice_bracket)]
+        return [(left, colour)]
+
+    @staticmethod
+    def _put_parts(cur: QTextCursor, parts: list[tuple[str, str]]) -> None:
+        for text, colour in parts:
+            cf = QTextCharFormat()
+            cf.setForeground(QColor(colour))
+            cur.insertText(text, cf)
+
+    def _render_flow(self, d: QTextDocument, ln: Line, server: bool) -> None:
+        """Stamp, one space, nick or marker, one space, text (AdiIRC spacing). Wrapped lines continue under the
+        text: on the server tab right after the marker column, elsewhere under this line's own text."""
+        t = self.cfg.theme
         cur = QTextCursor(d)
         cur.movePosition(QTextCursor.MoveOperation.End)
+        left_col, text_col = self._kind_colours(ln.kind)
+        stamp = self._stamp(ln.ts)
+        pic = self.PICTURES.get(ln.kind)
+        side = self.fm.height() - 2
+        light = self._light_slot(ln, server)   # None, "" (empty slot) or a light name
+        slot = (self.LIGHT + self.fm.horizontalAdvance(" ")) if light is not None else 0
+        if server:
+            indent = self.fm.horizontalAdvance(stamp + "* ")
+        elif pic:
+            indent = self.fm.horizontalAdvance(stamp + " ") + side
+        else:
+            indent = self.fm.horizontalAdvance(stamp + (ln.left + " " if ln.left else "")) + slot
         bf = QTextBlockFormat()
-        bf.setLeftMargin(self.text_x)
-        bf.setTextIndent(-self.text_x)
-        bf.setTabPositions([
-            QTextOption.Tab(self.stamp_w + self.nick_w, QTextOption.TabType.RightTab),
-            QTextOption.Tab(self.text_x, QTextOption.TabType.LeftTab),
-        ])
+        bf.setLeftMargin(indent)
+        bf.setTextIndent(-indent)
+        bf.setLineHeight(max(100, self.cfg.line_spacing), QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
         if d.isEmpty():
             cur.setBlockFormat(bf)
         else:
             cur.insertBlock(bf)
-        left_col, text_col = self._kind_colours(ln.kind)
-        t = self.cfg.theme
-        cf = QTextCharFormat()
-        if self.cfg.timestamps:
+        if stamp:
+            cf = QTextCharFormat()
             cf.setForeground(QColor(t.stamp))
-            cur.insertText(time.strftime("[%H:%M]", time.localtime(ln.ts)), cf)
+            cur.insertText(stamp, cf)
+        if ln.left == "-":
+            mark, text_col = t.motd_mark, t.motd_text
+        else:
+            mark = {"*": t.server_mark if ln.kind in (INFO, CONNECT) else left_col, "SSL": t.ssl_mark}.get(ln.left, left_col)
         cf = QTextCharFormat()
-        cf.setForeground(QColor(left_col))
-        cur.insertText("\t", cf)
-        pic = {WHOIS: "info", JOIN: "te-join", NOW_TALKING: "te-join", PART: "te-part", ACTION: "te-action"}.get(ln.kind)
+        cf.setForeground(QColor(mark))
         if pic:
             img = QTextImageFormat()
             img.setName((ASSETS / f"{pic}.png").as_uri())
-            side = self.fm.height() - 2
             img.setWidth(side)
             img.setHeight(side)
             cur.insertImage(img)
-        else:
-            cur.insertText(self.fm.elidedText(ln.left, Qt.TextElideMode.ElideRight, self.nick_w), cf)
-        cur.insertText("\t", cf)
+            cur.insertText(" ", cf)
+        elif ln.left:
+            if light is not None:
+                self._put_light(cur, light)
+            if self.cfg.color_nicks and ln.kind == MSG and not server:
+                mark = self.nick_colour(ln.left)
+            self._put_parts(cur, self._left_parts(ln, mark) + [(" ", mark)])
         self._insert_text(cur, ln.text, text_col)
+
+    LIGHT = 7   # logical px, same as the user list
+    NICK_COLOURS = ("flamingo", "pink", "mauve", "maroon", "peach", "yellow", "green", "teal", "sky", "sapphire", "blue")
+
+    def _stamp(self, ts: float) -> str:
+        if not self.cfg.timestamps:
+            return ""
+        try:
+            return time.strftime(self.cfg.stamp_format or "[%H:%M]", time.localtime(ts)) + " "
+        except (ValueError, TypeError):
+            return time.strftime("[%H:%M]", time.localtime(ts)) + " "
+
+    def _light_slot(self, ln: Line, server: bool) -> str | None:
+        """Preferences > Text box > rank light: None (no light), a light name, or "" for an empty slot."""
+        mode = self.cfg.rank_lights
+        if server or mode not in ("lights", "slot") or ln.kind not in (MSG, SELF, HILITE) or not ln.left:
+            return None
+        if ln.left[0] in "<>-":
+            return None
+        if ln.rank:
+            return ln.rank
+        return "" if mode == "slot" else None
+
+    def _put_light(self, cur: QTextCursor, name: str) -> None:
+        img = QTextImageFormat()
+        if name:
+            from .userlist import LIGHT_SIZES
+            px = min(LIGHT_SIZES, key=lambda s: abs(s - self.LIGHT * self.devicePixelRatioF()))
+            img.setName((ASSETS / "lights" / f"{name}-{px}.png").as_uri())
+        else:
+            img.setName("bchat:blank")
+        img.setWidth(self.LIGHT)
+        img.setHeight(self.LIGHT)
+        img.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignMiddle)
+        cur.insertImage(img)
+        cur.insertText(" ", QTextCharFormat())
+
+    def nick_colour(self, nick: str) -> str:
+        from .config import _m
+        return _m[self.NICK_COLOURS[zlib.crc32(nick.lower().encode()) % len(self.NICK_COLOURS)]]
 
     def _insert_text(self, cur: QTextCursor, text: str, default_fg: str) -> None:
         t = self.cfg.theme
+        strip = self.cfg.strip_colors
         for sp in parse_format(text):
             cf = QTextCharFormat()
-            fg = QColor(t.palette[sp.fg % 16]) if sp.fg is not None and sp.fg < 99 else QColor(default_fg)
-            bg = QColor(t.palette[sp.bg % 16]) if sp.bg is not None and sp.bg < 99 else None
-            if sp.reverse:
+            fg = QColor(t.palette[sp.fg % 16]) if sp.fg is not None and sp.fg < 99 and not strip else QColor(default_fg)
+            bg = QColor(t.palette[sp.bg % 16]) if sp.bg is not None and sp.bg < 99 and not strip else None
+            if sp.reverse and not strip:
                 fg, bg = QColor(t.chat_bg), fg
             cf.setForeground(fg)
             if bg is not None:
@@ -193,17 +287,43 @@ class ChatView(QTextBrowser):
         if url.scheme().lower() in ("http", "https", "ftp"):
             QDesktopServices.openUrl(url)
 
-    # --- separator and marker ---------------------------------------------------
+    def word_at(self, pos) -> str:
+        cur = self.cursorForPosition(pos)
+        line, i = cur.block().text(), cur.positionInBlock()
+        start, end = i, i
+        while start > 0 and not line[start - 1].isspace():
+            start -= 1
+        while end < len(line) and not line[end].isspace():
+            end += 1
+        return re.sub(r"^[\[\](){}<>,.:;!?'\"@+%~&-]+|[\[\](){}<>,.:;!?'\"]+$", "", line[start:end])
+
+    def contextMenuEvent(self, ev):
+        menu = self.menu_provider(ev.pos()) if self.menu_provider else None
+        if menu is not None:
+            menu.exec(ev.globalPos())
+            menu.deleteLater()
+
+    def mouseDoubleClickEvent(self, ev):
+        word = self.word_at(ev.position().toPoint())
+        if word.startswith(("#", "&")) and len(word) > 1:
+            self.channel_double_clicked.emit(word)
+            ev.accept()
+            return
+        super().mouseDoubleClickEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        super().mouseReleaseEvent(ev)
+        if self.textCursor().hasSelection():
+            self.copy()  # selecting copies, as in XChat
+
+    # --- unread marker ----------------------------------------------------------
 
     def paintEvent(self, ev):
         super().paintEvent(ev)
         p = QPainter(self.viewport())
         t = self.cfg.theme
-        x = int(self.sep_x + self.document().documentMargin())
-        p.setPen(QPen(QColor(t.border), 1))
-        p.drawLine(x, 0, x, self.viewport().height())
         b = self.current
-        if b is not None and b.marker is not None:
+        if b is not None and b.marker is not None and self.cfg.marker_line:
             block = self.document().findBlockByNumber(b.marker)
             if block.isValid() and block.next().isValid():
                 rect = self.document().documentLayout().blockBoundingRect(block)

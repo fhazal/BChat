@@ -1,6 +1,8 @@
 """One IRC network connection and its buffers. Qt networking, but no widgets, so tests can drive it."""
 from __future__ import annotations
 
+import fnmatch
+import re
 import time
 import base64
 from dataclasses import dataclass, field
@@ -13,8 +15,8 @@ from .config import Config, NetworkConfig, Server
 from .protocol import Message, build_line, lower, mask_ban, parse_line
 
 # kinds a line can have; the chat view maps them to colours
-MSG, SELF, ACTION, JOIN, PART, TOPIC, INFO, WHOIS, NOW_TALKING, HILITE, NOTICE, ERROR = (
-    "msg", "self", "action", "join", "part", "topic", "info", "whois", "now", "hilite", "notice", "error")
+MSG, SELF, ACTION, JOIN, PART, TOPIC, INFO, WHOIS, NOW_TALKING, HILITE, NOTICE, ERROR, CONNECT = (
+    "msg", "self", "action", "join", "part", "topic", "info", "whois", "now", "hilite", "notice", "error", "connect")
 
 SERVER, CHANNEL, QUERY = "server", "channel", "query"
 
@@ -25,6 +27,7 @@ class Line:
     left: str
     text: str
     ts: float = field(default_factory=time.time)
+    rank: str = ""   # light name (op, voice, ...) the speaker had when the line was said
 
 
 @dataclass
@@ -53,6 +56,14 @@ class Buffer:
         self.joined = kind != CHANNEL
         self.activity = 0  # 0 none, 1 data, 2 message, 3 highlight
         self.marker: int | None = None
+        self.mode_args: dict[str, str] = {}
+
+    def mode_text(self) -> str:
+        """As XChat's title shows them: letters in the server's order, then their values."""
+        if not self.modes:
+            return ""
+        values = [self.mode_args[c] for c in self.modes if c in self.mode_args]
+        return " ".join(["+" + self.modes, *values])
 
     def rank(self, u: User) -> int:
         order = self.session.prefix_order
@@ -78,6 +89,7 @@ class Session(QObject):
     state_changed = Signal()
     raw_line = Signal(str, bool)  # text, outgoing
     user_info = Signal(str)  # nick whose silent whois just finished
+    alert = Signal(object)   # a highlight or private message that should flash the taskbar
 
     MAX_LINES = 5000
     LAG_WARN_MS = 5000
@@ -94,10 +106,14 @@ class Session(QObject):
         self.nick = self._identity("nick") or "BChatUser"
         self.state = "disconnected"
         self.server_name = ""
+        self.network_token = ""   # ISUPPORT NETWORK=, the server's own name for its network
         self.prefix_modes = "ohv"
         self.prefix_chars = "@%+"
         self.chantypes = "#&"
-        self.isupport_chanmodes_param = "beIkfjl"
+        self.modes_list = "beI"    # CHANMODES group A: lists, always carry a value, not channel settings
+        self.modes_key = "k"       # group B: a value both ways
+        self.modes_on_set = "fjl"  # group C: a value only when set
+        self.max_modes = 3
         self.away = False
         self.server_index = -1
         self.want_connected = False
@@ -116,6 +132,7 @@ class Session(QObject):
         self._last_rx = 0.0
         self.current: Buffer | None = None
         self.focus_next = ""
+        self.typed_by_hand = False
         self.statusmsg = ""
         self.whox = False
         self._sasl_state = ""
@@ -186,9 +203,15 @@ class Session(QObject):
 
     def add(self, b: Buffer, kind: str, left: str, text: str, ts: float | None = None) -> None:
         line = Line(kind, left, text, ts if ts is not None else time.time())
+        if b.kind == CHANNEL and kind in (MSG, SELF, HILITE) and left and left[0] not in "<>-":
+            u = b.users.get(lower(left))
+            if u is not None:
+                from .userlist import icon_name
+                line.rank = icon_name(self.prefix_order, u.prefixes) or ""
         b.lines.append(line)
-        if len(b.lines) > self.MAX_LINES:
-            del b.lines[: len(b.lines) - self.MAX_LINES]
+        cap = max(100, self.cfg.max_lines or self.MAX_LINES)
+        if len(b.lines) > cap:
+            del b.lines[: len(b.lines) - cap]
         self.line_added.emit(b, line)
 
     def _front(self) -> Buffer:
@@ -223,11 +246,17 @@ class Session(QObject):
         self._next_send = 0.0
         self.lag_ms = None
         self._ping_sent = 0.0
+        self.away = False
+        self.whox = False
+        self.statusmsg = ""
+        self.prefix_modes, self.prefix_chars = "ohv", "@%+"
+        self.modes_list, self.modes_key, self.modes_on_set, self.max_modes = "beI", "k", "fjl", 3
         self._sasl_state = ""
         self._cap_more = set()
         self._cap_offered = {}
         self._cap_pending = 0
         self.server_name = ""
+        self.network_token = ""
         host, port, tls = s.host, s.port, s.ssl
         policy = self.cfg.sts.get(host.lower())
         self._sts_enforced = bool(policy and policy.get("expires", 0) > time.time())
@@ -235,7 +264,7 @@ class Session(QObject):
             port, tls = int(policy["port"]), True
             self.add(self.server_buffer, INFO, "*", f"{host} requires secure connections (STS), using SSL port {port}")
         self._tls_now = tls
-        self.add(self.server_buffer, INFO, "*", f"Connecting to {host} ({'SSL ' if tls else ''}port {port})...")
+        self.add(self.server_buffer, CONNECT, "*", f"Connecting to {host} ({'SSL ' if tls else ''}port {port})...")
         if tls:
             self.sock.connectToHostEncrypted(host, port)
         else:
@@ -256,6 +285,7 @@ class Session(QObject):
             self.buffers.pop(lower(b.name), None)
             self.buffer_removed.emit(b)
         self.net = NetworkConfig(host, [Server(host, port, ssl)], password=password, cycle=False)
+        self.typed_by_hand = True
         self.server_buffer.name = host
         self.buffer_changed.emit(self.server_buffer)
         self.connect_to_network()
@@ -299,13 +329,21 @@ class Session(QObject):
         self.state_changed.emit()
 
     def _on_tcp(self) -> None:
-        self.add(self.server_buffer, INFO, "*", "Connected. Now logging in..." if not self._tls_now else "Connected. Starting SSL...")
+        self.add(self.server_buffer, CONNECT, "*", "Connected. Now logging in..." if not self._tls_now else "Connected. Starting SSL...")
         if not self._tls_now:
             self._login()
 
     def _on_tls(self) -> None:
         c = self.sock.sessionCipher()
-        self.add(self.server_buffer, INFO, "*", f"SSL connection established ({c.protocolString()}, {c.name()}). Now logging in...")
+        self.add(self.server_buffer, INFO, "SSL", f"Protocol: {c.protocolString()}  Cipher: {c.name()}")
+        cert = self.sock.peerCertificate()
+        if not cert.isNull():
+            def dn(names):
+                return ", ".join(f"{k}={v[0]}" for k, v in (("C", names(cert.SubjectInfo.CountryName)),
+                                 ("O", names(cert.SubjectInfo.Organization)), ("CN", names(cert.SubjectInfo.CommonName))) if v)
+            self.add(self.server_buffer, INFO, "SSL",
+                     f"Issuer: {dn(cert.issuerInfo)}   Subject: {dn(cert.subjectInfo)}")
+        self.add(self.server_buffer, CONNECT, "*", "Now logging in...")
         self._login()
 
     def _on_ssl_errors(self, errors) -> None:
@@ -345,6 +383,11 @@ class Session(QObject):
         if err == QAbstractSocket.SocketError.RemoteHostClosedError:
             return
         self.add(self.server_buffer, ERROR, "*", f"Connection failed: {self.sock.errorString()}")
+        if err == QAbstractSocket.SocketError.HostNotFoundError and self.typed_by_hand:
+            # probably a typo, so retrying won't help. Saved networks do retry: their name resolved before, and DNS can blip
+            self.want_connected = False
+            self._reconnect.stop()
+            self.add(self.server_buffer, ERROR, "*", "That server name wasn't found, so BChat will not retry. Check the spelling and use /server again.")
         if self.sock.state() == QAbstractSocket.SocketState.UnconnectedState:
             self._on_disconnected()
 
@@ -360,6 +403,7 @@ class Session(QObject):
                 b.joined = False
                 b.users.clear()
                 self.users_changed.emit(b)
+                self.buffer_changed.emit(b)
         if self.want_connected:
             self.add(self.server_buffer, INFO, "*", "Reconnecting in 10 seconds...")
             self._reconnect.start(10000)
@@ -384,14 +428,28 @@ class Session(QObject):
 
     # --- sending ------------------------------------------------------------
 
+    # passwords typed to services must not reach the raw log or the chat
+    _SECRET_LINE = re.compile(r"(?i)^(PRIVMSG\s+\S*serv\S*\s+:?\s*(?:IDENTIFY|GHOST|RECOVER|REGISTER|LOGIN|AUTH)\s+).*")
+
+    @classmethod
+    def _hide_secret(cls, line: str) -> str:
+        if line.upper().startswith(("PASS ", "AUTHENTICATE ")):
+            return line.split(" ", 1)[0] + " ****"
+        return cls._SECRET_LINE.sub(lambda m: m.group(1) + "****", line)
+
+    def ignored(self, prefix: str) -> bool:
+        low = lower(prefix)
+        return any(fnmatch.fnmatchcase(low, lower(mask)) for mask in self.cfg.ignores)
+
     def send_raw(self, line: str, secret: bool = False, quiet: bool = False) -> None:
         if self.sock.state() != QAbstractSocket.SocketState.ConnectedState:
             return
         # a line break inside user text would otherwise become a second IRC command
         line = line.replace("\r", " ").replace("\n", " ").replace("\0", "")
+        secret = secret or bool(self._SECRET_LINE.match(line))
         self.sock.write(line.encode("utf-8", "replace") + b"\r\n")
         if not quiet:
-            self.raw_line.emit("PASS ****" if secret else line, True)
+            self.raw_line.emit(self._hide_secret(line) if secret else line, True)
 
     def send(self, command: str, *params: str) -> None:
         line = build_line(command, *params)
@@ -442,7 +500,20 @@ class Session(QObject):
                 text = text[len(piece):]
             self.send("PRIVMSG", target, piece)
             if "echo-message" not in self._cap_active:
-                self.add(self.buffer(target), SELF, f"[{self.nick}]", piece)
+                self.add(self.buffer(target), SELF, self.nick, piece)
+
+    def msg(self, target: str, text: str) -> None:
+        """/msg: sends without opening a tab, and shows >target< in the current one, like XChat."""
+        if self.state != "connected":
+            self.add(self._front(), ERROR, "*", "Not connected. Use Server > Reconnect.")
+            return
+        line = build_line("PRIVMSG", target, text)
+        shown = self._hide_secret(line).partition(" :")[2] or text if self._SECRET_LINE.match(line) else text
+        self.send("PRIVMSG", target, text)
+        self.add(self._front(), SELF, f">{target}<", shown)
+        open_tab = self.buffers.get(lower(target))
+        if open_tab is not None and open_tab is not self._front():
+            self.add(open_tab, SELF, self.nick, shown)
 
     def action(self, target: str, text: str) -> None:
         if self.state != "connected":
@@ -471,7 +542,10 @@ class Session(QObject):
             self.send("WHOIS", nick)
 
     def set_mode_for(self, b: Buffer, sign_mode: str, nicks: list[str]) -> None:
-        self.send("MODE", b.name, sign_mode + sign_mode[1] * (len(nicks) - 1), *nicks)
+        # servers allow only so many modes per line (MODES=), so a long selection needs several
+        for i in range(0, len(nicks), self.max_modes):
+            part = nicks[i:i + self.max_modes]
+            self.send("MODE", b.name, sign_mode[0] + sign_mode[1] * len(part), *part)
 
     def ban(self, b: Buffer, nick: str, kind: int, kick: bool = False) -> None:
         u = b.users.get(lower(nick))
@@ -639,6 +713,8 @@ class Session(QObject):
         self.add(self.server_buffer, ERROR, "*", m.param(-1))
 
     def _irc_privmsg(self, m: Message) -> None:
+        if self.ignored(m.prefix):
+            return
         target, text = m.param(0), m.param(-1)
         ts = self._ts(m)
         from_me = lower(m.nick) == lower(self.nick)
@@ -659,7 +735,7 @@ class Session(QObject):
         if u:
             u.last_msg = ts
         if from_me:
-            self.add(b, SELF, f"[{m.nick}]", text, ts)
+            self.add(b, SELF, m.nick, text, ts)
             return
         hl = self._is_hilite(text) or b.kind == QUERY
         self.add(b, HILITE if hl else MSG, m.nick, text, ts)
@@ -669,6 +745,9 @@ class Session(QObject):
         now = time.time()
         self._ctcp_times = [t for t in self._ctcp_times if now - t < 30]
         self._ctcp_times.append(now)
+        if verb == "DCC":
+            self.add(self._front(), INFO, "*", f"{nick} offered a file or direct chat. BChat can't accept these yet.")
+            return
         self.add(self._front(), INFO, "*", f"Received a CTCP {verb} from {nick}")
         if len(self._ctcp_times) > 5:  # XChat's limit: 5 in 30 s, then no replies
             if len(self._ctcp_times) == 6:
@@ -680,6 +759,8 @@ class Session(QObject):
             self.send("NOTICE", nick, f"\x01PING {rest}\x01")
         elif verb == "TIME":
             self.send("NOTICE", nick, f"\x01TIME {time.ctime()}\x01")
+        elif verb == "CLIENTINFO":
+            self.send("NOTICE", nick, "\x01CLIENTINFO ACTION CLIENTINFO PING TIME VERSION\x01")
 
     def _is_hilite(self, text: str) -> bool:
         words = [self.nick] + [w.strip() for w in self.cfg.highlight.split(",") if w.strip()]
@@ -697,6 +778,8 @@ class Session(QObject):
         return False
 
     def _bump(self, b: Buffer, level: int) -> None:
+        if level == 3:
+            self.alert.emit(b)
         if b is not self.current and level > b.activity:
             b.activity = level
             self.buffer_changed.emit(b)
@@ -711,7 +794,14 @@ class Session(QObject):
             return
         if text.startswith("\x01") and text.endswith("\x01"):
             verb, _, rest = text.strip("\x01").partition(" ")
+            if self.ignored(m.prefix):
+                return
+            if verb.upper() == "PING" and rest.isdigit():
+                self.add(self._front(), INFO, "*", f"Ping reply from {m.nick}: {max(0, int(time.time()) - int(rest))} second(s)")
+                return
             self.add(self._front(), INFO, "*", f"CTCP {verb} reply from {m.nick}: {rest}")
+            return
+        if self.ignored(m.prefix):
             return
         if not self._welcomed and "invalid password" in text.lower():
             self._login_refused(text)
@@ -728,6 +818,7 @@ class Session(QObject):
         if lower(m.nick) == lower(self.nick):
             b.joined = True
             b.users.clear()
+            b.modes, b.mode_args = "", {}
             self._names_fresh.discard(lower(chan))
             self.add(b, NOW_TALKING, "➤", f"Now talking on {b.name}")
             self.send("MODE", b.name)
@@ -769,6 +860,9 @@ class Session(QObject):
                 self.add(b, PART, "<--", f"{m.nick} has quit ({m.param(-1)})", self._ts(m))
                 self.users_changed.emit(b)
                 self._bump(b, 1)
+        private = self.buffers.get(key)
+        if private is not None and private.kind == QUERY:
+            self.add(private, PART, "<--", f"{m.nick} has quit ({m.param(-1)})", self._ts(m))
 
     def _irc_kick(self, m: Message) -> None:
         b = self.buffer(m.param(0), False)
@@ -803,6 +897,7 @@ class Session(QObject):
         if q is not None:
             q.name = new
             self.buffers[lower(new)] = q
+            self.add(q, INFO, "*", f"{old} is now known as {new}")
             self.buffer_changed.emit(q)
         if was_me:
             self.add(self.server_buffer, INFO, "*", f"You are now known as {new}")
@@ -827,7 +922,7 @@ class Session(QObject):
         letters, args = params[0], list(params[1:])
         sign = "+"
         changed = False
-        modes = set(b.modes)
+        before = b.mode_text()
         for c in letters:
             if c in "+-":
                 sign = c
@@ -836,20 +931,26 @@ class Session(QObject):
                 nick = args.pop(0) if args else ""
                 u = b.users.get(lower(nick))
                 if u:
-                    u.prefixes = (u.prefixes + pfx) if sign == "+" and pfx not in u.prefixes else u.prefixes.replace(pfx, "") if sign == "-" else u.prefixes
+                    if sign == "+" and pfx not in u.prefixes:
+                        u.prefixes += pfx
+                    elif sign == "-":
+                        u.prefixes = u.prefixes.replace(pfx, "")
                     changed = True
                 if who:
                     label = {"@": "channel operator status", "%": "channel half-operator status", "+": "voice"}.get(pfx, f"mode {c}")
                     self.add(b, INFO, "*", f"{who} {'gives' if sign == '+' else 'removes'} {label} {'to' if sign == '+' else 'from'} {nick}")
             else:
-                has_arg = c in self.isupport_chanmodes_param and (sign == "+" or c not in "lj")
+                has_arg = c in self.modes_list or c in self.modes_key or (c in self.modes_on_set and sign == "+")
                 arg = args.pop(0) if has_arg and args else ""
-                if sign == "+":
-                    modes.add(c)
-                else:
-                    modes.discard(c)
-                if c in "beI":
-                    modes.discard(c)
+                if c not in self.modes_list:
+                    if sign == "+":
+                        if c not in b.modes:
+                            b.modes += c
+                        if arg:
+                            b.mode_args[c] = arg
+                    else:
+                        b.modes = b.modes.replace(c, "")
+                        b.mode_args.pop(c, None)
                 if who:
                     if c == "b":
                         text = f"{who} {'sets ban on' if sign == '+' else 'removes ban on'} {arg}"
@@ -858,9 +959,7 @@ class Session(QObject):
                     else:
                         text = f"{who} sets mode {sign}{c}{(' ' + arg) if arg else ''}"
                     self.add(b, INFO, "*", text)
-        new = "".join(sorted(modes))
-        if new != b.modes:
-            b.modes = new
+        if b.mode_text() != before:
             self.buffer_changed.emit(b)
         if changed:
             self.users_changed.emit(b)
@@ -882,6 +981,8 @@ class Session(QObject):
                 u.host = f"{m.param(0)}@{m.param(1)}"
 
     def _irc_invite(self, m: Message) -> None:
+        if self.ignored(m.prefix):
+            return
         if lower(m.param(0)) != lower(self.nick):  # invite-notify: someone else was invited
             b = self.buffer(m.param(1), False)
             if b is not None:
@@ -912,24 +1013,15 @@ class Session(QObject):
         elif n == 324:
             b = self.buffer(m.param(1), False)
             if b is not None:
-                b.modes = "".join(sorted(m.param(2).lstrip("+")))
+                b.modes = m.param(2).lstrip("+")
+                values = list(p[3:])
+                b.mode_args = {c: values.pop(0) for c in b.modes if c in self.modes_key + self.modes_on_set and values}
                 self.buffer_changed.emit(b)
                 self.add(b, INFO, "*", f"Channel {b.name} modes: {' '.join(p[2:])}")
         elif n == 329:
             pass
-        elif n == 331:
-            b = self.buffer(m.param(1))
-            b.topic = ""
-            self.buffer_changed.emit(b)
-        elif n == 332:
-            b = self.buffer(m.param(1))
-            b.topic = m.param(-1)
-            self.add(b, TOPIC, "*", f"Topic for {b.name} is: {b.topic}")
-            self.buffer_changed.emit(b)
-        elif n == 333:
-            b = self.buffer(m.param(1))
-            when = time.strftime("%a %b %d %H:%M:%S %Y", time.localtime(int(m.param(3) or 0)))
-            self.add(b, TOPIC, "*", f"Topic for {b.name} set by {m.param(2).split('!')[0]} at {when}")
+        elif n in (331, 332, 333):
+            self._topic_numeric(n, m)
         elif n == 353:
             self._names(m)
         elif n == 366:
@@ -970,10 +1062,31 @@ class Session(QObject):
                 self._nick_taken()
         elif 400 <= n < 600:
             self.add(self._front(), ERROR, "*", " ".join(p[1:]))
-        elif n in (372, 375, 376, 422, 2, 3, 4, 42, 250, 251, 252, 253, 254, 255, 265, 266, 396):
+        elif n in (372, 375):
+            # MOTD body: the server's own "- " becomes the dim marker, like XChat/AdiIRC
+            self.add(self.server_buffer, INFO, "-", rest[2:] if rest.startswith("- ") else rest.lstrip("-"))
+        elif n in (376, 422, 2, 3, 4, 42, 250, 251, 252, 253, 254, 255, 265, 266, 396):
             self.add(self.server_buffer, INFO, "*", rest)
         else:
             self.add(self._front() if n in (221, 221) else self.server_buffer, INFO, "*", rest)
+
+    def _topic_numeric(self, n: int, m: Message) -> None:
+        # /topic #other, for a channel with no tab, shows here and must not open a tab
+        name = m.param(1)
+        b = self.buffers.get(lower(name))
+        target = b or self._front()
+        if n == 331:
+            if b is not None:
+                b.topic = ""
+                self.buffer_changed.emit(b)
+        elif n == 332:
+            self.add(target, TOPIC, "*", f"Topic for {name} is: {m.param(-1)}")
+            if b is not None:
+                b.topic = m.param(-1)
+                self.buffer_changed.emit(b)
+        else:
+            when = time.strftime("%a %b %d %H:%M:%S %Y", time.localtime(int(m.param(3) or 0))) if m.param(3).isdigit() else "?"
+            self.add(target, TOPIC, "*", f"Topic for {name} set by {m.param(2).split('!')[0]} at {when}")
 
     def _isupport(self, tokens: list[str]) -> None:
         for t in tokens:
@@ -988,10 +1101,12 @@ class Session(QObject):
                 self.statusmsg = v
             elif k == "WHOX":
                 self.whox = True
-            elif k == "CHANMODES" and v:
-                groups = v.split(",")
-                self.isupport_chanmodes_param = "".join(groups[:3]) if len(groups) >= 3 else self.isupport_chanmodes_param
+            elif k == "CHANMODES" and v.count(",") >= 2:
+                self.modes_list, self.modes_key, self.modes_on_set = v.split(",")[:3]
+            elif k == "MODES" and v.isdigit() and int(v) > 0:
+                self.max_modes = int(v)
             elif k == "NETWORK" and v:
+                self.network_token = v
                 self.server_buffer.name = v if not self.net.name else self.net.name
                 self.buffer_changed.emit(self.server_buffer)
 
@@ -1016,7 +1131,10 @@ class Session(QObject):
         return next((c for c in self.prefix_order if c in u.prefixes), "")
 
     def _names(self, m: Message) -> None:
-        b = self.buffer(m.param(2))
+        b = self.buffers.get(lower(m.param(2)))
+        if b is None:  # /names #other, no tab for it
+            self.add(self._front(), INFO, "*", f"Names on {m.param(2)}: {m.param(-1)}")
+            return
         if lower(b.name) not in self._names_fresh:
             self._names_fresh.add(lower(b.name))
             # a fresh NAMES reply replaces the list, but keep what WHO already told us
