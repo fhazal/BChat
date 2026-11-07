@@ -57,12 +57,16 @@ def stylesheet(t: Theme) -> str:
     QMenu::separator {{ height: 1px; background: {t.border}; margin: 3px 2px; }}
     QTreeWidget, QListView, QListWidget, QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QTableWidget {{
         background: {t.panel}; border: 1px solid {t.border}; selection-background-color: {t.selected};
-        selection-color: #fff; outline: 0; }}
+        selection-color: {t.marking_fg}; outline: 0; }}
     QTreeWidget::item {{ height: 17px; }}
-    QTreeWidget::item:selected, QListView::item:selected, QListWidget::item:selected {{ background: {t.selected}; color: #fff; }}
+    QTreeWidget::item:selected, QListView::item:selected, QListWidget::item:selected {{ background: {t.selected}; color: {t.marking_fg}; }}
+    QTreeWidget::item:disabled {{ color: {t.disabled}; }}
+    QPushButton#modebtn {{ padding: 0; min-width: 0; }}
+    QPushButton#modebtn:checked {{ background: {t.selected}; color: {t.marking_fg}; }}
+    QPushButton#ulbtn {{ padding: 1px 4px; min-width: 0; }}
     QHeaderView::section {{ background: {t.bar}; border: 1px solid {t.border}; padding: 2px; }}
     QLineEdit {{ padding: 1px 4px; }}
-    QTextBrowser {{ background: {t.chat_bg}; color: {t.chat_fg}; border: 1px solid {t.border}; selection-background-color: {t.selected}; selection-color: #fff; }}
+    QTextBrowser {{ background: {t.chat_bg}; color: {t.chat_fg}; border: 1px solid {t.border}; selection-background-color: {t.selected}; selection-color: {t.marking_fg}; }}
     #count {{ background: {t.bar}; border: 1px solid {t.border}; padding: 2px; qproperty-alignment: AlignCenter; }}
     #nicklabel {{ padding: 0 6px; }}
     QPushButton {{ background: {t.bar}; border: 1px solid {t.border}; padding: 3px 10px; min-height: 16px; }}
@@ -70,6 +74,10 @@ def stylesheet(t: Theme) -> str:
     QPushButton:pressed {{ background: {t.selected}; }}
     QPushButton:disabled {{ color: {t.disabled}; }}
     QToolButton:disabled {{ color: {t.disabled}; }}
+    QRadioButton {{ spacing: 7px; }}
+    QRadioButton::indicator {{ width: 12px; height: 12px; border: 1px solid {t.disabled}; border-radius: 7px; background: {t.panel}; }}
+    QRadioButton::indicator:hover {{ border: 1px solid {t.check}; }}
+    QRadioButton::indicator:checked {{ border: 1px solid {t.check}; background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5, stop:0 #11111b, stop:0.42 #11111b, stop:0.52 {t.check}, stop:1 {t.check}); }}
     QCheckBox::indicator {{ width: 12px; height: 12px; border: 1px solid {t.border}; border-radius: 2px; background: {t.panel}; }}
     QCheckBox::indicator:hover {{ border: 1px solid {t.check}; }}
     QCheckBox::indicator:checked {{ background: {t.check}; border: 1px solid {t.check}; image: url({(ASSETS / "tick.png").as_posix()}); }}

@@ -39,7 +39,9 @@ def main(argv: list[str] | None = None) -> int:
             xchat_import.import_into(cfg, sources)
             config.save(cfg, args.config_dir)
     win = MainWindow(cfg, args.config_dir)
-    if cfg.win_maximized:
+    if cfg.start_minimized:
+        win.showMinimized()
+    elif cfg.win_maximized:
         win.showMaximized()
     else:
         win.show()

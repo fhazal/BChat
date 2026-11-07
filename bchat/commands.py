@@ -1,6 +1,7 @@
 """Slash commands typed in the input box. Unknown commands go to the server as they are, like XChat."""
 from __future__ import annotations
 
+import re
 import time
 
 from .protocol import lower, strip_format
@@ -17,28 +18,155 @@ ALIASES = {
     "uptime": "quote STATS u", "ver": "ctcp %2 VERSION", "version": "ctcp %2 VERSION", "wallops": "quote WALLOPS :&2",
     "wii": "whois %2", "sv": "echo BChat %n on " + "%s",
 }
+_BUILTIN: set[str] = set()      # filled below
+_BUILTIN_SELF: dict[str, bool] = {}
 COMMAND_NAMES = sorted(set(ALIASES) | {
     "allchan", "allserv", "away", "back", "ban", "clear", "close", "ctcp", "cycle", "dehop", "deop", "devoice", "discon",
-    "disconnect", "echo", "flushq", "ghost", "help", "hop", "id", "ignore", "invite", "j", "join", "kick", "kickban",
+    "chat", "dcc", "load", "reload", "send", "unload", "disconnect", "echo", "exec", "flushq", "ghost", "help", "hop", "id", "ignore", "invite", "j", "join", "kick", "kickban",
     "lastlog", "leave", "list", "mdeop", "me", "mkick", "mode", "mop", "msg", "names", "nctcp", "newserver", "nick",
     "notice", "op", "part", "ping", "query", "quit", "quote", "raw", "reconnect", "say", "server", "topic", "unban",
     "unignore", "url", "voice", "wallchan", "wallchop", "whois", "wi",
 })
 
 
+VERSION = "BChat 0.1"
+MACHINE = "Windows"
+
+
+HELP = {
+    "allchan": "ALLCHAN <cmd>: runs a command in every channel of this server",
+    "allserv": "ALLSERV <cmd>: runs a command on every server",
+    "away": "AWAY [<reason>]: marks you away",
+    "back": "BACK: marks you back",
+    "ban": "BAN <mask or nick> [<type>]: bans someone from the channel. Types 0-3 pick how wide the mask is",
+    "clear": "CLEAR [ALL|HISTORY|<lines>]: clears this tab, every tab, the input history, or the last lines",
+    "close": "CLOSE: closes this tab",
+    "ctcp": "CTCP <nick> <message>: sends a CTCP",
+    "cycle": "CYCLE: leaves and rejoins this channel",
+    "dcc": "DCC SEND <nick> [<file>], DCC CHAT <nick>, DCC GET <nick>, DCC CLOSE <type> <nick> <file>, DCC LIST",
+    "deop": "DEOP <nick>...: takes channel operator status",
+    "devoice": "DEVOICE <nick>...: takes voice",
+    "discon": "DISCON: disconnects from the server",
+    "echo": "ECHO <text>: prints text here, nothing is sent",
+    "exec": "EXEC [-o] <program>: runs a program. Its output prints here, or goes to the channel with -o",
+    "flushq": "FLUSHQ: drops the lines waiting to be sent",
+    "ghost": "GHOST <nick> <password>: frees your nick through NickServ",
+    "help": "HELP [<command>]: this help",
+    "id": "ID <password>: identifies to NickServ",
+    "ignore": "IGNORE <mask> [CHAN PRIV NOTI CTCP DCC INVI ALL UNIGNORE]: hides someone. See Window > Ignore List",
+    "invite": "INVITE <nick> [<channel>]: invites someone",
+    "join": "JOIN <channel> [<key>]: joins a channel",
+    "kick": "KICK <nick> [<reason>]: kicks someone",
+    "kickban": "KICKBAN <nick> [<type>]: bans, then kicks",
+    "lastlog": "LASTLOG <text>: finds text in this tab",
+    "list": "LIST [<options>]: opens the Channel List and fetches it",
+    "mdeop": "MDEOP: takes ops from everyone else here",
+    "me": "ME <action>: says what you're doing",
+    "mkick": "MKICK [<reason>]: kicks everyone else here",
+    "mode": "MODE <channel or nick> <modes>: sets modes",
+    "mop": "MOP: gives ops to everyone here",
+    "msg": "MSG <nick> <message>: sends a private message",
+    "names": "NAMES: lists who is here",
+    "nctcp": "NCTCP <nick> <message>: sends a CTCP reply",
+    "newserver": "NEWSERVER [-noconnect] <host> [<port>]: connects in a new tab",
+    "nick": "NICK <nick>: changes your nick",
+    "notice": "NOTICE <nick or channel> <message>: sends a notice",
+    "op": "OP <nick>...: gives channel operator status",
+    "part": "PART [<channel>] [<reason>]: leaves a channel",
+    "ping": "PING [<nick>]: checks lag to the server, or to someone",
+    "query": "QUERY <nick> [<message>]: opens a private tab",
+    "quit": "QUIT [<reason>]: disconnects from this server",
+    "quote": "QUOTE <text>: sends text to the server as it is",
+    "reconnect": "RECONNECT: connects to this server again",
+    "say": "SAY <text>: sends text, even if it starts with /",
+    "server": "SERVER [-ssl] <host> [<port or +port>] [<password>]: connects to a server",
+    "topic": "TOPIC [<text>]: shows or sets the topic",
+    "unban": "UNBAN <mask>...: removes bans",
+    "unignore": "UNIGNORE <mask>: stops hiding someone",
+    "url": "URL <address>: opens an address in the browser",
+    "voice": "VOICE <nick>...: gives voice",
+    "wallchan": "WALLCHAN <text>: messages this channel",
+    "wallchop": "WALLCHOP <text>: messages the ops of this channel",
+    "whois": "WHOIS <nick>: shows who someone is",
+    "dehop": "DEHOP <nick>...: takes half-operator status",
+    "disconnect": "DISCONNECT: disconnects from the server",
+    "hop": "HOP <nick>...: gives half-operator status",
+    "j": "J <channel> [<key>]: joins a channel",
+    "leave": "LEAVE [<channel>] [<reason>]: leaves a channel",
+    "raw": "RAW <text>: sends text to the server as it is",
+    "wi": "WI <nick>: shows who someone is",
+    "load": "LOAD [<file>]: loads a Python plugin",
+    "unload": "UNLOAD <name>: unloads a plugin",
+    "reload": "RELOAD <name>: loads a plugin again",
+    "send": "SEND <nick> [<file>]: offers a file",
+    "chat": "CHAT <nick>: offers or accepts a direct chat",
+}
+
+
 def _expand(pattern: str, s: Session, chan: str, args: list[str], rest: str) -> str | None:
-    """None when a value the pattern needs is missing."""
-    tail = rest.partition(" ")[2].strip()
-    values = {"&2": rest, "&3": tail, "%2": args[0] if args else "", "%c": chan, "%n": s.nick, "%s": s.server_name or s.net.name}
+    """XChat's auto_insert. None when a value the pattern needs is missing. One pass, so typed text is never read as a code."""
+    fixed = {"c": chan, "e": s.net.name, "m": MACHINE, "n": s.nick, "s": s.server_name or s.net.name, "t": time.ctime(),
+             "u": s._identity("username") if hasattr(s, "_identity") else "", "v": VERSION}
+
+    def value(kind: str, code: str) -> str:
+        if code.isdigit():
+            i = int(code) - 2
+            if kind == "%":
+                return args[i] if i < len(args) else ""
+            pieces = rest.split(None, i) if rest else []
+            return pieces[i].strip() if i < len(pieces) else ""
+        return fixed.get(code, kind + code)
+
     out = []
     for word in pattern.split(" "):
-        for key, value in values.items():
-            if key in word:
-                if not value:
-                    return None if key != "&2" else " ".join(out)
-                word = word.replace(key, value)
+        missing = ""
+
+        def fill(m):
+            nonlocal missing
+            v = value(m.group(1), m.group(2))
+            if not v:
+                missing = m.group(1)
+            return v
+        word = re.sub(r"([%&])([2-9cemnstuv])", fill, word)
+        if missing == "&":
+            return " ".join(out)      # "&2" with nothing typed just drops off the end
+        if missing:
+            return None
         out.append(word)
     return " ".join(out)
+
+
+def user_commands(cfg) -> list[list[str]]:
+    if cfg.user_commands is not None:
+        return cfg.user_commands
+    return [[n, c] for n, c in ALIASES.items()]
+
+
+def command_names(cfg) -> list[str]:
+    return sorted({n.lower() for n, _ in user_commands(cfg)} | set(COMMAND_NAMES) - (set(ALIASES) if cfg.user_commands is not None else set()))
+
+
+def start_program(s: Session, b: Buffer, line: str, send: bool = False) -> None:
+    """/exec and !commands: no shell in between, so a nick like J|wang can't become part of a command line."""
+    from PySide6.QtCore import QProcess
+    args = QProcess.splitCommand(line)
+    if not args:
+        return
+    p = QProcess(s)
+    p.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+
+    def output():
+        for row in bytes(p.readAll()).decode("utf-8", "replace").splitlines():
+            if not row:
+                continue
+            if send and b.kind != "server":
+                s.say(b.name, row)
+            else:
+                s.add(b, INFO, "*", row)
+    p.readyRead.connect(output)
+    p.finished.connect(lambda *_: p.deleteLater())
+    p.errorOccurred.connect(lambda _e: s.add(b, ERROR, "*", f"Couldn't run {args[0]}: {p.errorString()}"))
+    p.start(args[0], args[1:])
 
 
 def parse_server(args: list[str]) -> tuple[str, int, bool, str] | None:
@@ -84,12 +212,58 @@ def new_server(ui, args: list[str]) -> None:
         s.connect_to_network()
 
 
-def run(ui, s: Session, b: Buffer, text: str) -> None:
+def _dcc_command(ui, s: Session, b: Buffer, args: list[str], rest: str) -> None:
+    """XChat's /DCC: SEND PSEND CHAT GET CLOSE LIST."""
+    verb = args[0].lower() if args else "list"
+    dcc = ui.dcc
+    if verb in ("send", "psend") and len(args) >= 2:
+        path = rest.split(None, 2)[2].strip('"') if len(args) > 2 else ""
+        if not path:
+            ui.send_file_dialog(s, [args[1]], verb == "psend")
+        else:
+            dcc.send_file(s, args[1], path, verb == "psend")
+    elif verb == "chat" and len(args) >= 2:
+        waiting = [t for t in dcc.items if t.kind == "chat" and t.state == "queued" and t.ip and t.nick.lower() == args[1].lower()]
+        if waiting:
+            dcc.accept(waiting[0])
+        else:
+            dcc.start_chat(s, args[1])
+    elif verb == "get" and len(args) >= 2:
+        waiting = [t for t in dcc.items if t.kind == "recv" and t.state == "queued" and t.nick.lower() == args[1].lower()
+                   and (len(args) < 3 or t.name == args[2])]
+        if waiting:
+            dcc.accept(waiting[0])
+        else:
+            s.add(b, ERROR, "*", f"No file offered by {args[1]}.")
+    elif verb == "close" and len(args) >= 3:
+        kind = {"send": "send", "get": "recv", "chat": "chat"}.get(args[1].lower())
+        hits = [t for t in dcc.items if t.kind == kind and t.active and t.nick.lower() == args[2].lower() and (len(args) < 4 or t.name == args[3])]
+        if hits:
+            hits[0].abort()
+        else:
+            s.add(b, ERROR, "*", f"No such DCC: {' '.join(args[1:])}")
+    elif verb == "list":
+        if not dcc.items:
+            s.add(b, INFO, "*", "No active DCCs.")
+        for t in dcc.items:
+            s.add(b, INFO, "*", f"{t.kind:5} {t.state:10} {t.nick:15} {t.percent():3}% {t.name}")
+    else:
+        s.add(b, ERROR, "*", HELP["dcc"])
+
+
+def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
+    if text.startswith("!") :
+        start_program(s, b, text[1:])
+        return
+    if text.startswith("/") and not text.startswith("//") and ui.plugins.on_command(text):
+        return
     if not text.startswith("/") or text.startswith("//"):
         msg = text[1:] if text.startswith("//") else text
         if not s.net.servers:
             s.add(b, ERROR, "*", "This tab has no server yet. Type /server <host> [port or +port for SSL].")
-        elif b.kind == "server":
+        elif b.name.startswith("="):
+            s.say(b.name, msg)
+        elif b.kind == "server" or b.placeholder or b.name == "(notices)":
             s.add(b, ERROR, "*", "No channel joined. Try /join #channel")
         else:
             s.say(b.name, msg)
@@ -102,12 +276,19 @@ def run(ui, s: Session, b: Buffer, text: str) -> None:
         return
     args = rest.split()
     chan = b.name if b.kind == CHANNEL else ""
-    if cmd in ALIASES:
-        expanded = _expand(ALIASES[cmd], s, chan, args, rest)
-        if expanded is None:
-            s.add(b, ERROR, "*", f"/{cmd} needs more: {ALIASES[cmd]}")
-        else:
-            run(ui, s, b, "/" + expanded)
+    matches = [c for n, c in user_commands(ui.cfg) if n.lower() == cmd]
+    if matches and not (depth and cmd in _BUILTIN and _BUILTIN_SELF.get(cmd)):
+        if depth >= 10:
+            s.add(b, ERROR, "*", "Too many recursive user commands, stopped.")
+            return
+        for pattern in matches:
+            expanded = _expand(pattern, s, chan, args, rest)
+            if expanded is None:
+                s.add(b, ERROR, "*", f"/{cmd} needs more: {pattern}")
+            elif expanded.startswith("!"):
+                start_program(s, b, expanded[1:])
+            else:
+                run(ui, s, b, "/" + expanded.lstrip("/"), depth + 1)
         return
 
     def need_channel() -> bool:
@@ -140,6 +321,9 @@ def run(ui, s: Session, b: Buffer, text: str) -> None:
             else:
                 s.focus_next = lower(name)
             s.send("JOIN", name, *args[1:2])
+            if b.placeholder:      # the empty tab becomes this channel
+                s.focus_next = lower(name)
+                ui.close_buffer(b)
     elif cmd in ("part", "leave"):
         target = args[0] if args and s.is_channel(args[0]) else chan
         reason = " ".join(args[1:]) if args and s.is_channel(args[0]) else rest
@@ -152,7 +336,9 @@ def run(ui, s: Session, b: Buffer, text: str) -> None:
         if len(args) > 1:
             s.say(args[0], rest.partition(" ")[2])
     elif cmd == "me":
-        if b.kind != "server":
+        if b.name.startswith("="):
+            s.say(b.name, f"\x01ACTION {rest}\x01")
+        elif b.kind != "server":
             s.action(b.name, rest)
         else:
             s.add(b, ERROR, "*", "/me needs a channel or private tab.")
@@ -189,9 +375,9 @@ def run(ui, s: Session, b: Buffer, text: str) -> None:
     elif cmd == "invite" and args:
         s.send("INVITE", args[0], args[1] if len(args) > 1 else chan)
     elif cmd == "away":
-        s.send("AWAY", rest or s.cfg.away_reason)
+        s.set_away(True, rest)
     elif cmd == "back":
-        s.send("AWAY")
+        s.set_away(False)
     elif cmd in ("quote", "raw"):
         s.send_raw(rest)
     elif cmd == "ctcp" and len(args) >= 2:
@@ -213,11 +399,17 @@ def run(ui, s: Session, b: Buffer, text: str) -> None:
             mask = args[0] if "!" in args[0] or "@" in args[0] else f"{args[0]}!*@*"
             if mask not in s.cfg.ignores:
                 s.cfg.ignores.append(mask)
+            # XChat's form: /ignore mask CHAN PRIV NOTI CTCP DCC INVI ALL UNIGNORE
+            words = {"CHAN": "C", "PRIV": "P", "NOTI": "N", "CTCP": "T", "DCC": "D", "INVI": "I", "UNIGNORE": "U", "ALL": "CPNTDI"}
+            picked = "".join(words.get(w.upper(), "") for w in args[1:] if w.upper() != "QUIET")
+            if picked:
+                s.cfg.ignore_kinds[mask] = "".join(dict.fromkeys(picked))
             s.add(b, INFO, "*", f"Now ignoring {mask}")
     elif cmd == "unignore" and args:
         mask = args[0] if "!" in args[0] or "@" in args[0] else f"{args[0]}!*@*"
         if mask in s.cfg.ignores:
             s.cfg.ignores.remove(mask)
+            s.cfg.ignore_kinds.pop(mask, None)
             s.add(b, INFO, "*", f"No longer ignoring {mask}")
         else:
             s.add(b, ERROR, "*", f"{mask} isn't on the ignore list.")
@@ -242,10 +434,36 @@ def run(ui, s: Session, b: Buffer, text: str) -> None:
         waiting = len(s._queue)
         s._queue.clear()
         s.add(b, INFO, "*", f"Cleared {waiting} waiting line(s).")
+    elif cmd == "exec":
+        send = args[:1] == ["-o"]
+        line = rest.partition(" ")[2] if send else rest
+        if line:
+            start_program(s, b, line, send)
     elif cmd == "url" and args:
         ui.open_url(args[0])
-    elif cmd in ("dcc", "send", "chat"):
-        s.add(b, ERROR, "*", "File transfers and direct chat aren't in BChat yet.")
+    elif cmd == "load":
+        if rest:
+            ui.plugins.load(rest.strip('"'))
+        else:
+            ui.load_plugin_dialog()
+    elif cmd == "unload" and rest:
+        found = ui.plugins.find(rest.strip('"'))
+        if found:
+            ui.plugins.unload(found)
+        else:
+            s.add(b, ERROR, "*", f"No such plugin: {rest}")
+    elif cmd == "reload" and rest:
+        found = ui.plugins.find(rest.strip('"'))
+        if found:
+            ui.plugins.reload(found)
+        else:
+            s.add(b, ERROR, "*", f"No such plugin: {rest}")
+    elif cmd == "dcc":
+        _dcc_command(ui, s, b, args, rest)
+    elif cmd == "send":
+        _dcc_command(ui, s, b, ["send", *args], "send " + rest)
+    elif cmd == "chat":
+        _dcc_command(ui, s, b, ["chat", *args], "chat " + rest)
     elif cmd == "say":
         s.say(b.name, rest) if b.kind != "server" else s.add(b, ERROR, "*", "No channel joined.")
     elif cmd == "echo":
@@ -253,7 +471,9 @@ def run(ui, s: Session, b: Buffer, text: str) -> None:
     elif cmd == "names":
         s.send("NAMES", args[0] if args else chan)
     elif cmd == "list":
-        s.send("LIST", *args)
+        ui.open_channel_list(s, download=not args)
+        if args:
+            s.send("LIST", *args)
     elif cmd == "id" and args:
         s.send_raw(f"PRIVMSG NickServ :IDENTIFY {rest}", secret=True)
     elif cmd == "ghost" and args:
@@ -295,6 +515,9 @@ def run(ui, s: Session, b: Buffer, text: str) -> None:
         s.disconnect_from_network(rest or None)
     elif cmd == "close":
         ui.close_buffer(b)
+    elif cmd == "help" and args:
+        about = HELP.get(args[0].lstrip("/").lower())
+        s.add(b, INFO, "*", about or f"No help for {args[0]}. Help > Contents lists every command.")
     elif cmd == "help":
         s.add(b, INFO, "*", "Commands: /join /part /msg /query /me /nick /whois /topic /notice /op /deop /voice "
                             "/devoice /kick /ban /unban /kickban /mode /invite /away /back /quote /ctcp /ping /clear /close "

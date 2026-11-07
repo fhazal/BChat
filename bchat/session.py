@@ -9,9 +9,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtNetwork import QAbstractSocket, QSslSocket
+from PySide6.QtNetwork import QAbstractSocket, QHostAddress, QHostInfo, QNetworkProxy, QSslSocket
 
 from .config import Config, NetworkConfig, Server
+from .textevents import EVENTS, render
 from .protocol import Message, build_line, lower, mask_ban, parse_line
 
 # kinds a line can have; the chat view maps them to colours
@@ -52,6 +53,7 @@ class Buffer:
         self.lines: list[Line] = []
         self.users: dict[str, User] = {}
         self.topic = ""
+        self.placeholder = False   # New > Channel Tab: an empty tab that /join fills
         self.modes = ""
         self.joined = kind != CHANNEL
         self.activity = 0  # 0 none, 1 data, 2 message, 3 highlight
@@ -70,7 +72,14 @@ class Buffer:
         return min((order.index(p) for p in u.prefixes if p in order), default=len(order))
 
     def sorted_users(self) -> list[User]:
-        return sorted(self.users.values(), key=lambda u: (self.rank(u), lower(u.nick)))
+        """XChat's five orders: A-Z ops first, A-Z, Z-A ops last, Z-A, unsorted (as they joined)."""
+        order = self.session.cfg.ul_sort
+        users = list(self.users.values())
+        if order == 4:
+            return users
+        by_rank = order in (0, 2)
+        users.sort(key=lambda u: (self.rank(u) if by_rank else 0, lower(u.nick)))
+        return users[::-1] if order in (2, 3) else users
 
     def counts(self) -> tuple[int, int]:
         order = self.session.prefix_order
@@ -78,6 +87,10 @@ class Buffer:
         at = order.index("@") if "@" in order else 0
         ops = sum(1 for u in self.users.values() if self.rank(u) <= at)
         return ops, len(self.users)
+
+
+IGNORE_KINDS = "CPNTDI"     # Unignore stays off unless asked for
+IGNORE_STATS: dict[str, int] = {}
 
 
 class Session(QObject):
@@ -90,6 +103,8 @@ class Session(QObject):
     raw_line = Signal(str, bool)  # text, outgoing
     user_info = Signal(str)  # nick whose silent whois just finished
     alert = Signal(object)   # a highlight or private message that should flash the taskbar
+    friends_changed = Signal()
+    notify = Signal(object, str)  # buffer, event: chan priv hilight join part kick notice invite connect disconnect
 
     MAX_LINES = 5000
     LAG_WARN_MS = 5000
@@ -123,6 +138,7 @@ class Session(QObject):
         self._cap_ending = False
         self._whois_target: Buffer | None = None
         self._whois_nick = ""
+        self._away_seen: dict[str, str] = {}
         self._silent_whois: dict[str, dict] = {}
         self.whois_cache: dict[str, dict] = {}
         self._names_fresh: set[str] = set()
@@ -146,13 +162,22 @@ class Session(QObject):
         self._queue_timer = QTimer(self, interval=500)
         self._queue_timer.timeout.connect(self._drain_queue)
 
-        self.sock = QSslSocket(self)
-        self.sock.connected.connect(self._on_tcp)
-        self.sock.encrypted.connect(self._on_tls)
-        self.sock.readyRead.connect(self._on_read)
-        self.sock.disconnected.connect(self._on_disconnected)
-        self.sock.errorOccurred.connect(self._on_socket_error)
-        self.sock.sslErrors.connect(self._on_ssl_errors)
+        self._special_socket = False
+        self.on_dcc = None           # the DCC manager
+        self.dcc_say = None
+        self.server_hook = None      # plugins
+        self.print_hook = None
+        self.external_ip = ""
+        self._userhost_waiting = 0
+        self.on_command = None       # the main window's way to run a typed-style command
+        self.list_sink = None        # Channel List window while it wants 322/323
+        self.ban_sinks: dict = {}    # channel -> Ban List window
+        self.friend_state: dict[str, dict] = {}
+        self._ison_waiting = 0
+        self._monitor = False
+        self._friends_timer = QTimer(self)
+        self._friends_timer.timeout.connect(self.poll_friends)
+        self._new_socket()
 
         self._reconnect = QTimer(self, singleShot=True)
         self._reconnect.timeout.connect(self._connect_next)
@@ -224,6 +249,44 @@ class Session(QObject):
 
     # --- connecting -----------------------------------------------------------
 
+    def _new_socket(self) -> None:
+        old = getattr(self, "sock", None)
+        if old is not None:
+            old.blockSignals(True)
+            old.abort()
+            old.deleteLater()
+        self.sock = QSslSocket(self)
+        self.sock.connected.connect(self._on_tcp)
+        self.sock.encrypted.connect(self._on_tls)
+        self.sock.readyRead.connect(self._on_read)
+        self.sock.disconnected.connect(self._on_disconnected)
+        self.sock.errorOccurred.connect(self._on_socket_error)
+        self.sock.sslErrors.connect(self._on_ssl_errors)
+
+    def _apply_network_settings(self) -> None:
+        """Preferences > Network setup. A failed bind is reported, and the connection still goes out normally."""
+        c = self.cfg
+        kinds = {"socks5": QNetworkProxy.ProxyType.Socks5Proxy, "http": QNetworkProxy.ProxyType.HttpProxy}
+        use_proxy = c.proxy_type in kinds and bool(c.proxy_host)
+        # QSslSocket's inner socket keeps its old proxy and bound address, so these need a clean socket
+        if use_proxy or c.bind_host or self._special_socket:
+            self._new_socket()
+        self._special_socket = use_proxy or bool(c.bind_host)
+        if use_proxy:
+            p = QNetworkProxy(kinds[c.proxy_type], c.proxy_host, c.proxy_port)
+            if c.proxy_auth:
+                p.setUser(c.proxy_user)
+                p.setPassword(c.proxy_password)
+            self.sock.setProxy(p)
+            if c.bind_host:
+                self.add(self.server_buffer, INFO, "*", f"Using the proxy, so the address {c.bind_host} isn't used.")
+            return
+        self.sock.setProxy(QNetworkProxy(QNetworkProxy.ProxyType.NoProxy))
+        if c.bind_host and not self.sock.bind(QHostAddress(c.bind_host)):
+            self.add(self.server_buffer, ERROR, "*", f"Couldn't use the address {c.bind_host}: {self.sock.errorString()}")
+            self._new_socket()
+            self.sock.setProxy(QNetworkProxy(QNetworkProxy.ProxyType.NoProxy))
+
     def connect_to_network(self) -> None:
         self.want_connected = True
         self.server_index = -1
@@ -242,6 +305,7 @@ class Session(QObject):
         self._cap_active = set()
         self.nick_attempt = 0
         self.nick = self._identity("nick") or "BChatUser"
+        self._apply_network_settings()
         self._queue.clear()
         self._next_send = 0.0
         self.lag_ms = None
@@ -377,7 +441,10 @@ class Session(QObject):
             if text:
                 self._last_rx = time.time()
                 self.raw_line.emit(text, False)
-                self._handle(parse_line(text))
+                m = parse_line(text)
+                if self.server_hook is not None and self.server_hook(self, text, m.command):
+                    continue
+                self._handle(m)
 
     def _on_socket_error(self, err) -> None:
         if err == QAbstractSocket.SocketError.RemoteHostClosedError:
@@ -404,9 +471,11 @@ class Session(QObject):
                 b.users.clear()
                 self.users_changed.emit(b)
                 self.buffer_changed.emit(b)
+        self.notify.emit(self.server_buffer, "disconnect")
         if self.want_connected:
-            self.add(self.server_buffer, INFO, "*", "Reconnecting in 10 seconds...")
-            self._reconnect.start(10000)
+            delay = max(1, self.cfg.reconnect_delay)
+            self.add(self.server_buffer, INFO, "*", f"Reconnecting in {delay} seconds...")
+            self._reconnect.start(delay * 1000)
 
     def _tick(self) -> None:
         if self.state in ("connected", "registering"):
@@ -420,10 +489,10 @@ class Session(QObject):
 
     def _poll_who(self) -> None:
         # same idea as XChat's away polling; skipped when the server pushes away changes
-        if "away-notify" in self._cap_active:
+        if "away-notify" in self._cap_active or not self.cfg.away_track:
             return
         for b in self.buffers.values():
-            if b.kind == CHANNEL and b.joined and len(b.users) <= 300:
+            if b.kind == CHANNEL and b.joined and len(b.users) <= self.cfg.away_limit:
                 self.fetch_who(b.name)
 
     # --- sending ------------------------------------------------------------
@@ -437,9 +506,68 @@ class Session(QObject):
             return line.split(" ", 1)[0] + " ****"
         return cls._SECRET_LINE.sub(lambda m: m.group(1) + "****", line)
 
-    def ignored(self, prefix: str) -> bool:
+    def ignored(self, prefix: str, kind: str = "") -> bool:
+        """XChat's ignore_check: a mask only counts for the kinds ticked on it, and Unignore overrides the rest."""
         low = lower(prefix)
-        return any(fnmatch.fnmatchcase(low, lower(mask)) for mask in self.cfg.ignores)
+        hit = False
+        for mask in self.cfg.ignores:
+            if not fnmatch.fnmatchcase(low, lower(mask)):
+                continue
+            kinds = self.cfg.ignore_kinds.get(mask, IGNORE_KINDS)
+            if "U" in kinds:
+                return False
+            if not kind or kind in kinds:
+                hit = True
+        if hit and kind:
+            IGNORE_STATS[kind] = IGNORE_STATS.get(kind, 0) + 1
+        return hit
+
+    # --- Friends List: MONITOR where the server has it, else ISON every 2 minutes, like XChat ---
+
+    def _friends_here(self) -> list[str]:
+        out = []
+        for nick in self.cfg.friends:
+            nets = self.cfg.friend_nets.get(nick, "")
+            if not nets or lower(self.net.name) in [lower(x.strip()) for x in nets.split(",")]:
+                out.append(nick)
+        return out
+
+    def start_friends(self) -> None:
+        self.friend_state = {k: v for k, v in self.friend_state.items() if lower(k) in [lower(n) for n in self._friends_here()]}
+        nicks = self._friends_here()
+        if self.state != "connected":
+            return
+        if self._monitor:
+            self.send_raw("MONITOR C", quiet=True)
+            if nicks:
+                self.send_raw("MONITOR + " + ",".join(nicks), quiet=True)
+            self.send_raw("MONITOR S", quiet=True)
+        else:
+            self._friends_timer.start(max(10, self.cfg.notify_timeout) * 1000)
+            self.poll_friends()
+
+    def poll_friends(self) -> None:
+        nicks = self._friends_here()
+        if self.state == "connected" and nicks and not self._monitor:
+            self._ison_waiting += 1
+            self.send_raw("ISON " + " ".join(nicks), quiet=True)
+
+    def _friend_online(self, nick: str, online: bool) -> None:
+        key = lower(nick)
+        name = next((n for n in self.cfg.friends if lower(n) == key), None)
+        if name is None:
+            return
+        st = self.friend_state.setdefault(key, {"online": False, "seen": 0.0, "known": False})
+        changed = st["online"] != online or not st["known"]
+        was_known = st["known"]
+        st["online"], st["known"] = online, True
+        if online:
+            st["seen"] = time.time()
+        if changed and (online or was_known):
+            self.te("Notify Online" if online else "Notify Offline", self.server_buffer, INFO, (name, self.net.name))
+            if online and self.cfg.whois_on_notify:
+                self.whois(name)
+        self.friends_changed.emit()
 
     def send_raw(self, line: str, secret: bool = False, quiet: bool = False) -> None:
         if self.sock.state() != QAbstractSocket.SocketState.ConnectedState:
@@ -486,9 +614,15 @@ class Session(QObject):
         self._queue_timer.stop()
 
     def say(self, target: str, text: str) -> None:
+        if target.startswith("=") and self.dcc_say is not None:
+            if not self.dcc_say(self, target, text):
+                self.add(self.buffer(target), ERROR, "*", f"No active DCC chat with {target[1:]}.")
+            return
         if self.state != "connected":
             self.add(self._front(), ERROR, "*", "Not connected. Use Server > Reconnect.")
             return
+        if self.away and self.cfg.auto_unaway:
+            self.set_away(False)
         # keep each piece inside the 512-byte IRC limit, split on characters not bytes
         limit = 400
         while text:
@@ -553,11 +687,16 @@ class Session(QObject):
         if kick:
             self.send("KICK", b.name, nick, self.cfg.part_reason)
 
-    def set_away(self, away: bool) -> None:
+    def set_away(self, away: bool, reason: str = "") -> None:
+        reason = reason or self.cfg.away_reason
         if away:
-            self.send("AWAY", self.cfg.away_reason)
+            self.send("AWAY", reason)
         else:
             self.send("AWAY")
+        if self.cfg.announce_away:   # General: "Announce away messages"
+            for b in self.buffers.values():
+                if b.kind == CHANNEL and b.joined:
+                    self.action(b.name, f"is away: {reason}" if away else "is back")
 
     # --- receiving -----------------------------------------------------------
 
@@ -713,20 +852,33 @@ class Session(QObject):
         self.add(self.server_buffer, ERROR, "*", m.param(-1))
 
     def _irc_privmsg(self, m: Message) -> None:
-        if self.ignored(m.prefix):
-            return
         target, text = m.param(0), m.param(-1)
+        ctcp = text.startswith("\x01") and not text.startswith("\x01ACTION")
+        dcc = text.startswith("\x01DCC")
+        kind = "D" if dcc else "T" if ctcp else "C" if self.is_channel(target) else "P"
+        if self.ignored(m.prefix, kind):
+            return
         ts = self._ts(m)
         from_me = lower(m.nick) == lower(self.nick)
         target = target.lstrip(self.statusmsg) if self.statusmsg else target
         dest = target if self.is_channel(target) else (target if from_me else m.nick)
+        if not from_me and not self.cfg.auto_dialog and not self.is_channel(target) and lower(dest) not in self.buffers \
+                and not (text.startswith("\x01") and not text.startswith("\x01ACTION")):
+            # "Open a new tab when you receive a private message" is off: it shows where you are
+            front = self._front()
+            self.add(front, HILITE, f"*{m.nick}*", text.strip("\x01").removeprefix("ACTION "), ts)
+            self.notify.emit(front, "priv")
+            return
         if text.startswith("\x01") :
             body = text.strip("\x01")
             verb, _, rest = body.partition(" ")
             if verb.upper() == "ACTION":
                 b = self.buffer(dest)
-                self.add(b, ACTION if not self._is_hilite(rest) else HILITE, "*", f"{m.nick} {rest}", ts)
-                self._bump(b, 3 if self._is_hilite(rest) else 2)
+                hit = self._is_hilite(rest, m.nick)
+                self.add(b, ACTION if not hit else HILITE, "*", f"{m.nick} {rest}", ts)
+                self._bump(b, 3 if hit else 2)
+                if not from_me:
+                    self.notify.emit(b, "priv" if b.kind == QUERY else "hilight" if hit else "chan")
             else:
                 self._ctcp_request(m.nick, verb.upper(), rest)
             return
@@ -737,21 +889,49 @@ class Session(QObject):
         if from_me:
             self.add(b, SELF, m.nick, text, ts)
             return
-        hl = self._is_hilite(text) or b.kind == QUERY
+        hit = self._is_hilite(text, m.nick)
+        hl = hit or b.kind == QUERY
+        if self.print_hook is not None:
+            event = "Private Message to Dialog" if b.kind == QUERY else "Channel Msg Hilight" if hit else "Channel Message"
+            if self.print_hook(event, (m.nick, text)):
+                return
         self.add(b, HILITE if hl else MSG, m.nick, text, ts)
         self._bump(b, 3 if hl else 2)
+        self.notify.emit(b, "priv" if b.kind == QUERY else "hilight" if hit else "chan")
+
+    def te(self, event: str, b: Buffer, kind: str, args, ts: float | None = None) -> None:
+        """Prints a Text Event with the user's format."""
+        if self.print_hook is not None and self.print_hook(event, args):
+            return
+        left, text = render(self.cfg.text_events.get(event) or EVENTS[event][0], args)
+        self.add(b, kind, left, text, ts)
+
+    def _ctcp_reply_list(self) -> list:
+        if self.cfg.ctcp_replies is not None:
+            return self.cfg.ctcp_replies
+        return [["TIME", "nctcp %s TIME %t"], ["PING", "nctcp %s PING %d"]]
 
     def _ctcp_request(self, nick: str, verb: str, rest: str) -> None:
         now = time.time()
         self._ctcp_times = [t for t in self._ctcp_times if now - t < 30]
         self._ctcp_times.append(now)
         if verb == "DCC":
-            self.add(self._front(), INFO, "*", f"{nick} offered a file or direct chat. BChat can't accept these yet.")
+            if self.on_dcc is not None:
+                self.on_dcc(self, nick, rest)
+            else:
+                self.add(self._front(), INFO, "*", f"{nick} offered a file or direct chat. BChat can't accept these here.")
             return
-        self.add(self._front(), INFO, "*", f"Received a CTCP {verb} from {nick}")
+        self.te("CTCP Generic", self._front(), INFO, (verb, nick))
         if len(self._ctcp_times) > 5:  # XChat's limit: 5 in 30 s, then no replies
             if len(self._ctcp_times) == 6:
                 self.add(self._front(), ERROR, "*", "CTCP flood: not replying for a while.")
+            return
+        mine = [c for n, c in self._ctcp_reply_list() if n.upper() == verb.upper()]
+        if mine and self.on_command is not None:
+            values = {"d": rest, "e": self.net.name, "m": "Windows", "n": self.nick, "s": nick, "t": time.ctime(), "v": "BChat 0.1"}
+            for cmd in mine:
+                if not cmd.startswith("!"):     # others can trigger these, so never a program
+                    self.on_command(self, "/" + re.sub(r"%([demnstv])", lambda m: values[m.group(1)], cmd).lstrip("/"))
             return
         if verb == "VERSION":
             self.send("NOTICE", nick, "\x01VERSION BChat 0.1 by BajuBesi Labs\x01")
@@ -762,11 +942,26 @@ class Session(QObject):
         elif verb == "CLIENTINFO":
             self.send("NOTICE", nick, "\x01CLIENTINFO ACTION CLIENTINFO PING TIME VERSION\x01")
 
-    def _is_hilite(self, text: str) -> bool:
+    @staticmethod
+    def _matches(nick: str, patterns: str) -> bool:
+        low = lower(nick)
+        return any(fnmatch.fnmatchcase(low, lower(p.strip())) for p in patterns.split(",") if p.strip())
+
+    def _is_hilite(self, text: str, sender: str = "") -> bool:
+        """XChat's is_hilight: never from "no highlight" nicks, always from "always" nicks, else your nick or extra words."""
+        if sender and self._matches(sender, self.cfg.hilite_no):
+            return False
+        if sender and self._matches(sender, self.cfg.hilite_always):
+            return True
         words = [self.nick] + [w.strip() for w in self.cfg.highlight.split(",") if w.strip()]
         low = lower(text)
+        tokens = low.split()
         for w in words:
             lw = lower(w)
+            if "*" in lw or "?" in lw:
+                if any(fnmatch.fnmatchcase(tok, lw) for tok in tokens):
+                    return True
+                continue
             at = low.find(lw)
             while at != -1:
                 before = low[at - 1] if at else " "
@@ -794,23 +989,25 @@ class Session(QObject):
             return
         if text.startswith("\x01") and text.endswith("\x01"):
             verb, _, rest = text.strip("\x01").partition(" ")
-            if self.ignored(m.prefix):
+            if self.ignored(m.prefix, "T"):
                 return
             if verb.upper() == "PING" and rest.isdigit():
                 self.add(self._front(), INFO, "*", f"Ping reply from {m.nick}: {max(0, int(time.time()) - int(rest))} second(s)")
                 return
             self.add(self._front(), INFO, "*", f"CTCP {verb} reply from {m.nick}: {rest}")
             return
-        if self.ignored(m.prefix):
+        if self.ignored(m.prefix, "N"):
             return
         if not self._welcomed and "invalid password" in text.lower():
             self._login_refused(text)
             return
         if not m.nick or "." in m.nick or self.state != "connected":
-            self.add(self.server_buffer, NOTICE, "-" + (m.nick or "server") + "-", text, self._ts(m))
+            where = self.buffer("(notices)") if self.cfg.notices_tab else self.server_buffer
+            self.add(where, NOTICE, "-" + (m.nick or "server") + "-", text, self._ts(m))
             return
         b = self.buffers.get(lower(target)) if self.is_channel(target) else self._front()
         self.add(b or self._front(), NOTICE, f"-{m.nick}-", text, self._ts(m))
+        self.notify.emit(b or self._front(), "notice")
 
     def _irc_join(self, m: Message) -> None:
         chan = m.param(0)
@@ -824,15 +1021,17 @@ class Session(QObject):
             self.send("MODE", b.name)
             self.fetch_who(b.name)
             self.buffer_changed.emit(b)
-        else:
-            self.add(b, JOIN, "-->", f"{m.nick} ({m.userhost}) has joined {b.name}", self._ts(m))
+        elif not self.cfg.hide_joinpart:
+            self.te("Join", b, JOIN, (m.nick, b.name, m.userhost), self._ts(m))
+            self.notify.emit(b, "join")
         joined = User(m.nick, "", m.userhost)
         if "extended-join" in self._cap_active and len(m.params) >= 3:
             joined.account = "" if m.param(1) == "*" else m.param(1)
             joined.realname = m.param(2)
         b.users[lower(m.nick)] = joined
         self.users_changed.emit(b)
-        self._bump(b, 1)
+        if not self.cfg.hide_joinpart:
+            self._bump(b, 1)
 
     def _irc_part(self, m: Message) -> None:
         b = self.buffer(m.param(0), False)
@@ -842,27 +1041,32 @@ class Session(QObject):
         if lower(m.nick) == lower(self.nick):
             b.joined = False
             b.users.clear()
-            self.add(b, PART, "<--", f"You have left channel {b.name}")
+            self.te("You Part", b, PART, (b.name,))
             self.users_changed.emit(b)
             self.buffer_changed.emit(b)
             return
         b.users.pop(lower(m.nick), None)
-        tail = f" ({reason})" if reason else ""
-        self.add(b, PART, "<--", f"{m.nick} ({m.userhost}) has left {b.name}{tail}", self._ts(m))
+        if not self.cfg.hide_joinpart:
+            if reason:
+                self.te("Part with Reason", b, PART, (m.nick, m.userhost, b.name, reason), self._ts(m))
+            else:
+                self.te("Part", b, PART, (m.nick, m.userhost, b.name), self._ts(m))
+            self._bump(b, 1)
+            self.notify.emit(b, "part")
         self.users_changed.emit(b)
-        self._bump(b, 1)
 
     def _irc_quit(self, m: Message) -> None:
         key = lower(m.nick)
         for b in self.buffers.values():
             if key in b.users:
                 del b.users[key]
-                self.add(b, PART, "<--", f"{m.nick} has quit ({m.param(-1)})", self._ts(m))
+                if not self.cfg.hide_joinpart:
+                    self.te("Quit", b, PART, (m.nick, m.param(-1)), self._ts(m))
+                    self._bump(b, 1)
                 self.users_changed.emit(b)
-                self._bump(b, 1)
         private = self.buffers.get(key)
         if private is not None and private.kind == QUERY:
-            self.add(private, PART, "<--", f"{m.nick} has quit ({m.param(-1)})", self._ts(m))
+            self.te("Quit", private, PART, (m.nick, m.param(-1)), self._ts(m))
 
     def _irc_kick(self, m: Message) -> None:
         b = self.buffer(m.param(0), False)
@@ -873,10 +1077,11 @@ class Session(QObject):
         if lower(victim) == lower(self.nick):
             b.joined = False
             b.users.clear()
-            self.add(b, PART, "<--", f"You have been kicked from {b.name} by {m.nick} ({reason})")
+            self.te("You Kicked", b, PART, (b.name, m.nick, reason))
             self.buffer_changed.emit(b)
         else:
-            self.add(b, PART, "<--", f"{m.nick} has kicked {victim} from {b.name} ({reason})")
+            self.te("Kick", b, PART, (m.nick, victim, b.name, reason))
+        self.notify.emit(b, "kick")
         self.users_changed.emit(b)
 
     def _irc_nick(self, m: Message) -> None:
@@ -890,22 +1095,24 @@ class Session(QObject):
             if u:
                 u.nick = new
                 b.users[lower(new)] = u
-                text = f"You are now known as {new}" if was_me else f"{old} is now known as {new}"
-                self.add(b, INFO, "*", text)
+                if was_me:
+                    self.te("Your Nick Changing", b, INFO, (new,))
+                else:
+                    self.te("Change Nick", b, INFO, (old, new))
                 self.users_changed.emit(b)
         q = self.buffers.pop(lower(old), None)
         if q is not None:
             q.name = new
             self.buffers[lower(new)] = q
-            self.add(q, INFO, "*", f"{old} is now known as {new}")
+            self.te("Change Nick", q, INFO, (old, new))
             self.buffer_changed.emit(q)
         if was_me:
-            self.add(self.server_buffer, INFO, "*", f"You are now known as {new}")
+            self.te("Your Nick Changing", self.server_buffer, INFO, (new,))
 
     def _irc_topic(self, m: Message) -> None:
         b = self.buffer(m.param(0))
         b.topic = m.param(1)
-        self.add(b, TOPIC, "*", f"{m.nick} has changed the topic to: {b.topic}", self._ts(m))
+        self.te("Topic Change", b, TOPIC, (m.nick, b.topic), self._ts(m))
         self.buffer_changed.emit(b)
 
     def _irc_mode(self, m: Message) -> None:
@@ -914,7 +1121,11 @@ class Session(QObject):
             self.add(self.server_buffer, INFO, "*", f"Your modes: {' '.join(m.params[1:])}")
             return
         b = self.buffer(target)
-        self._apply_modes(b, m.params[1:], m.nick)
+        if self.cfg.raw_modes:   # Advanced: "Display MODEs in raw form"
+            self.add(b, INFO, "*", f"{m.nick} sets mode {' '.join(m.params[1:])}")
+            self._apply_modes(b, m.params[1:])
+        else:
+            self._apply_modes(b, m.params[1:], m.nick)
 
     def _apply_modes(self, b: Buffer, params: list[str], who: str = "") -> None:
         if not params:
@@ -937,8 +1148,12 @@ class Session(QObject):
                         u.prefixes = u.prefixes.replace(pfx, "")
                     changed = True
                 if who:
-                    label = {"@": "channel operator status", "%": "channel half-operator status", "+": "voice"}.get(pfx, f"mode {c}")
-                    self.add(b, INFO, "*", f"{who} {'gives' if sign == '+' else 'removes'} {label} {'to' if sign == '+' else 'from'} {nick}")
+                    event = {("@", "+"): "Channel Operator", ("@", "-"): "Channel DeOp", ("+", "+"): "Channel Voice", ("+", "-"): "Channel DeVoice"}.get((pfx, sign))
+                    if event:
+                        self.te(event, b, INFO, (who, nick))
+                    else:
+                        label = {"@": "channel operator status", "%": "channel half-operator status", "+": "voice"}.get(pfx, f"mode {c}")
+                        self.add(b, INFO, "*", f"{who} {'gives' if sign == '+' else 'removes'} {label} {'to' if sign == '+' else 'from'} {nick}")
             else:
                 has_arg = c in self.modes_list or c in self.modes_key or (c in self.modes_on_set and sign == "+")
                 arg = args.pop(0) if has_arg and args else ""
@@ -953,7 +1168,7 @@ class Session(QObject):
                         b.mode_args.pop(c, None)
                 if who:
                     if c == "b":
-                        text = f"{who} {'sets ban on' if sign == '+' else 'removes ban on'} {arg}"
+                        left, text = render(self.cfg.text_events.get("Channel Ban" if sign == "+" else "Channel UnBan") or EVENTS["Channel Ban" if sign == "+" else "Channel UnBan"][0], (who, arg))
                     elif c == "k" and sign == "+":
                         text = f"{who} sets channel keyword to {arg}"
                     else:
@@ -965,7 +1180,7 @@ class Session(QObject):
             self.users_changed.emit(b)
 
     def _irc_away(self, m: Message) -> None:
-        away = bool(m.params and m.params[-1])
+        away = bool(m.params and m.params[-1]) and self.cfg.away_track
         key = lower(m.nick)
         for b in self.buffers.values():
             u = b.users.get(key)
@@ -981,14 +1196,15 @@ class Session(QObject):
                 u.host = f"{m.param(0)}@{m.param(1)}"
 
     def _irc_invite(self, m: Message) -> None:
-        if self.ignored(m.prefix):
+        if self.ignored(m.prefix, "I"):
             return
         if lower(m.param(0)) != lower(self.nick):  # invite-notify: someone else was invited
             b = self.buffer(m.param(1), False)
             if b is not None:
                 self.add(b, INFO, "*", f"{m.nick} has invited {m.param(0)} to {m.param(1)}")
             return
-        self.add(self._front(), INFO, "*", f"You have been invited to {m.param(1)} by {m.nick} ({m.userhost})")
+        self.te("Invited", self._front(), INFO, (m.param(1), m.nick, m.userhost))
+        self.notify.emit(self._front(), "invite")
 
     # numerics --------------------------------------------------------------------
 
@@ -1000,9 +1216,34 @@ class Session(QObject):
             self.server_name = m.prefix
             self._welcomed = True
             self._set_state("connected")
+            self.notify.emit(self.server_buffer, "connect")
             self._who.start()
             self.add(self.server_buffer, INFO, "*", m.param(-1))
             self._after_welcome()
+        elif n in (321, 322, 323) and self.list_sink is not None:
+            if n == 322:
+                self.list_sink.list_item(m.param(1), int(m.param(2)) if m.param(2).isdigit() else 0, m.param(3))
+            elif n == 323:
+                self.list_sink.list_end()
+        elif n in (367, 348, 346) and lower(m.param(1)) in self.ban_sinks:
+            self.ban_sinks[lower(m.param(1))].ban_item({367: "b", 348: "e", 346: "I"}[n], m.param(2), m.param(3), m.param(4))
+        elif n in (368, 349, 347) and lower(m.param(1)) in self.ban_sinks:
+            self.ban_sinks[lower(m.param(1))].ban_end({368: "b", 349: "e", 347: "I"}[n])
+        elif n == 302 and self._userhost_waiting:
+            self._userhost_waiting -= 1
+            host = m.param(-1).strip().split("@")[-1]
+            if host:
+                QHostInfo.lookupHost(host, self, self._own_host_found)
+        elif n == 303 and self._ison_waiting:
+            self._ison_waiting -= 1
+            on = {lower(x) for x in m.param(-1).split()}
+            for nick in self._friends_here():
+                self._friend_online(nick, lower(nick) in on)
+        elif n in (730, 731):
+            for item in m.param(-1).split(","):
+                self._friend_online(item.split("!")[0], n == 730)
+        elif n in (732, 733, 734):
+            pass
         elif n == 5:
             self._isupport(p[1:-1])
             self.add(self.server_buffer, INFO, "*", " ".join(p[1:]))
@@ -1080,13 +1321,13 @@ class Session(QObject):
                 b.topic = ""
                 self.buffer_changed.emit(b)
         elif n == 332:
-            self.add(target, TOPIC, "*", f"Topic for {name} is: {m.param(-1)}")
+            self.te("Topic", target, TOPIC, (name, m.param(-1)))
             if b is not None:
                 b.topic = m.param(-1)
                 self.buffer_changed.emit(b)
         else:
             when = time.strftime("%a %b %d %H:%M:%S %Y", time.localtime(int(m.param(3) or 0))) if m.param(3).isdigit() else "?"
-            self.add(target, TOPIC, "*", f"Topic for {name} set by {m.param(2).split('!')[0]} at {when}")
+            self.te("Topic Creation", target, TOPIC, (name, m.param(2).split("!")[0], when))
 
     def _isupport(self, tokens: list[str]) -> None:
         for t in tokens:
@@ -1095,6 +1336,8 @@ class Session(QObject):
                 modes, _, chars = v[1:].partition(")")
                 if modes and len(modes) == len(chars):
                     self.prefix_modes, self.prefix_chars = modes, chars
+            elif k == "MONITOR":
+                self._monitor = True
             elif k == "CHANTYPES" and v:
                 self.chantypes = v
             elif k == "STATUSMSG":
@@ -1110,7 +1353,17 @@ class Session(QObject):
                 self.server_buffer.name = v if not self.net.name else self.net.name
                 self.buffer_changed.emit(self.server_buffer)
 
+    def _own_host_found(self, info) -> None:
+        for a in info.addresses():
+            if a.protocol() == QAbstractSocket.NetworkLayerProtocol.IPv4Protocol:
+                self.external_ip = a.toString()
+                return
+
     def _after_welcome(self) -> None:
+        self.start_friends()
+        if self.cfg.dcc_ip_from_server:     # the address others can reach us on, for DCC offers
+            self._userhost_waiting += 1
+            self.send_raw(f"USERHOST {self.nick}", quiet=True)
         if self.net.nickserv:
             self.send_raw(f"PRIVMSG NickServ :IDENTIFY {self.net.nickserv}", secret=True)
         for cmd in self.net.commands:
@@ -1160,7 +1413,7 @@ class Session(QObject):
         u = b.users.get(lower(m.param(5)))
         if u is None:
             return
-        away = m.param(6).startswith("G")
+        away = m.param(6).startswith("G") and self.cfg.away_track
         real = m.param(-1).partition(" ")[2]
         host = f"{m.param(2)}@{m.param(3)}"
         changed = u.away != away
@@ -1177,7 +1430,7 @@ class Session(QObject):
         u = b.users.get(lower(m.param(6))) if b else None
         if u is None:
             return
-        away = m.param(7).startswith("G")
+        away = m.param(7).startswith("G") and self.cfg.away_track
         changed = u.away != away
         u.away, u.host, u.server = away, f"{m.param(3)}@{m.param(4)}", m.param(5)
         u.account = "" if m.param(8) == "0" else m.param(8)
@@ -1227,6 +1480,13 @@ class Session(QObject):
                         u.away_reason = i.get("away", u.away_reason)
                         u.country = i.get("country", u.country)
                 self.user_info.emit(m.param(1))
+            return
+        if n == 301 and key != self._whois_nick:
+            # the server tells you they're away because you messaged them, not a whois. "Show away once" drops repeats
+            if self.cfg.away_once and self._away_seen.get(key) == m.param(-1):
+                return
+            self._away_seen[key] = m.param(-1)
+            self.te("Away Line", self._front(), INFO, (m.param(1), m.param(-1)))
             return
         b = self._whois_target or self._front()
         p = m.params

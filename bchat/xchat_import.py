@@ -154,7 +154,9 @@ def import_into(cfg: Config, sources: list[Path], colors: bool = False) -> list[
             cfg.part_reason = conf.get("irc_part_reason") or cfg.part_reason
             cfg.quit_reason = conf.get("irc_quit_reason") or cfg.quit_reason
             cfg.away_reason = conf.get("away_reason") or cfg.away_reason
-            cfg.highlight = conf.get("irc_nick_hilight", cfg.highlight)
+            cfg.highlight = conf.get("irc_extra_hilight", cfg.highlight)
+            cfg.hilite_always = conf.get("irc_nick_hilight", cfg.hilite_always)
+            cfg.hilite_no = conf.get("irc_no_hilight", cfg.hilite_no)
         if colors and (src / "colors.conf").exists():
             lines = _read(src / "colors.conf")
             if _is_light(lines):

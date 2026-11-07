@@ -74,12 +74,14 @@ class UserDelegate(QStyledItemDelegate):
     ROW = 19
     ICON = 7
 
-    def __init__(self, theme: Theme, parent=None):
+    def __init__(self, theme: Theme, parent=None, cfg=None):
         super().__init__(parent)
         self.theme = theme
+        self.cfg = cfg
 
     def sizeHint(self, option, index):
-        return QSize(40, self.ROW)
+        # a bigger chat font needs taller rows
+        return QSize(40, max(self.ROW, option.fontMetrics.height() + 3))
 
     def paint(self, p: QPainter, option, index):
         u: User = index.data(Qt.ItemDataRole.UserRole)
@@ -100,14 +102,18 @@ class UserDelegate(QStyledItemDelegate):
         p.setPen(QColor(col))
         tr = QRect(r.x() + 3 + self.ICON + 7, r.y(), r.width() - 3 - self.ICON - 7, r.height())
         p.drawText(tr, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, u.nick)
+        if self.cfg is not None and self.cfg.ul_hosts and u.host:
+            x = p.fontMetrics().horizontalAdvance(u.nick) + 10
+            p.setPen(QColor("#ffffff" if selected else self.theme.away))
+            p.drawText(tr.adjusted(x, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, u.host)
 
 
 class UserList(QListView):
-    def __init__(self, theme: Theme, parent=None):
+    def __init__(self, theme: Theme, parent=None, cfg=None):
         super().__init__(parent)
         self.model_ = UserModel(self)
         self.setModel(self.model_)
-        self.setItemDelegate(UserDelegate(theme, self))
+        self.setItemDelegate(UserDelegate(theme, self, cfg))
         self.setUniformItemSizes(True)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)

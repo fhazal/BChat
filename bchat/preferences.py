@@ -1,7 +1,6 @@
 """Settings > Preferences, laid out like XChat 2: Categories tree on the left, one page on the right.
 
-Built so far (mockup OK'd 2026-11-07): Text box and Colors. The other categories are greyed until each has
-its own mockup. Nothing changes until OK; Cancel and the red button throw the edits away.
+Pages and options follow XChat 2.8.8's src/fe-gtk/setup.c. Every page works. Nothing changes until OK; Cancel and the red button throw the edits away.
 """
 from __future__ import annotations
 
@@ -9,24 +8,29 @@ from dataclasses import fields
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QColorDialog, QFontDialog, QFrame, QGridLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QPushButton, QRadioButton, QSpinBox, QStackedWidget, QTreeWidget,
-                               QTreeWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QColorDialog, QComboBox, QFileDialog, QFontDialog, QFrame, QGridLayout,
+                               QHBoxLayout, QLabel, QLineEdit, QPushButton, QRadioButton, QScrollArea, QSpinBox, QStackedWidget,
+                               QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .config import Config, Theme
 from .widgets import FramedDialog, icon
 
 CATEGORIES = {"Interface": ["Text box", "Input box", "User list", "Channel switcher", "Colors"],
-              "Chatting": ["Alerts", "General", "Logging", "Sound"],
+              "Chatting": ["Alerts", "General", "Logging", "Sound", "Advanced"],
               "Network": ["Network setup", "File transfers"]}
-BUILT = ("Text box", "Colors")
+BUILT = ("Text box", "Input box", "User list", "Channel switcher", "Colors", "Alerts", "General", "Logging", "Sound", "Advanced", "Network setup", "File transfers")
+SWITCHER_POS = ("Left", "Right", "Top", "Bottom", "Hidden")
+SORTS = ("A-Z, Ops first", "A-Z", "Z-A, Ops last", "Z-A", "Unsorted")
+# Sound page: session notify event -> the name XChat's Sound page uses
+SOUND_EVENTS = (("chan", "Channel Message"), ("hilight", "Channel Msg Hilight"), ("priv", "Private Message"), ("notice", "Notice"),
+                ("join", "Join"), ("part", "Part"), ("kick", "Kick"), ("invite", "Invited"), ("connect", "Connected"), ("disconnect", "Disconnected"))
 RANK_CHOICES = (("off", "Off"), ("lights", "Lights before ranked nicks"),
                 ("slot", "Lights, and an empty slot for others so all text lines up"))
 
 # Colors page: (section, [(label, Theme field), ...]); mIRC colours are the palette list
 COLOUR_ROWS = [
     ("Text Colors", [("Foreground:", "chat_fg"), ("Background:", "chat_bg")]),
-    ("Marking Text", [("Foreground:", "text"), ("Background:", "selected")]),
+    ("Marking Text", [("Foreground:", "marking_fg"), ("Background:", "selected")]),
     ("Your Lines", [("Your nick:", "self_nick"), ("Your text:", "self_text")]),
     ("Chat", [("Nick names:", "nick"), ("Mention:", "highlight"), ("Time stamps:", "stamp"), ("Join / part:", "join"),
               ("Topic, * lines:", "topic"), ("Notice -nick-:", "notice_nick"), ("Sent >nick<:", "send_bracket"),
@@ -102,6 +106,10 @@ class PreferencesDialog(FramedDialog):
         rl.addWidget(self.pages, 1)
         self.page_of["Text box"] = self.pages.addWidget(self._text_page())
         self.page_of["Colors"] = self.pages.addWidget(self._colors_page())
+        for name, build in (("File transfers", self._files_page), ("Channel switcher", self._switcher_page), ("Input box", self._input_page), ("User list", self._userlist_page), ("Alerts", self._alerts_page),
+                            ("General", self._general_page), ("Logging", self._logging_page), ("Sound", self._sound_page),
+                            ("Advanced", self._advanced_page), ("Network setup", self._network_page)):
+            self.page_of[name] = self.pages.addWidget(build())
         row.addWidget(self.tree)
         row.addWidget(right, 1)
         self.body.addLayout(row, 1)
@@ -161,6 +169,13 @@ class PreferencesDialog(FramedDialog):
         self.scrollback.setSingleStep(500)
         self.scrollback.setValue(c.max_lines)
         g.addWidget(self.scrollback, 2, 1, Qt.AlignmentFlag.AlignLeft)
+        g.addWidget(QLabel("Background image:"), 3, 0, Qt.AlignmentFlag.AlignRight)
+        self.bg_image = QLineEdit(c.chat_bg_image, page)
+        g.addWidget(self.bg_image, 3, 1)
+        pick = QPushButton("Browse...", page)
+        pick.setAutoDefault(False)
+        pick.clicked.connect(lambda: self._browse(self.bg_image, "Background image", "Images (*.png *.jpg *.jpeg *.bmp)"))
+        g.addWidget(pick, 3, 2)
         lay.addLayout(g)
         lay.addWidget(_heading("Time Stamps"))
         h = QHBoxLayout()
@@ -200,6 +215,334 @@ class PreferencesDialog(FramedDialog):
         self.strip = QCheckBox("Strip mIRC colours from what people say", page)
         self.strip.setChecked(c.strip_colors)
         lay.addWidget(self.strip)
+        lay.addStretch(1)
+        return page
+
+    def _browse(self, edit: QLineEdit, title: str, pattern: str) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, title, edit.text(), pattern)
+        if path:
+            edit.setText(path)
+
+    # small helpers so each page reads like XChat's table in setup.c
+
+    def _new_page(self):
+        page = QWidget(self)
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(14, 6, 14, 6)
+        return page, lay
+
+    def _check(self, lay, text: str, on: bool, tip: str = "") -> QCheckBox:
+        box = QCheckBox(text)
+        box.setChecked(on)
+        if tip:
+            box.setToolTip(tip)
+        lay.addWidget(box)
+        return box
+
+    def _entry(self, grid: QGridLayout, row: int, label: str, value: str, secret: bool = False) -> QLineEdit:
+        grid.addWidget(QLabel(label), row, 0, Qt.AlignmentFlag.AlignRight)
+        edit = QLineEdit(value)
+        if secret:
+            edit.setEchoMode(QLineEdit.EchoMode.Password)
+        grid.addWidget(edit, row, 1)
+        return edit
+
+    def _number(self, grid: QGridLayout, row: int, label: str, value: int, low: int, high: int, suffix: str = "") -> QSpinBox:
+        grid.addWidget(QLabel(label), row, 0, Qt.AlignmentFlag.AlignRight)
+        spin = QSpinBox()
+        spin.setRange(low, high)
+        spin.setValue(value)
+        spin.setSuffix(suffix)
+        grid.addWidget(spin, row, 1, Qt.AlignmentFlag.AlignLeft)
+        return spin
+
+    def _menu(self, grid: QGridLayout, row: int, label: str, items, value: int) -> QComboBox:
+        grid.addWidget(QLabel(label), row, 0, Qt.AlignmentFlag.AlignRight)
+        box = QComboBox()
+        box.addItems(list(items))
+        box.setCurrentIndex(value)
+        grid.addWidget(box, row, 1, Qt.AlignmentFlag.AlignLeft)
+        return box
+
+    # --- Input box ----------------------------------------------------------------------
+
+    def _input_page(self) -> QWidget:
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Input box"))
+        self.input_font = self._check(lay, "Use the Text box font", c.input_chat_font)
+        self.spell = self._check(lay, "Spell checking (English)", c.spell_check, "Right-click a marked word for suggestions")
+        lay.addWidget(_heading("Nick Completion"))
+        self.auto_complete = self._check(lay, "Automatic nick completion (without TAB key)", c.auto_complete,
+                                         'Typing "fha: hi" sends "Fhazal: hi" when only one nick fits')
+        g = QGridLayout()
+        self.suffix = self._entry(g, 0, "Nick completion suffix:", c.nick_suffix)
+        self.suffix.setFixedWidth(60)
+        g.setAlignment(self.suffix, Qt.AlignmentFlag.AlignLeft)
+        self.comp_sort = self._menu(g, 1, "Nick completion sorted:", ("A-Z", "Last-spoke order"), 1 if c.complete_sort == "recent" else 0)
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        lay.addWidget(_heading("Input Box Codes"))
+        self.pct_ascii = self._check(lay, "Interpret %nnn as an ASCII value", c.percent_ascii)
+        self.pct_codes = self._check(lay, "Interpret %C, %B as Color, Bold etc", c.percent_codes)
+        lay.addStretch(1)
+        return page
+
+    # --- User list ----------------------------------------------------------------------
+
+    def _userlist_page(self) -> QWidget:
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("User List"))
+        self.ul_hosts = self._check(lay, "Show hostnames in user list", c.ul_hosts)
+        self.ul_font = self._check(lay, "Use the Text box font", c.ul_chat_font)
+        g = QGridLayout()
+        self.ul_sort = self._menu(g, 0, "User list sorted by:", SORTS, c.ul_sort)
+        self.ul_side = self._menu(g, 1, "Show user list at:", ("Right", "Left"), 1 if c.ul_side == "left" else 0)
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        lay.addWidget(_heading("Away tracking"))
+        self.away_track = self._check(lay, "Track the Away status of users and mark them in a different color", c.away_track)
+        g = QGridLayout()
+        self.away_limit = self._number(g, 0, "On channels smaller than:", c.away_limit, 1, 100000)
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        lay.addWidget(_heading("Action Upon Double Click"))
+        g = QGridLayout()
+        self.ul_double = self._entry(g, 0, "Execute command:", c.ul_double)
+        lay.addLayout(g)
+        lay.addStretch(1)
+        return page
+
+    # --- Channel switcher ---------------------------------------------------------------
+
+    def _switcher_page(self) -> QWidget:
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Channel Switcher"))
+        g = QGridLayout()
+        self.sw_type = self._menu(g, 0, "Switcher type:", ("Tree", "Tabs"), 1 if c.tab_layout == "tabs" else 0)
+        self.sw_pos = self._menu(g, 1, "Show channel switcher at:", SWITCHER_POS, [p.lower() for p in SWITCHER_POS].index(c.tab_pos))
+        self.sw_focus = self._menu(g, 2, "Focus new tabs:", ("Never", "Always", "Only requested tabs"), c.tab_focus)
+        self.sw_trunc = self._number(g, 3, "Shorten tab labels to:", c.tab_trunc, 0, 99, " letters")
+        self.sw_trunc.setSpecialValueText("Never")
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        self.sw_notices = self._check(lay, "Open an extra tab for server notices", c.notices_tab)
+        self.sw_dialog = self._check(lay, "Open a new tab when you receive a private message", c.auto_dialog)
+        self.sw_sort = self._check(lay, "Sort tabs in alphabetical order", c.tab_sort)
+        self.sw_small = self._check(lay, "Smaller text", c.tab_small)
+        lay.addWidget(_heading("Tabs or Windows"))
+        g = QGridLayout()
+        self.sw_windows = self._menu(g, 0, "Open dialogs in:", ("Tabs", "Windows"), 1 if c.dialogs_in_windows else 0)
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        lay.addStretch(1)
+        return page
+
+    # --- Alerts -------------------------------------------------------------------------
+
+    def _alerts_page(self) -> QWidget:
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Alerts"))
+        g = QGridLayout()
+        g.setHorizontalSpacing(16)
+        for col, head in enumerate(("Channel Message", "Private Message", "Highlighted Message"), 1):
+            g.addWidget(QLabel(head), 0, col, Qt.AlignmentFlag.AlignCenter)
+        self.alert_boxes = {}
+        for row, (key, label) in enumerate((("alert_balloon", "Show tray balloons on:"), ("alert_tray", "Blink tray icon on:"),
+                                            ("alert_flash", "Blink task bar on:"), ("alert_beep", "Make a beep sound on:")), 1):
+            g.addWidget(QLabel(label), row, 0, Qt.AlignmentFlag.AlignRight)
+            boxes = []
+            for col in range(3):
+                box = QCheckBox()
+                box.setChecked(getattr(c, key)[col])
+                g.addWidget(box, row, col + 1, Qt.AlignmentFlag.AlignCenter)
+                boxes.append(box)
+            self.alert_boxes[key] = boxes
+        g.setColumnStretch(4, 1)
+        lay.addLayout(g)
+        self.tray_icon = self._check(lay, "Enable system tray icon", c.tray_icon)
+        lay.addWidget(_heading("Highlighted Messages"))
+        lay.addWidget(QLabel("Highlighted messages are ones where your nickname is mentioned, but also:"))
+        g = QGridLayout()
+        self.hl_extra = self._entry(g, 0, "Extra words to highlight:", c.highlight)
+        self.hl_no = self._entry(g, 1, "Nick names not to highlight:", c.hilite_no)
+        self.hl_always = self._entry(g, 2, "Nick names to always highlight:", c.hilite_always)
+        lay.addLayout(g)
+        lay.addWidget(QLabel("Separate multiple words with commas. Wildcards are accepted."))
+        lay.addStretch(1)
+        return page
+
+    # --- General ------------------------------------------------------------------------
+
+    def _general_page(self) -> QWidget:
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Default Messages"))
+        g = QGridLayout()
+        self.quit_msg = self._entry(g, 0, "Quit:", c.quit_reason)
+        self.part_msg = self._entry(g, 1, "Leave channel:", c.part_reason)
+        self.away_msg = self._entry(g, 2, "Away:", c.away_reason)
+        lay.addLayout(g)
+        lay.addWidget(_heading("Away"))
+        self.announce = self._check(lay, "Announce away messages", c.announce_away, "Tell every channel you're in when you go away and come back")
+        self.away_once = self._check(lay, "Show away once", c.away_once, "Show identical away messages only once")
+        self.auto_unaway = self._check(lay, "Automatically unmark away", c.auto_unaway, "Unmark yourself as away before sending messages")
+        lay.addWidget(_heading("Starting and Closing"))
+        self.start_win = self._check(lay, "Start with Windows", c.start_with_windows, "Only for the installed BChat")
+        self.start_min = self._check(lay, "Start minimized", c.start_minimized)
+        self.close_tray = self._check(lay, "Closing the window keeps BChat in the system tray", c.close_to_tray, "Needs the tray icon: Alerts > Enable system tray icon")
+        lay.addStretch(1)
+        return page
+
+    # --- Logging ------------------------------------------------------------------------
+
+    def _logging_page(self) -> QWidget:
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Logging"))
+        self.replay = self._check(lay, "Display scrollback from previous session", c.text_replay)
+        self.log_all = self._check(lay, "Enable logging of conversations to disk", c.log_all, 'Single tabs: right-click the tab, "Log to Disk"')
+        g = QGridLayout()
+        self.log_mask = self._entry(g, 0, "Log filename:", c.log_mask)
+        lay.addLayout(g)
+        lay.addWidget(QLabel("%s=Server %c=Channel %n=Network. A / makes a folder."))
+        lay.addWidget(_heading("Time Stamps"))
+        self.log_stamps = self._check(lay, "Insert timestamps in logs", c.log_stamps)
+        g = QGridLayout()
+        self.log_fmt = self._entry(g, 0, "Log timestamp format:", c.log_stamp_format)
+        lay.addLayout(g)
+        lay.addWidget(QLabel("%H hour, %M minute, %S second, %d day, %b month name."))
+        lay.addStretch(1)
+        return page
+
+    # --- Sound --------------------------------------------------------------------------
+
+    def _sound_page(self) -> QWidget:
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Sound"))
+        lay.addWidget(QLabel("Pick a .wav file for any event. Leave it empty for no sound."))
+        g = QGridLayout()
+        self.sound_edits: dict[str, QLineEdit] = {}
+        for row, (key, label) in enumerate(SOUND_EVENTS):
+            edit = self._entry(g, row, label + ":", self.cfg.sounds.get(key, ""))
+            self.sound_edits[key] = edit
+            browse = QPushButton("Browse...")
+            browse.setAutoDefault(False)
+            browse.clicked.connect(lambda _=False, e=edit: self._browse(e, "Sound file", "Sound files (*.wav)"))
+            g.addWidget(browse, row, 2)
+            play = QPushButton("Play")
+            play.setAutoDefault(False)
+            play.clicked.connect(lambda _=False, e=edit: self._try_sound(e.text()))
+            g.addWidget(play, row, 3)
+        lay.addLayout(g)
+        lay.addStretch(1)
+        return page
+
+    def _try_sound(self, path: str) -> None:
+        if path:
+            self.win.cfg.sounds["__try"] = path
+            self.win._play_sound("__try")
+            del self.win.cfg.sounds["__try"]
+
+    # --- Advanced -----------------------------------------------------------------------
+
+    def _advanced_page(self) -> QWidget:
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Advanced Settings"))
+        g = QGridLayout()
+        self.reconnect = self._number(g, 0, "Auto reconnect delay:", c.reconnect_delay, 1, 9999, " seconds")
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        self.raw_modes = self._check(lay, "Display MODEs in raw form", c.raw_modes)
+        self.hide_jp = self._check(lay, "Hide join and part messages", c.hide_joinpart, "Hide channel join/part messages by default")
+        self.notify_whois = self._check(lay, "Whois on notify", c.whois_on_notify, "Sends a /WHOIS when a friend comes online")
+        self.url_grab = self._check(lay, "Grab URLs for the URL Grabber", c.url_grabber)
+        g = QGridLayout()
+        self.url_limit = self._number(g, 0, "URLs to keep:", c.url_limit, 1, 9999)
+        self.opacity = self._number(g, 1, "Window opacity:", c.opacity, 30, 100, " %")
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        lay.addStretch(1)
+        return page
+
+    # --- File transfers -----------------------------------------------------------------
+
+    def _folder_row(self, g: QGridLayout, row: int, label: str, value: str) -> QLineEdit:
+        edit = self._entry(g, row, label, value)
+        pick = QPushButton("Browse...")
+        pick.setAutoDefault(False)
+
+        def choose():
+            path = QFileDialog.getExistingDirectory(self, label.rstrip(":"), edit.text())
+            if path:
+                edit.setText(path)
+        pick.clicked.connect(lambda _=False: choose())
+        g.addWidget(pick, row, 2)
+        return edit
+
+    def _files_page(self) -> QWidget:
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Files and Directories"))
+        g = QGridLayout()
+        self.dcc_auto = self._menu(g, 0, "Auto accept file offers:", ("No, ask me", "Yes"), c.dcc_auto)
+        self.dcc_dir = self._folder_row(g, 1, "Download files to:", c.dcc_dir)
+        self.dcc_done = self._folder_row(g, 2, "Move completed files to:", c.dcc_done_dir)
+        lay.addLayout(g)
+        lay.addWidget(QLabel("Programs (.exe and the like) are never auto accepted."))
+        self.dcc_nick = self._check(lay, "Save nick name in filenames", c.dcc_with_nick)
+        lay.addWidget(_heading("Network Settings"))
+        self.dcc_from_server = self._check(lay, "Get my address from the IRC server", c.dcc_ip_from_server)
+        g = QGridLayout()
+        self.dcc_ip = self._entry(g, 0, "DCC IP address:", c.dcc_ip)
+        self.dcc_first = self._number(g, 1, "First DCC send port:", c.dcc_first_port, 0, 65535)
+        self.dcc_last = self._number(g, 2, "Last DCC send port:", c.dcc_last_port, 0, 65535)
+        lay.addLayout(g)
+        lay.addWidget(_heading("Maximum File Transfer Speeds (KB/s, 0 = no limit)"))
+        g = QGridLayout()
+        self.dcc_up = self._number(g, 0, "One upload:", c.dcc_max_send, 0, 999999)
+        self.dcc_down = self._number(g, 1, "One download:", c.dcc_max_get, 0, 999999)
+        self.dcc_up_all = self._number(g, 2, "All uploads combined:", c.dcc_max_send_all, 0, 999999)
+        self.dcc_down_all = self._number(g, 3, "All downloads combined:", c.dcc_max_get_all, 0, 999999)
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        lay.addWidget(_heading("Auto Open DCC Windows"))
+        row = QHBoxLayout()
+        self.dcc_open_send = self._check(row, "Send window", c.dcc_open_send)
+        self.dcc_open_recv = self._check(row, "Receive window", c.dcc_open_recv)
+        self.dcc_open_chat = self._check(row, "Chat window", c.dcc_open_chat)
+        row.addStretch(1)
+        lay.addLayout(row)
+        lay.addStretch(1)
+        return page
+
+    # --- Network setup ------------------------------------------------------------------
+
+    def _network_page(self) -> QWidget:
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Your Address"))
+        g = QGridLayout()
+        self.bind = self._entry(g, 0, "Bind to:", c.bind_host)
+        lay.addLayout(g)
+        lay.addWidget(QLabel("Only useful for computers with multiple addresses."))
+        lay.addWidget(_heading("Proxy Server"))
+        g = QGridLayout()
+        self.proxy_host = self._entry(g, 0, "Hostname:", c.proxy_host)
+        self.proxy_port = self._number(g, 1, "Port:", c.proxy_port, 0, 65535)
+        kinds = ("none", "socks5", "http")
+        self.proxy_type = self._menu(g, 2, "Type:", ("(Disabled)", "Socks5", "HTTP"), kinds.index(c.proxy_type) if c.proxy_type in kinds else 0)
+        lay.addLayout(g)
+        lay.addWidget(_heading("Proxy Authentication"))
+        self.proxy_auth = self._check(lay, "Use Authentication (HTTP or Socks5 only)", c.proxy_auth)
+        g = QGridLayout()
+        self.proxy_user = self._entry(g, 0, "Username:", c.proxy_user)
+        self.proxy_pass = self._entry(g, 1, "Password:", c.proxy_password, secret=True)
+        lay.addLayout(g)
         lay.addStretch(1)
         return page
 
@@ -295,6 +638,52 @@ class PreferencesDialog(FramedDialog):
         c.rank_lights = next((k for k, r in self.rank_buttons.items() if r.isChecked()), "off")
         c.color_nicks = self.color_nicks.isChecked()
         c.strip_colors = self.strip.isChecked()
+        c.chat_bg_image = self.bg_image.text().strip()
+        c.input_chat_font, c.auto_complete = self.input_font.isChecked(), self.auto_complete.isChecked()
+        c.spell_check = self.spell.isChecked()
+        c.nick_suffix = self.suffix.text()
+        c.complete_sort = "recent" if self.comp_sort.currentIndex() == 1 else "alpha"
+        c.percent_ascii, c.percent_codes = self.pct_ascii.isChecked(), self.pct_codes.isChecked()
+        c.ul_hosts, c.ul_chat_font = self.ul_hosts.isChecked(), self.ul_font.isChecked()
+        c.ul_sort = self.ul_sort.currentIndex()
+        c.ul_side = "left" if self.ul_side.currentIndex() == 1 else "right"
+        c.away_track, c.away_limit = self.away_track.isChecked(), self.away_limit.value()
+        c.ul_double = self.ul_double.text().strip()
+        for key, boxes in self.alert_boxes.items():
+            setattr(c, key, [b.isChecked() for b in boxes])
+        c.tray_icon = self.tray_icon.isChecked()
+        c.highlight, c.hilite_no, c.hilite_always = self.hl_extra.text().strip(), self.hl_no.text().strip(), self.hl_always.text().strip()
+        c.quit_reason = self.quit_msg.text() or "Leaving"
+        c.part_reason = self.part_msg.text() or "Leaving"
+        c.away_reason = self.away_msg.text() or "I'm busy"
+        c.announce_away, c.away_once, c.auto_unaway = self.announce.isChecked(), self.away_once.isChecked(), self.auto_unaway.isChecked()
+        c.text_replay, c.log_all = self.replay.isChecked(), self.log_all.isChecked()
+        c.log_mask = self.log_mask.text().strip() or "%n-%c.log"
+        c.log_stamps, c.log_stamp_format = self.log_stamps.isChecked(), self.log_fmt.text()
+        c.sounds = {k: e.text().strip() for k, e in self.sound_edits.items() if e.text().strip()}
+        c.reconnect_delay = self.reconnect.value()
+        c.dcc_auto = self.dcc_auto.currentIndex()
+        c.dcc_dir, c.dcc_done_dir = self.dcc_dir.text().strip(), self.dcc_done.text().strip()
+        c.dcc_with_nick, c.dcc_ip_from_server = self.dcc_nick.isChecked(), self.dcc_from_server.isChecked()
+        c.dcc_ip, c.dcc_first_port, c.dcc_last_port = self.dcc_ip.text().strip(), self.dcc_first.value(), self.dcc_last.value()
+        c.dcc_max_send, c.dcc_max_get = self.dcc_up.value(), self.dcc_down.value()
+        c.dcc_max_send_all, c.dcc_max_get_all = self.dcc_up_all.value(), self.dcc_down_all.value()
+        c.dcc_open_send, c.dcc_open_recv, c.dcc_open_chat = self.dcc_open_send.isChecked(), self.dcc_open_recv.isChecked(), self.dcc_open_chat.isChecked()
+        c.tab_layout = "tabs" if self.sw_type.currentIndex() == 1 else "tree"
+        c.tab_pos = SWITCHER_POS[self.sw_pos.currentIndex()].lower()
+        c.tab_focus, c.tab_trunc = self.sw_focus.currentIndex(), self.sw_trunc.value()
+        c.notices_tab, c.auto_dialog, c.tab_sort, c.tab_small = self.sw_notices.isChecked(), self.sw_dialog.isChecked(), self.sw_sort.isChecked(), self.sw_small.isChecked()
+        c.dialogs_in_windows = self.sw_windows.currentIndex() == 1
+        if self.start_win.isChecked() != c.start_with_windows:
+            self.win.set_autostart(self.start_win.isChecked())
+        c.start_with_windows, c.start_minimized, c.close_to_tray = self.start_win.isChecked(), self.start_min.isChecked(), self.close_tray.isChecked()
+        c.whois_on_notify, c.url_grabber = self.notify_whois.isChecked(), self.url_grab.isChecked()
+        c.url_limit, c.opacity = self.url_limit.value(), self.opacity.value()
+        c.raw_modes, c.hide_joinpart = self.raw_modes.isChecked(), self.hide_jp.isChecked()
+        c.bind_host, c.proxy_host = self.bind.text().strip(), self.proxy_host.text().strip()
+        c.proxy_port = self.proxy_port.value()
+        c.proxy_type = ("none", "socks5", "http")[self.proxy_type.currentIndex()]
+        c.proxy_auth, c.proxy_user, c.proxy_password = self.proxy_auth.isChecked(), self.proxy_user.text().strip(), self.proxy_pass.text()
         for f in fields(Theme):   # in place: the user list and tabs hold this same Theme object
             setattr(c.theme, f.name, list(self.theme.palette) if f.name == "palette" else getattr(self.theme, f.name))
         self.win.apply_preferences()
