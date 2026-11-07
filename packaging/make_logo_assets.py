@@ -3,7 +3,7 @@ make_icon_set.py makes such a set from one transparent master picture).
 
 - bchat/assets/bchat.ico + bchat.png: app, taskbar, shortcut and installer icon (the set's own .ico, 16-256 px)
 - bchat/assets/header/logo-<h>.png: title bar logo, 16 logical px at 100-300 % scale
-- packaging/wizard-side(-2x).bmp, wizard-small(-2x).bmp: installer pictures
+- (installer pictures: make_installer_art.py, since 2026-11-08)
 The logo is already transparent, so no cut-out is needed (the old simple logo needed one).
 Needs Pillow; only run it to change the design.
 """
@@ -46,9 +46,5 @@ if __name__ == "__main__":
     HEADER.mkdir(parents=True, exist_ok=True)
     for h in HEIGHTS:
         fit(logo, 10 * h, h).save(HEADER / f"logo-{h}.png")
-    for scale, suffix in ((1, ""), (2, "-2x")):
-        on(CRUST, (164 * scale, 314 * scale), logo, 124 * scale, 124 * scale, 130 * scale).save(
-            ROOT / f"packaging/wizard-side{suffix}.bmp")
-        on(WHITE, (55 * scale, 55 * scale), logo, 49 * scale, 49 * scale, 27.5 * scale).save(
-            ROOT / f"packaging/wizard-small{suffix}.bmp")
+    # the installer pictures have their own design now (bee + orange-pink B): make_installer_art.py
     print("logo files written")

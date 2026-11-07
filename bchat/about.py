@@ -17,6 +17,7 @@ from .widgets import ASSETS, FramedDialog, icon
 
 TAGLINE = "Handle IRC as a bee does a flower"
 SITE = "https://bajubesi.org"
+SUPPORT = "https://ko-fi.com/bajubesi"   # the owner's Ko-fi: a quiet link, never a popup
 MASCOT_WIDTH = 120     # the bee keeps its headset B and "chat" sign readable at this size
 
 
@@ -103,7 +104,7 @@ class AboutDialog(FramedDialog):
         small = QFont(self.tagline.font())
         small.setBold(False)
         small.setPointSize(max(7, small.pointSize() - 1))
-        for text in ("Copyright © 2026 BajuBesi Labs.", "Icons from XChat 2 (GPL)."):
+        for text in ("Copyright © 2026 BajuBesi Labs.", "Icons: Lucide (ISC)."):
             lab = QLabel(text)
             lab.setFont(small)
             lab.setStyleSheet(f"color: {theme.muted};")
@@ -113,6 +114,23 @@ class AboutDialog(FramedDialog):
         self.link.setOpenExternalLinks(True)
         self.link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         self.body.addWidget(self.link, 0, Qt.AlignmentFlag.AlignLeft)
+        self.body.addSpacing(6)
+        support = QHBoxLayout()
+        support.setSpacing(6)
+        from . import lucide
+        dpr = self.devicePixelRatioF()
+        heart = QPixmap.fromImage(lucide.image("heart", theme.title, round(14 * dpr)))
+        heart.setDevicePixelRatio(dpr)
+        self.heart = QLabel()
+        self.heart.setPixmap(heart)
+        self.heart.setFixedSize(14, 14)
+        support.addWidget(self.heart, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.support = QLabel(f'BChat is free and has no ads. <a style="color: {theme.check};" href="{SUPPORT}">Support it on Ko-fi</a>')
+        self.support.setStyleSheet(f"color: {theme.muted};")
+        self.support.setOpenExternalLinks(True)
+        self.support.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        support.addWidget(self.support, 1)
+        self.body.addLayout(support)
         self.body.addSpacing(14)
 
         line = QFrame()
@@ -133,4 +151,5 @@ class AboutDialog(FramedDialog):
     def text(self) -> str:
         """Everything the window says, for tests and a quick copy."""
         rows = "\n".join(f"{k}: {v.text()}" for k, v in self.values.items())
-        return f"BChat\n{TAGLINE}\n{rows}\nCopyright © 2026 BajuBesi Labs.\nIcons from XChat 2 (GPL).\n{self.link.text()}"
+        return (f"BChat\n{TAGLINE}\n{rows}\nCopyright © 2026 BajuBesi Labs.\nIcons: Lucide (ISC).\n{self.link.text()}\n"
+                f"{self.support.text()}")

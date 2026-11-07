@@ -5,8 +5,8 @@ import math
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QAbstractButton, QDialog, QHBoxLayout, QLabel, QMainWindow, QSizePolicy,
+from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtWidgets import (QAbstractButton, QApplication, QDialog, QHBoxLayout, QLabel, QMainWindow, QSizePolicy,
                                QVBoxLayout, QWidget)
 
 from .config import Theme
@@ -14,38 +14,72 @@ from .config import Theme
 ASSETS = Path(__file__).parent / "assets"
 RED, YELLOW, GREEN = "#ff5f57", "#febc2e", "#28c840"
 _icons: dict[tuple[str, str], QIcon] = {}
-_light_ink = ""      # on a light theme: the text colour the white "-light" icons are tinted with
+_ink = "#cdd6f4"                    # the theme's text colour: what Lucide icons are drawn in
+_names_by_key: dict[int, str] = {}  # QIcon cache key -> icon name, to swap icons when the theme changes
 
 
 def icon(name: str) -> QIcon:
-    ink = _light_ink if name.endswith("-light") else ""
+    """Lucide icons in the theme's text colour; anything else (the tray message picture) from its PNG."""
+    from . import lucide
+    ink = _ink if lucide.has(name) else ""
     if (name, ink) not in _icons:
-        p = ASSETS / f"{name}.png"
-        if not p.exists():
-            p = ASSETS / "stock" / f"{name}.png"
         if ink:
-            pm = QPixmap(str(p))
-            painter = QPainter(pm)
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-            painter.fillRect(pm.rect(), QColor(ink))
-            painter.end()
-            _icons[(name, ink)] = QIcon(pm)
+            ic = QIcon()
+            for px in (16, 20, 24, 32, 48):        # sharp at every screen scale
+                ic.addPixmap(QPixmap.fromImage(lucide.image(name, ink, px)))
         else:
-            _icons[(name, ink)] = QIcon(str(p))
+            p = ASSETS / f"{name}.png"
+            if not p.exists():
+                p = ASSETS / "stock" / f"{name}.png"
+            ic = QIcon(str(p))
+        _icons[(name, ink)] = ic
+        _names_by_key[ic.cacheKey()] = name
     return _icons[(name, ink)]
 
 
+def is_light(t: Theme) -> bool:
+    return QColor(t.panel).lightness() > 140
+
+
+_os_palette: QPalette | None = None
+
+
+def set_light_palette(t: Theme) -> None:
+    """Qt colours whatever BChat doesn't style itself (spin boxes, frame lines, plain tool buttons) from Windows,
+    and on a PC in dark mode that is dark. A light theme gets its own colours for those; a dark theme gets
+    exactly what Windows gave before, so dark themes look as they always did."""
+    global _os_palette
+    app = QApplication.instance()
+    if app is None:
+        return
+    if _os_palette is None:
+        _os_palette = QPalette(app.palette())
+    if not is_light(t):
+        app.setPalette(_os_palette)
+        return
+    p = QPalette()
+    R = QPalette.ColorRole
+    for role, colour in ((R.Window, t.window), (R.WindowText, t.text), (R.Base, t.panel), (R.AlternateBase, t.window),
+                         (R.Text, t.text), (R.Button, t.popup), (R.ButtonText, t.text), (R.BrightText, t.marker),
+                         (R.Highlight, t.selected), (R.HighlightedText, t.marking_fg), (R.ToolTipBase, t.panel),
+                         (R.ToolTipText, t.text), (R.PlaceholderText, t.disabled), (R.Link, t.new_highlight),
+                         (R.LinkVisited, t.topic), (R.Light, t.panel), (R.Midlight, t.window), (R.Mid, t.thumb),
+                         (R.Dark, t.thumb_hover), (R.Shadow, t.away)):
+        p.setColor(role, QColor(colour))
+    for role in (R.WindowText, R.Text, R.ButtonText):
+        p.setColor(QPalette.ColorGroup.Disabled, role, QColor(t.disabled))
+    app.setPalette(p)
+
+
 def set_icon_theme(t: Theme, root=None) -> None:
-    """White "-light" icons are made for dark themes; a light theme tints them with its text colour.
-    Buttons and menu items that already show one get the new one."""
-    global _light_ink
-    old = {icon(n).cacheKey(): n for (n, _ink) in list(_icons) if n.endswith("-light")}
-    _light_ink = t.text if QColor(t.panel).lightness() > 140 else ""
+    """Icons follow the theme's text colour. Buttons and menu items that already show one get the new colour."""
+    global _ink
+    _ink = t.text
     if root is None:
         return
     from PySide6.QtGui import QAction
     for w in root.findChildren(QAbstractButton) + root.findChildren(QAction):
-        name = old.get(w.icon().cacheKey())
+        name = _names_by_key.get(w.icon().cacheKey())
         if name:
             w.setIcon(icon(name))
 
@@ -65,6 +99,10 @@ def header_logo(dpr: float) -> QPixmap:
 
 
 def stylesheet(t: Theme) -> str:
+    return _sheet(t) + (_light_extra(t) if is_light(t) else "")
+
+
+def _sheet(t: Theme) -> str:
     return f"""
     * {{ font-family: Tahoma, Verdana, sans-serif; font-size: 8pt; color: {t.text}; }}
     QMainWindow, QDialog, #root {{ background: {t.window}; }}
@@ -120,6 +158,20 @@ def stylesheet(t: Theme) -> str:
     QSplitter::handle {{ background: {t.window}; }}
     QToolTip {{ background: {t.popup}; color: {t.text}; border: 1px solid {t.border}; }}
     """
+
+
+def _light_extra(t: Theme) -> str:
+    """Only on a light theme: selected menu text in the theme's text colour (white is unreadable on light grey),
+    and spin boxes in the panel colour like the other entry boxes."""
+    return f"""
+    QMenuBar::item:selected, QMenu::item:selected {{ color: {t.marking_fg}; }}
+    QAbstractSpinBox {{ background: {t.panel}; border: 1px solid {t.border}; selection-background-color: {t.selected};
+        selection-color: {t.marking_fg}; }}
+    QAbstractSpinBox:disabled {{ color: {t.disabled}; }}
+    QPushButton:disabled {{ color: {t.away}; }}
+    QFrame[frameShape="4"], QFrame[frameShape="5"] {{ color: {t.thumb_hover}; }}
+    """
+
 
 
 class TrafficLight(QAbstractButton):

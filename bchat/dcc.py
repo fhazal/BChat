@@ -15,14 +15,16 @@ from PySide6.QtNetwork import QAbstractSocket, QHostAddress, QTcpServer, QTcpSoc
 
 CHUNK = 64 * 1024
 OFFER_TIMEOUT = 300
-# never saved without being asked: these run when opened
-RISKY = {".exe", ".com", ".bat", ".cmd", ".scr", ".pif", ".msi", ".lnk", ".ps1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".reg", ".cpl", ".jar"}
+from .filetypes import PROGRAM_TYPES, is_program, mark_from_internet, strip_bidi
+
+# never saved without being asked: these run when opened (one list with the link check, filetypes.py)
+RISKY = {"." + e for e in PROGRAM_TYPES}
 RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
 def safe_name(name: str) -> str:
     """Only the last part of whatever path they sent, with nothing Windows treats as special."""
-    name = re.split(r"[/\\]", name)[-1]
+    name = strip_bidi(re.split(r"[/\\]", name)[-1])     # no right-to-left tricks hiding the real ending
     name = re.sub(r'[<>:"|?*\x00-\x1f]', "_", name).strip(" .")
     if not name or name.split(".")[0].upper() in RESERVED:
         name = "_" + (name or "file")
@@ -143,6 +145,9 @@ class Transfer(QObject):
     def _open_for_receive(self) -> None:
         try:
             self.file = open(self.path, "ab" if self.resume_from else "wb")
+            # "downloaded from the internet", like a browser download: Windows SmartScreen checks it before it runs
+            net = getattr(getattr(self.session, "net", None), "name", "") or "irc"
+            mark_from_internet(self.path, f"irc://{net}/{self.nick}")
             if self.resume_from:
                 self.file.truncate(self.resume_from)
                 self.pos = self.acked = self.resume_from
@@ -446,7 +451,7 @@ class DccManager(QObject):
         t.path = str(self.target_path(clean, nick))
         s.add(s._front(), "info", "*", f"{nick} has offered {clean} ({size} bytes)")
         s.notify.emit(s._front(), "priv")
-        if self.cfg.dcc_auto == 1 and Path(clean).suffix.lower() not in RISKY:
+        if self.cfg.dcc_auto == 1 and not is_program(clean):
             self.accept(t)
         if self.cfg.dcc_open_recv:
             self.win.open_transfers()
@@ -521,6 +526,8 @@ class DccManager(QObject):
                 moved = self._fresh_path(folder / Path(t.path).name)
                 shutil.move(t.path, moved)
                 t.path = str(moved)
+                # a move to another drive copies only the file itself: put the "from the internet" mark back
+                mark_from_internet(t.path, f"irc://{getattr(s.net, 'name', '') or 'irc'}/{t.nick}")
             except OSError as e:
                 s.add(s._front(), "error", "*", f"Couldn't move {t.name}: {e}")
         word = "send of" if t.kind == "send" else "receive of"

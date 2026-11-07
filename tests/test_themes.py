@@ -147,3 +147,82 @@ def test_coloured_nicks_use_the_theme(app, win):
     assert c in PALETTES["Dracula"].values()
     win.cfg.theme.name = "Catppuccin Mocha"
     assert win.chat.nick_colour("Belon") in PALETTES["Catppuccin Mocha"].values()
+
+
+def test_light_fixes_only_touch_light_themes(app):
+    """Spin boxes, frame lines and Qt's own colours: Latte gets theme colours, dark themes keep what they had."""
+    from PySide6.QtGui import QPalette
+    from bchat import widgets
+    before = QPalette(app.palette())
+    for name in THEME_NAMES:
+        t = make_theme(name)
+        sheet = widgets.stylesheet(t)
+        light = name == "Catppuccin Latte"
+        assert ("QAbstractSpinBox" in sheet) == light and ('frameShape="4"' in sheet) == light
+        assert sheet.startswith(widgets._sheet(t))
+        widgets.set_light_palette(t)
+        base = app.palette().color(QPalette.ColorRole.Base).name()
+        if light:
+            assert base == t.panel and app.palette().color(QPalette.ColorRole.Button).name() == t.popup
+        else:
+            assert app.palette() == widgets._os_palette    # exactly what Windows gave before
+    widgets.set_light_palette(make_theme("Catppuccin Mocha"))
+    assert app.palette() == before
+
+
+def test_topic_buttons_hide_when_you_cant_change_the_topic(app, win):
+    bar = win.topic
+    every = [*bar.buttons.values(), bar.set_btn]
+    bar.set_allowed(False, "Only channel operators can change the topic here (+t)")
+    assert not any(b.isVisibleTo(bar) for b in every) and bar.edit.isReadOnly() and "+t" in bar.edit.toolTip()
+    bar.set_allowed(True)
+    assert all(b.isVisibleTo(bar) for b in every) and not bar.edit.isReadOnly() and bar.edit.toolTip() == ""
+    # no channel in front (the server tab here): nothing to change, so no buttons
+    win._refresh_all()
+    assert not any(b.isVisibleTo(bar) for b in every)
+
+
+def test_lucide_icons_are_all_there_and_follow_the_theme(app, win):
+    """Every icon name BChat asks for is a bundled Lucide SVG, drawn in the theme's text colour,
+    and menu items already showing one change colour with the theme."""
+    from bchat import lucide
+    from bchat.preferences import PreferencesDialog
+    from bchat.widgets import ASSETS, icon
+    for name, svg in lucide.NAMES.items():
+        assert (ASSETS / "lucide" / f"{svg}.svg").is_file(), name
+    for extra in ("message-circle", "triangle-alert", "monitor", "folder", "hash"):
+        assert (ASSETS / "lucide" / f"{extra}.svg").is_file()
+    assert "ISC" in (ASSETS / "lucide" / "LICENSE.txt").read_text(encoding="utf-8")
+    assert not (ASSETS / "stock").exists()            # the old XChat pictures are gone
+
+    def ink(ic):
+        img = ic.pixmap(24, 24).toImage()
+        cols = [img.pixelColor(x, y) for x in range(img.width()) for y in range(img.height()) if img.pixelColor(x, y).alpha() > 220]
+        return cols
+    quit_act = [a for a in win.findChildren(type(win.update_act)) if a.text() == "&Quit"][0]
+    cols = ink(icon("quit"))
+    assert cols and all(abs(c.lightness() - QColor(win.cfg.theme.text).lightness()) < 20 for c in cols)
+    d = PreferencesDialog(win, "Colors")
+    d.theme_box.activated.emit(THEME_NAMES.index("Catppuccin Latte"))
+    d.accept()
+    cols = ink(quit_act.icon())
+    assert cols and all(c.lightness() < 120 for c in cols)     # Latte's dark text colour, on the existing menu item
+    from bchat.about import AboutDialog
+    assert "Icons: Lucide (ISC)." in AboutDialog(win.cfg.theme, win).text()
+
+
+def test_support_link_is_quiet_and_in_two_places(app, win, monkeypatch):
+    """About has one calm line with the Ko-fi link, Help has one menu item; nothing else ever asks for money."""
+    from PySide6.QtGui import QDesktopServices
+    from bchat.about import SUPPORT
+    assert SUPPORT == "https://ko-fi.com/bajubesi"
+    d = win._about_box()
+    assert "BChat is free and has no ads." in d.support.text() and f'href="{SUPPORT}"' in d.support.text()
+    assert d.support.openExternalLinks() and not d.heart.pixmap().isNull()
+    opened = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", staticmethod(lambda u: opened.append(u.toString()) or True))
+    help_menu = [a for a in win.menubar_.actions() if a.text() == "&Help"][0].menu()
+    names = [a.text() for a in help_menu.actions() if not a.isSeparator()]
+    assert names.index("&Support BChat on Ko-fi...") == names.index("&About") - 1
+    [a for a in help_menu.actions() if a.text() == "&Support BChat on Ko-fi..."][0].trigger()
+    assert opened == [SUPPORT]

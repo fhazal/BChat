@@ -648,7 +648,7 @@ class TransfersWindow(ToolWindow):
 
     def do_accept(self) -> None:
         for t in self.selected():
-            self.win.dcc.accept(t)
+            self.win.accept_transfer(t)
 
     def do_resume(self) -> None:
         for t in self.selected():

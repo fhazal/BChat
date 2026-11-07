@@ -1,4 +1,5 @@
 """BChat against the local fake server: login, SSL, user list, whois, nick menu, every enabled menu item."""
+import os
 import shutil
 import subprocess
 import time
@@ -247,7 +248,7 @@ def test_sasl_needs_ssl_and_keeps_password_off_plain_connections(app, tmp_path):
 def test_sasl_plain_over_ssl(app, tmp_path):
     crt, key = _cert(tmp_path)
     srv = FakeIrcd(crt, key, caps="sasl=PLAIN,EXTERNAL")
-    win, net = make_win(tmp_path, srv.port, ssl=True, sasl_user="acct", sasl_password="hunter2")
+    win, net = make_win(tmp_path, srv.port, ssl=True, sasl_user="acct", sasl_password="hunter2", allow_invalid_cert=True)
     s = win.connect_network(net)
     assert wait(app, lambda: any("SASL login successful" in l.text for l in s.server_buffer.lines), 8000), [l.text for l in s.server_buffer.lines]
     import base64
@@ -260,7 +261,7 @@ def test_sasl_plain_over_ssl(app, tmp_path):
 def test_sasl_failure_still_finishes_login(app, tmp_path):
     crt, key = _cert(tmp_path)
     srv = FakeIrcd(crt, key, caps="sasl", sasl_ok=False)
-    win, net = make_win(tmp_path, srv.port, ssl=True, sasl_user="acct", sasl_password="bad")
+    win, net = make_win(tmp_path, srv.port, ssl=True, sasl_user="acct", sasl_password="bad", allow_invalid_cert=True)
     s = win.connect_network(net)
     assert wait(app, lambda: any("SASL login failed" in l.text for l in s.server_buffer.lines), 8000)
     assert wait(app, lambda: "CAP END" in srv.received)
@@ -429,8 +430,11 @@ def test_ssl_refused_when_invalid_not_allowed(app, tmp_path):
     srv = FakeIrcd(crt, key)
     win, net = make_win(tmp_path, srv.port, ssl=True, allow_invalid_cert=False)
     s = win.connect_network(net)
-    assert wait(app, lambda: any("certificate rejected" in l.text for l in s.server_buffer.lines), 8000)
-    assert s.state != "connected"
+    assert wait(app, lambda: getattr(win, "cert_dialog", None) is not None and win.cert_dialog.isVisible(), 8000)
+    assert any("certificate not trusted" in l.text for l in s.server_buffer.lines) and s.state != "connected"
+    win.cert_dialog.no_btn.click()
+    assert wait(app, lambda: any("you chose not to trust" in l.text for l in s.server_buffer.lines))
+    assert s.state != "connected" and not net.cert_pins
     s.disconnect_from_network()
     win.close()
     srv.stop()
@@ -1311,13 +1315,13 @@ def test_prefs_tray_icon_blinks_balloons_and_quits(app, tmp_path, monkeypatch):
     b = s.buffers["#skinhead"]
     prefs(win, lambda d: d.tray_icon.setChecked(True))
     assert win.tray is not None
-    shown = []
-    win.tray.showMessage = lambda *a: shown.append(a)
-    prefs(win, lambda d: (d.alert_boxes["alert_tray"][1].setChecked(True), d.alert_boxes["alert_balloon"][1].setChecked(True)))
+    prefs(win, lambda d: (d.alert_boxes["alert_tray"][1].setChecked(True), d.alert_boxes["alert_popup"][1].setChecked(True)))
     monkeypatch.setattr(win, "isActiveWindow", lambda: False)
+    win.notifier.busy = lambda: False
     s.add(b, "msg", "Belon", "balloon text")
     win._on_notify(b, "priv")
-    assert win._blink_timer.isActive() and shown and "balloon text" in shown[0][1]
+    assert win._blink_timer.isActive() and win.notifier.cards and win.notifier.cards[0].text == "balloon text"
+    win.notifier.clear()
     win._stop_blink()
     assert not win._blink_timer.isActive()
     assert [a.text() for a in win.tray.contextMenu().actions() if not a.isSeparator()] == ["Show BChat", "Quit"]
@@ -2294,6 +2298,9 @@ def test_dcc_receive_accept_saves_the_exact_bytes(live, tmp_path):
     QTest.mouseClick(w.accept_btn, Qt.MouseButton.LeftButton)
     assert wait(app, lambda: t.state == "done", 8000), (t.state, t.error, t.pos)
     assert (tmp_path / "in" / "my file.bin").read_bytes() == payload
+    if os.name == "nt":      # marked "downloaded from the internet", so Windows SmartScreen checks it like a browser download
+        mark = Path(str(tmp_path / "in" / "my file.bin") + ":Zone.Identifier").read_text()
+        assert "ZoneId=3" in mark and "irc://SkinIRC/Belon" in mark
     assert wait(app, lambda: got["acks"] == len(payload))
     assert w.view.topLevelItem(0).text(0) == "Complete" and w.view.topLevelItem(0).text(4) == "100"
     assert any("complete" in l.text for l in s.server_buffer.lines + s._front().lines)
@@ -2360,6 +2367,14 @@ def test_dcc_auto_accept_never_takes_programs(live, tmp_path):
     srv.send(f":Belon!b@h PRIVMSG Badaboom :\x01DCC SEND moved.txt 2130706433 {port} {len(payload)}\x01")
     assert wait(app, lambda: len(win.dcc.items) == 4 and win.dcc.items[3].state == "done", 8000)
     assert (done / "Belon.moved.txt").read_bytes() == payload
+    if os.name == "nt":      # still marked after the move to the completed folder
+        assert "ZoneId=3" in Path(str(done / "Belon.moved.txt") + ":Zone.Identifier").read_text()
+    # hidden direction marks can't disguise a program, and the newer program types wait too
+    srv.send(f":Belon!b@h PRIVMSG Badaboom :DCC SEND photo‮gpj.exe 2130706433 1234 10")
+    srv.send(f":Belon!b@h PRIVMSG Badaboom :DCC SEND update.msix 2130706433 1234 10")
+    assert wait(app, lambda: len(win.dcc.items) == 6)
+    assert win.dcc.items[4].name == "photogpj.exe" and win.dcc.items[4].state == "queued"
+    assert win.dcc.items[5].state == "queued"
 
 
 def test_dcc_ignored_offer_does_nothing(live):
@@ -3240,7 +3255,7 @@ def test_about_window_like_xchat_with_bee_line_and_site_link(live):
     assert box.values["Built"].text() == "source"          # tests run from source; a build shows the exe's date
     assert box.values["Processors"].text().isdigit()
     assert "/" in box.values["Python / Qt"].text()
-    assert "Copyright © 2026 BajuBesi Labs." in box.text() and "XChat 2 (GPL)" in box.text()
+    assert "Copyright © 2026 BajuBesi Labs." in box.text() and "Icons: Lucide (ISC)." in box.text() and "XChat" not in box.text()
     assert "Flaticon" not in box.text() and "classic XChat 2 style" not in box.text()
     assert f'href="{SITE}"' in box.link.text() and SITE == "https://bajubesi.org"
     assert box.link.openExternalLinks() and box.link.textInteractionFlags() & Qt.TextInteractionFlag.LinksAccessibleByMouse
@@ -3383,8 +3398,20 @@ def test_add_network_saves_a_typed_server_in_one_click(app, tmp_path):
     assert win.sessions.get(saved.name) is s and list(win.sessions.values()).count(s) == 1   # filed under the new name
     assert any(n.name == saved.name for n in config.load(win.cfg_dir).networks)   # written to disk
     assert any(l.text.startswith(f"Saved as network {saved.name}") for l in s.server_buffer.lines)
+    # the tree shows the network's name, not the server address it was typed as (user's report, 11-08)
+    label = lambda: win.items[id(s.server_buffer)].text(0)
+    assert label() == saved.name and s.server_buffer.name == saved.name
+    # and renaming it (Edit window or Network List) changes the tree too
+    assert win.rename_network(saved, "JavaNET")
+    assert label() == "JavaNET" and win.sessions.get("JavaNET") is s
+    from bchat.networklist import NetworkEditDialog
+    d = NetworkEditDialog(saved, win)
+    d.name.setText("BajuBesi")
+    d.accept()
+    assert label() == "BajuBesi" and saved.name == "BajuBesi"
     # saving the same network again (e.g. typed again later) gets "(1)", like AdiIRC's JavaNET(1)
     s.net = NetworkConfig("127.0.0.1", [Server("127.0.0.1", srv.port)])
+    saved.name = s.network_token
     assert win.add_network_from(s).name == f"{saved.name}(1)"
     win.close()
     srv.stop()
@@ -3615,8 +3642,10 @@ def test_topic_is_read_only_on_plus_t_without_op_and_emoji_goes_into_input(live)
     srv.send(":Fhazal!f@h MODE #skinhead -o Badaboom")
     assert wait(app, lambda: "t" in b.modes and win.topic.edit.isReadOnly())
     assert not win.topic.set_btn.isEnabled() and "+t" in win.topic.edit.toolTip()
+    assert not any(x.isVisibleTo(win.topic) for x in [*win.topic.buttons.values(), win.topic.set_btn])   # hidden, not greyed
     srv.send(":Fhazal!f@h MODE #skinhead +o Badaboom")
     assert wait(app, lambda: not win.topic.edit.isReadOnly())
+    assert all(x.isVisibleTo(win.topic) for x in [*win.topic.buttons.values(), win.topic.set_btn])
     # emoji button by the input box
     win.input.setText("best ")
     win.input.setCursorPosition(5)

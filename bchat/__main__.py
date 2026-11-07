@@ -50,6 +50,10 @@ def main(argv: list[str] | None = None) -> int:
         win.show()
 
     def start():
+        if getattr(cfg, "vault_missing", False):
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(win, "BChat: saved passwords", "BChat couldn't read your saved network passwords from "
+                                "Windows Credential Manager. Please enter them again in the Network List.")
         win.updater.start()
         if not args.no_autoconnect:
             win.autoconnect()

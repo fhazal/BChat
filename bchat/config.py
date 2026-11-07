@@ -1,4 +1,4 @@
-"""BChat settings, kept as JSON in %APPDATA%\\BChat. Network passwords are stored here as plain text, same as XChat."""
+"""BChat settings, kept as JSON in %APPDATA%\\BChat. Passwords go to Windows Credential Manager (vault.py), not this file."""
 from __future__ import annotations
 
 import json
@@ -92,7 +92,8 @@ class NetworkConfig:
     commands: list[str] = field(default_factory=list)
     autoconnect: bool = False
     use_global: bool = True
-    allow_invalid_cert: bool = True
+    allow_invalid_cert: bool = False   # new networks check certificates; older settings keep what they had
+    cert_pins: list[str] = field(default_factory=list)   # SHA-256 of certificates the user chose to trust
     cycle: bool = True
     favorite: bool = False
 
@@ -213,7 +214,7 @@ class Config:
     away_limit: int = 300          # channels bigger than this aren't polled
     ul_double: str = "QUOTE WHOIS %s %s"
     # Alerts: each list is [channel message, private message, highlighted]
-    alert_balloon: list[bool] = field(default_factory=lambda: [False, False, False])
+    alert_popup: list[bool] = field(default_factory=lambda: [False, True, True])   # BChat's own pop-up cards
     alert_tray: list[bool] = field(default_factory=lambda: [False, True, True])
     alert_flash: list[bool] = field(default_factory=lambda: [False, True, True])
     alert_beep: list[bool] = field(default_factory=lambda: [False, False, False])
@@ -350,20 +351,65 @@ def _from_dict(d: dict) -> Config:
     return cfg
 
 
+SECRET_FIELDS = ("password", "sasl_password", "nickserv")
+
+
+def _net_keys(networks) -> list[str]:
+    """A key per network for its passwords: the name, with #2, #3 for repeated names."""
+    seen: dict[str, int] = {}
+    keys = []
+    for n in networks:
+        name = n["name"].lower() if isinstance(n, dict) else n.name.lower()
+        seen[name] = seen.get(name, 0) + 1
+        keys.append(name if seen[name] == 1 else f"{name}#{seen[name]}")
+    return keys
+
+
 def load(directory: Path) -> Config:
     path = directory / "config.json"
     if path.exists():
         try:
-            return _from_dict(json.loads(path.read_text(encoding="utf-8")))
+            d = json.loads(path.read_text(encoding="utf-8"))
+            cfg = _from_dict(d)
         except (ValueError, TypeError) as e:
             # keep the broken file for inspection rather than overwriting it on next save
             path.replace(path.with_suffix(".broken.json"))
             print(f"BChat: settings could not be read, saved aside: {e}")
+            return Config()
+        if d.get("secrets") == "vault":
+            from . import vault
+            text = vault.get(directory)
+            if text is None:
+                cfg.vault_missing = True      # the window says so: passwords need typing in again
+            else:
+                s = json.loads(text)
+                for key, n in zip(_net_keys(cfg.networks), cfg.networks):
+                    for f in SECRET_FIELDS:
+                        setattr(n, f, s.get("networks", {}).get(key, {}).get(f, ""))
+                cfg.proxy_password = s.get("proxy_password", "")
+        return cfg
     return Config()
 
 
 def save(cfg: Config, directory: Path) -> None:
+    """Settings to config.json, passwords to Windows Credential Manager. If Windows won't store them,
+    they stay in the file as before rather than being lost."""
+    from . import vault
     directory.mkdir(parents=True, exist_ok=True)
+    d = asdict(cfg)
+    secrets = {"networks": {}, "proxy_password": d.get("proxy_password", "")}
+    for key, n in zip(_net_keys(d["networks"]), d["networks"]):
+        found = {f: n.get(f, "") for f in SECRET_FIELDS if n.get(f)}
+        if found:
+            secrets["networks"][key] = found
+    if vault.put(directory, json.dumps(secrets)):
+        for n in d["networks"]:
+            for f in SECRET_FIELDS:
+                n[f] = ""
+        d["proxy_password"] = ""
+        d["secrets"] = "vault"
+    else:
+        d["secrets"] = "file"
     tmp = directory / "config.json.tmp"
-    tmp.write_text(json.dumps(asdict(cfg), indent=2), encoding="utf-8")
+    tmp.write_text(json.dumps(d, indent=2), encoding="utf-8")
     tmp.replace(directory / "config.json")

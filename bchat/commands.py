@@ -232,7 +232,7 @@ def _dcc_command(ui, s: Session, b: Buffer, args: list[str], rest: str) -> None:
         waiting = [t for t in dcc.items if t.kind == "recv" and t.state == "queued" and t.nick.lower() == args[1].lower()
                    and (len(args) < 3 or t.name == args[2])]
         if waiting:
-            dcc.accept(waiting[0])
+            ui.accept_transfer(waiting[0])
         else:
             s.add(b, ERROR, "*", f"No file offered by {args[1]}.")
     elif verb == "close" and len(args) >= 3:

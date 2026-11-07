@@ -351,7 +351,7 @@ class PreferencesDialog(FramedDialog):
         for col, head in enumerate(("Channel Message", "Private Message", "Highlighted Message"), 1):
             g.addWidget(QLabel(head), 0, col, Qt.AlignmentFlag.AlignCenter)
         self.alert_boxes = {}
-        for row, (key, label) in enumerate((("alert_balloon", "Show tray balloons on:"), ("alert_tray", "Blink tray icon on:"),
+        for row, (key, label) in enumerate((("alert_popup", "Show pop-up notifications on:"), ("alert_tray", "Blink tray icon on:"),
                                             ("alert_flash", "Blink task bar on:"), ("alert_beep", "Make a beep sound on:")), 1):
             g.addWidget(QLabel(label), row, 0, Qt.AlignmentFlag.AlignRight)
             boxes = []

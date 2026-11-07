@@ -14,7 +14,7 @@ bchat = "bchat.__main__:main"
 include = ["bchat*"]
 
 [tool.setuptools.package-data]
-bchat = ["assets/**/*.png"]
+bchat = ["assets/**/*.png", "assets/**/*.svg", "assets/**/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

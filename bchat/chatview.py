@@ -202,7 +202,7 @@ class ChatView(QTextBrowser):
         cf.setForeground(QColor(mark))
         if pic:
             img = QTextImageFormat()
-            img.setName((ASSETS / f"{pic}.png").as_uri())
+            img.setName(self._picture(d, pic, side))
             img.setWidth(side)
             img.setHeight(side)
             cur.insertImage(img)
@@ -236,6 +236,19 @@ class ChatView(QTextBrowser):
         if ln.rank:
             return ln.rank
         return "" if mode == "slot" else None
+
+    def _picture(self, d: QTextDocument, pic: str, side: int) -> str:
+        """A Lucide picture in the colour of what the line is (join, part, info, action), drawn once per document."""
+        from . import lucide
+        t = self.cfg.theme
+        colour = {"te-join": t.join, "te-part": t.marker, "info": t.new_highlight, "te-action": t.highlight}.get(pic, t.text)
+        px = max(16, round(side * self.devicePixelRatioF()))
+        url = QUrl(f"bchat:pic/{pic}/{colour[1:]}/{px}")
+        if d.resource(QTextDocument.ResourceType.ImageResource, url) is None:
+            img = lucide.image(pic, colour, px)
+            img.setDevicePixelRatio(px / side)
+            d.addResource(QTextDocument.ResourceType.ImageResource, url, img)
+        return url.toString()
 
     def _put_light(self, cur: QTextCursor, name: str) -> None:
         img = QTextImageFormat()
@@ -285,8 +298,27 @@ class ChatView(QTextBrowser):
                     cur.insertText(piece, cf)
 
     def _open_url(self, url: QUrl) -> None:
-        if url.scheme().lower() in ("http", "https", "ftp"):
+        """A click on a link: the window checks it first (safety.link_risk) and says who posted it."""
+        if url.scheme().lower() not in ("http", "https", "ftp"):
+            return
+        who, where = self.who_posted(url.toString())
+        opener = getattr(self.window(), "open_url", None)
+        if opener is not None:
+            opener(url.toString(), who, where)
+        else:
             QDesktopServices.openUrl(url)
+
+    def who_posted(self, url: str) -> tuple[str, str]:
+        """The newest line in this tab with that link: its nick, and the tab's name."""
+        b = self.current
+        if b is None:
+            return "", ""
+        bare = url.split("://", 1)[-1].rstrip("/")
+        for ln in reversed(b.lines[-500:]):
+            if bare in ln.text:
+                nick = ln.text.split(" ", 1)[0] if ln.left == "*" else ln.left.strip("<>*")
+                return nick, b.name
+        return "", b.name
 
     def word_at(self, pos) -> str:
         cur = self.cursorForPosition(pos)

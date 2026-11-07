@@ -20,11 +20,14 @@ from .protocol import URL_RE, lower, strip_format
 from .session import CHANNEL, INFO, QUERY, SERVER, Buffer, Line, Session, User
 from .countries import country_of
 from .userlist import UserList, icon_name, light_pixmap
-from .widgets import ASSETS, FramedDialog, FramelessWindow, icon, set_icon_theme, stylesheet
+from .widgets import ASSETS, FramedDialog, FramelessWindow, icon, set_icon_theme, set_light_palette, stylesheet
 from . import xchat_import
 from .topicbar import TopicBar, emoji_popup
 from .editors import rows_for
 from .about import AboutDialog
+from .notify import Notifier
+from .filetypes import is_program
+from .safety import CertDialog, LinkDialog, ProgramDialog, link_risk
 from .updater import READY, Updater
 from .updatewindow import UpdateBadge, UpdateDialog
 from .switchertree import SwitcherTree, tree_icon
@@ -275,6 +278,7 @@ class MainWindow(FramelessWindow):
         self.raw_lines: list[str] = []
         self.setWindowIcon(QIcon(str(ASSETS / "bchat.ico")))
         set_icon_theme(cfg.theme)        # before any button is made: a light theme tints the white icons
+        set_light_palette(cfg.theme)
         self.setStyleSheet(stylesheet(cfg.theme))
         self.resize(cfg.win_width, cfg.win_height)
         if cfg.win_x >= 0 and QGuiApplication.screenAt(QPoint(cfg.win_x + 50, cfg.win_y + 10)) is not None:
@@ -289,6 +293,9 @@ class MainWindow(FramelessWindow):
         self.plugins = PluginManager(self)
         self._tabs_busy = False
         self.updater = Updater(cfg, cfg_dir, self)
+        self.notifier = Notifier(cfg.theme, self)
+        self.notifier.open_requested.connect(self._open_from_notice)
+        self._last_sound = 0.0
         self.updater.install_requested.connect(self._install_update_now)
         self._update_restart = False
         self.update_window: UpdateDialog | None = None
@@ -540,6 +547,7 @@ class MainWindow(FramelessWindow):
         h = m.addMenu("&Help")
         self._act(h, "&Contents", self.open_help, "F1", "help")
         self._act(h, "Check for &Updates...", self.check_updates)
+        self._act(h, "&Support BChat on Ko-fi...", self.open_support, "", "support")
         self._act(h, "&About", self._about, "", "about")
         # after Help: shows only while an update waits, downloads, is ready or failed
         self.update_act = QAction(" ", self)
@@ -578,6 +586,8 @@ class MainWindow(FramelessWindow):
             s.line_added.connect(self._grab_urls)
             s.friends_changed.connect(self._friends_changed)
             s.notify.connect(self._on_notify)
+            s.cert_question.connect(lambda info, s=s: self._cert_question(s, info))
+            s.pins_changed.connect(self.save_config)
             s.on_command = self.run_command
             s.on_dcc = self.dcc.incoming
             s.dcc_say = self.dcc.say
@@ -1184,6 +1194,7 @@ class MainWindow(FramelessWindow):
         """+t channels: only halfop and up may set the topic (Unreal and InspIRCd allow % too)."""
         b = self.buf
         if b is None or b.kind != CHANNEL:
+            self.topic.set_allowed(False, "")       # server tab or private chat: no topic to change
             return
         s = b.session
         order = s.prefix_order or "@+"
@@ -1368,10 +1379,38 @@ class MainWindow(FramelessWindow):
 
     # --- chat clicks ---------------------------------------------------------------
 
-    def open_url(self, url: str) -> None:
+    def open_url(self, url: str, who: str = "", where: str = "") -> None:
+        """Ordinary links open straight away. Risky ones (programs, look-alike names, bare addresses, name@ tricks)
+        get a second look first, with Cancel as the default."""
         link = QUrl(url if "://" in url else "http://" + url)
-        if link.scheme().lower() in ("http", "https", "ftp"):
+        if link.scheme().lower() not in ("http", "https", "ftp"):
+            return
+        reason = link_risk(url)
+        if not reason:
             QDesktopServices.openUrl(link)
+            return
+        d = LinkDialog(self, url, reason, who, where)
+        self.link_dialog = d
+        d.finished.connect(lambda _r: QDesktopServices.openUrl(link) if d.choice == "open" else None)
+        d.open()
+
+    def accept_transfer(self, t) -> None:
+        """Every Accept goes through here (File Transfers, /dcc get): a program gets a second look first."""
+        if t.kind != "recv" or not is_program(t.name):
+            self.dcc.accept(t)
+            return
+        net = getattr(getattr(t.session, "net", None), "name", "")
+        d = ProgramDialog(self, t.name, t.size, t.nick, net)
+        self.program_dialog = d
+        d.finished.connect(lambda _r: self.dcc.accept(t) if d.choice == "accept" else None)
+        d.open()
+
+    def _cert_question(self, s, info: dict) -> None:
+        """Asked without stopping the rest of BChat: other networks keep chatting while this window is up."""
+        d = CertDialog(self, info)
+        self.cert_dialog = d
+        d.finished.connect(lambda _r: s.answer_certificate(info.get("fingerprint", ""), d.choice or "no"))
+        d.open()
 
     def _join_clicked(self, name: str) -> None:
         s = self.session
@@ -1568,17 +1607,42 @@ class MainWindow(FramelessWindow):
             QApplication.alert(self)
         if c.alert_beep[which]:
             QApplication.beep()
+        if c.alert_popup[which] and b.lines:
+            self._pop_up(b, kind)
         if self.tray is not None:
             if c.alert_tray[which] and not self._blink_timer.isActive():
                 self._blink_timer.start()
-            if c.alert_balloon[which] and b.lines:
-                line = b.lines[-1]
-                self.tray.showMessage(f"BChat: {b.name}", f"{line.left} {strip_format(line.text)}"[:200])
+
+    def _pop_up(self, b: Buffer, kind: str) -> None:
+        """A card above the taskbar for the line that just came in (notify.py does the flood rules)."""
+        line = b.lines[-1]
+        left, text = line.left, line.text
+        if left == "*":                                   # /me: "* nick does something"
+            nick, _, text = text.partition(" ")
+        elif left.startswith("*") and left.endswith("*") and len(left) > 2:
+            nick = left.strip("*")                        # a private message shown in the current tab
+        else:
+            nick = left
+        net = b.session.net.name
+        where = f"private \u00b7 {net}" if kind == "priv" else f"{b.name} \u00b7 {net}"
+        self.notifier.notify(kind, b, (id(b.session), b.name.lower(), nick.lower()), nick, where, text)
+
+    def _open_from_notice(self, b) -> None:
+        if self.isHidden() or self.isMinimized():
+            self._restore_from_tray()
+        self.raise_()
+        self.activateWindow()
+        if b is not None and any(b in s.all_buffers() for s in self.sessions.values()):
+            self.select_buffer(b)
 
     def _play_sound(self, kind: str) -> None:
         path = self.cfg.sounds.get(kind)
         if not path:
             return
+        now = time.monotonic()
+        if now - self._last_sound < 2:                    # a flood plays one sound, not hundreds
+            return
+        self._last_sound = now
         try:
             import winsound
             winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
@@ -1625,7 +1689,15 @@ class MainWindow(FramelessWindow):
             self._blink_timer.stop()
             return
         self._tray_blink = not self._tray_blink
-        self.tray.setIcon(icon("message") if self._tray_blink else self.windowIcon())
+        self.tray.setIcon(self._tray_message_icon() if self._tray_blink else self.windowIcon())
+
+    def _tray_message_icon(self) -> QIcon:
+        """The blinking "new message" picture: Lucide's speech bubble in the theme's highlight colour."""
+        from . import lucide
+        ic = QIcon()
+        for px in (16, 20, 24, 32, 48):
+            ic.addPixmap(QPixmap.fromImage(lucide.image("message-circle", self.cfg.theme.highlight, px)))
+        return ic
 
     def _stop_blink(self) -> None:
         self._blink_timer.stop()
@@ -1636,6 +1708,7 @@ class MainWindow(FramelessWindow):
     def changeEvent(self, ev):
         if ev.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
             self._stop_blink()
+            self.notifier.clear()          # you're looking at BChat now
         elif ev.type() == QEvent.Type.WindowStateChange and self.isMinimized() and self.cfg.minimize_to_tray and self.tray is not None:
             self._was_maximized = bool(ev.oldState() & Qt.WindowState.WindowMaximized)
             QTimer.singleShot(0, self._hide_if_minimized)     # hiding inside the state change itself leaves a taskbar ghost
@@ -1820,6 +1893,10 @@ class MainWindow(FramelessWindow):
     def _about_box(self) -> AboutDialog:
         return AboutDialog(self.cfg.theme, self)
 
+    def open_support(self) -> None:
+        from .about import SUPPORT
+        QDesktopServices.openUrl(QUrl(SUPPORT))
+
     def _about(self) -> None:
         self._about_box().exec()
 
@@ -1878,9 +1955,8 @@ class MainWindow(FramelessWindow):
         for s in list(self.sessions.values()):
             if s.net is net:
                 self._rekey(s, new)
-                if s.server_buffer.name == old:
-                    s.server_buffer.name = new
-                    self._buffer_changed(s.server_buffer)
+                s.server_buffer.name = new    # whatever the tab was called before (a server address, the old name)
+                self._buffer_changed(s.server_buffer)
         config.save(self.cfg, self.cfg_dir)
         return True
 
@@ -1900,13 +1976,16 @@ class MainWindow(FramelessWindow):
             name = f"{base}({i})"
         chans = [b.name for b in s.buffers.values() if b.kind == CHANNEL and b.joined]
         net = NetworkConfig(name, [Server(sv.host, sv.port, sv.ssl) for sv in s.net.servers],
-                            password=s.net.password, autojoin=",".join(chans))
+                            password=s.net.password, autojoin=",".join(chans),
+                            allow_invalid_cert=s.net.allow_invalid_cert, cert_pins=list(s.net.cert_pins))   # a certificate trusted on this tab stays trusted
         if s.nick and lower(s.nick) != lower(self.cfg.nick):
             net.nick, net.use_global = s.nick, False
         self.cfg.networks.append(net)
         config.save(self.cfg, self.cfg_dir)
         s.net, s.typed_by_hand = net, False   # this tab now is that network (no second save, reconnect uses it)
         self._rekey(s, name)
+        s.server_buffer.name = name           # the tree shows the network's name now, not the server address
+        self._buffer_changed(s.server_buffer)
         what = f"channels {' '.join(chans)}" if chans else "no channels"
         s.add(s.server_buffer, INFO, "*", f"Saved as network {name} in the Network List (server, nick, {what}).")
         if not getattr(self, "skip_dialogs", False):
@@ -1940,6 +2019,7 @@ class MainWindow(FramelessWindow):
         self.topic.restyle()
         self._style_emoji_btn()
         set_icon_theme(self.cfg.theme, self)
+        set_light_palette(self.cfg.theme)
         for b in [b for s in self.sessions.values() for b in s.all_buffers()]:
             self._buffer_changed(b)
         config.save(self.cfg, self.cfg_dir)
@@ -2110,6 +2190,7 @@ class MainWindow(FramelessWindow):
                 return
             if dont_ask:
                 self.cfg.ask_on_quit = False
+        self.notifier.clear()
         self.dcc.shutdown()
         for s in self.sessions.values():
             s.disconnect_from_network()

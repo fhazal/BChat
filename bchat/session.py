@@ -8,8 +8,8 @@ import base64
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtNetwork import QAbstractSocket, QHostAddress, QHostInfo, QNetworkProxy, QSslSocket
+from PySide6.QtCore import QObject, QTimer, Signal, QCryptographicHash
+from PySide6.QtNetwork import QAbstractSocket, QHostAddress, QHostInfo, QNetworkProxy, QSslSocket, QSslCertificate
 
 from .config import Config, NetworkConfig, Server
 from .textevents import EVENTS, render
@@ -104,6 +104,8 @@ class Session(QObject):
     user_info = Signal(str)  # nick whose silent whois just finished
     alert = Signal(object)   # a highlight or private message that should flash the taskbar
     friends_changed = Signal()
+    cert_question = Signal(object)    # a certificate BChat can't verify: the window asks the user
+    pins_changed = Signal()
     notify = Signal(object, str)  # buffer, event: chan priv hilight join part kick notice invite connect disconnect
 
     MAX_LINES = 5000
@@ -175,6 +177,7 @@ class Session(QObject):
         self.friend_state: dict[str, dict] = {}
         self._ison_waiting = 0
         self._monitor = False
+        self._trust_once = ""      # a certificate fingerprint the user said Connect Once to
         self._friends_timer = QTimer(self)
         self._friends_timer.timeout.connect(self.poll_friends)
         self._new_socket()
@@ -328,6 +331,11 @@ class Session(QObject):
             port, tls = int(policy["port"]), True
             self.add(self.server_buffer, INFO, "*", f"{host} requires secure connections (STS), using SSL port {port}")
         self._tls_now = tls
+        if tls:
+            # a fresh socket: Qt keeps an "ignore certificate errors" from an earlier connection on the old one,
+            # and Connect Once must not carry over to the next connection
+            self._new_socket()
+            self._apply_network_settings()
         self.add(self.server_buffer, CONNECT, "*", f"Connecting to {host} ({'SSL ' if tls else ''}port {port})...")
         if tls:
             self.sock.connectToHostEncrypted(host, port)
@@ -411,13 +419,57 @@ class Session(QObject):
         self._login()
 
     def _on_ssl_errors(self, errors) -> None:
+        """A certificate BChat can't verify. Trusted before (Always Trust, or once): connect. An older network set to
+        accept invalid certificates: remember this one (trust on first use) and connect. Anything else: ask."""
         names = ", ".join(e.errorString() for e in errors)
-        if self.net.allow_invalid_cert and not self._sts_enforced:
-            self.add(self.server_buffer, INFO, "*", f"Accepting server certificate anyway: {names}")
+        cert = next((e.certificate() for e in errors if not e.certificate().isNull()), self.sock.peerCertificate())
+        fp = bytes(cert.digest(QCryptographicHash.Algorithm.Sha256)).hex() if not cert.isNull() else ""
+        if self._sts_enforced:
+            self.add(self.server_buffer, ERROR, "*", f"Server certificate rejected: {names}. This server requires a valid certificate (STS).")
+            return
+        if fp and (fp in self.net.cert_pins or fp == self._trust_once):
+            self._trust_once = ""
+            self.add(self.server_buffer, INFO, "*", "Using the certificate you chose to trust.")
             self.sock.ignoreSslErrors()
+            return
+        if fp and self.net.allow_invalid_cert and not self.net.cert_pins:
+            self.net.cert_pins.append(fp)
+            self.pins_changed.emit()
+            self.add(self.server_buffer, INFO, "*", f"Accepting this server's certificate ({names}) and remembering it: "
+                                                    "if it ever changes, BChat will ask first.")
+            self.sock.ignoreSslErrors()
+            return
+        # ask: no retries meanwhile, the handshake fails and the window shows the question
+        self.want_connected = False
+        self._reconnect.stop()
+        changed = bool(self.net.cert_pins)
+        self.add(self.server_buffer, ERROR, "*", ("The server's certificate CHANGED since you trusted it: " if changed
+                                                  else "Server certificate not trusted: ") + f"{names}. Asking you what to do.")
+        def first(names_list):
+            return names_list[0] if names_list else ""
+        info = {"host": self.net.servers[self.server_index].host if self.net.servers else "", "network": self.net.name,
+                "reasons": [e.errorString() for e in errors], "fingerprint": fp, "changed": changed,
+                "self_signed": cert.issuerDisplayName() == cert.subjectDisplayName() if not cert.isNull() else False,
+                "subject": first(cert.subjectInfo(QSslCertificate.SubjectInfo.CommonName)) if not cert.isNull() else "",
+                "issuer": first(cert.issuerInfo(QSslCertificate.SubjectInfo.CommonName))
+                          or first(cert.issuerInfo(QSslCertificate.SubjectInfo.Organization)) if not cert.isNull() else "",
+                "expires": cert.expiryDate().toString("d MMM yyyy") if not cert.isNull() else ""}
+        QTimer.singleShot(0, lambda: self.cert_question.emit(info))
+
+    def answer_certificate(self, fp: str, choice: str) -> None:
+        """The user's answer: "no", "once" (this connection only) or "always" (remember it for this network)."""
+        if choice == "no":
+            self.add(self.server_buffer, INFO, "*", "Not connected: you chose not to trust the certificate.")
+            return
+        if choice == "always":
+            if fp not in self.net.cert_pins:
+                self.net.cert_pins = [fp]        # replaces an old one that changed
+            self.pins_changed.emit()
         else:
-            self.add(self.server_buffer, ERROR, "*",
-                     f"Server certificate rejected: {names}. Turn on \"Accept invalid certificate\" in the Network List to connect.")
+            self._trust_once = fp
+        self.want_connected = True
+        self.server_index -= 1                   # the same server again, not the next in the list
+        self._connect_next()
 
     def _login(self) -> None:
         self._set_state("registering")

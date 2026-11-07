@@ -253,7 +253,7 @@ class TopicEdit(QTextEdit):
 
 
 class TopicBar(QWidget):
-    """Topic editor plus its buttons. set_allowed() greys it when +t and we are not op."""
+    """Topic editor plus its buttons. set_allowed() hides the buttons when we may not change the topic."""
     submitted = Signal(str)
 
     def __init__(self, theme: Theme, parent=None):
@@ -331,14 +331,10 @@ class TopicBar(QWidget):
         return self.edit.hasFocus()
 
     def set_allowed(self, ok: bool, why: str = "") -> None:
+        """Can't change the topic (+t and not op, or no channel): the format buttons and Set go away,
+        the topic stays readable and the tooltip says why. They come back the moment you may."""
         self.edit.setReadOnly(not ok)
         for b in [*self.buttons.values(), self.set_btn]:
             b.setEnabled(ok)
-            b.setGraphicsEffect(None)
-        if not ok:   # the Fg/Bg/emoji glyphs carry their own colour, so dim the whole button
-            from PySide6.QtWidgets import QGraphicsOpacityEffect
-            for b in self.buttons.values():
-                e = QGraphicsOpacityEffect(b)
-                e.setOpacity(0.35)
-                b.setGraphicsEffect(e)
+            b.setVisible(ok)
         self.edit.setToolTip("" if ok else why)
