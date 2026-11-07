@@ -40,3 +40,16 @@ Name: "{autodesktop}\BChat"; Filename: "{app}\BChat.exe"; IconFilename: "{app}\B
 
 [Run]
 Filename: "{app}\BChat.exe"; Description: "Start BChat"; Flags: nowait postinstall skipifsilent
+; BChat's Install Now runs this installer quietly with /RESTART: start BChat again afterwards
+Filename: "{app}\BChat.exe"; Flags: nowait; Check: RestartAfterUpdate
+
+[Code]
+function RestartAfterUpdate: Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  for i := 1 to ParamCount do
+    if CompareText(ParamStr(i), '/RESTART') = 0 then
+      Result := True;
+end;

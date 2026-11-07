@@ -252,8 +252,9 @@ class ChatView(QTextBrowser):
         cur.insertText(" ", QTextCharFormat())
 
     def nick_colour(self, nick: str) -> str:
-        from .config import _m
-        return _m[self.NICK_COLOURS[zlib.crc32(nick.lower().encode()) % len(self.NICK_COLOURS)]]
+        from .config import MOCHA, PALETTES
+        shades = PALETTES.get(self.cfg.theme.name, MOCHA)     # the theme's own shades; a Custom theme keeps its base's
+        return shades[self.NICK_COLOURS[zlib.crc32(nick.lower().encode()) % len(self.NICK_COLOURS)]]
 
     def _insert_text(self, cur: QTextCursor, text: str, default_fg: str) -> None:
         t = self.cfg.theme

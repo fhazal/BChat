@@ -7,7 +7,7 @@ import re
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QInputMethodEvent, QTextCharFormat, QActionGroup, QShortcut, QAction, QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence, QPixmap, QTextDocument
 from PySide6.QtWidgets import (QProgressBar, QTabBar, QToolButton, QApplication, QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QSystemTrayIcon, QTreeWidget,
@@ -20,10 +20,15 @@ from .protocol import URL_RE, lower, strip_format
 from .session import CHANNEL, INFO, QUERY, SERVER, Buffer, Line, Session, User
 from .countries import country_of
 from .userlist import UserList, icon_name, light_pixmap
-from .widgets import ASSETS, FramedDialog, FramelessWindow, icon, stylesheet
+from .widgets import ASSETS, FramedDialog, FramelessWindow, icon, set_icon_theme, stylesheet
 from . import xchat_import
 from .topicbar import TopicBar, emoji_popup
 from .editors import rows_for
+from .about import AboutDialog
+from .updater import READY, Updater
+from .updatewindow import UpdateBadge, UpdateDialog
+from .switchertree import SwitcherTree, tree_icon
+from .quitdialog import QuitDialog
 from .dcc import DccManager
 from .plugins import PluginManager
 
@@ -254,6 +259,8 @@ class InputBox(QLineEdit):
 
 
 class MainWindow(FramelessWindow):
+    quit_requested = Signal()
+
     def __init__(self, cfg: Config, cfg_dir: Path):
         super().__init__()
         self.cfg = cfg
@@ -261,9 +268,13 @@ class MainWindow(FramelessWindow):
         self.sessions: dict[str, Session] = {}
         self.buf: Buffer | None = None
         self.items: dict[int, QTreeWidgetItem] = {}
+        self.folders: dict[tuple[int, str], QTreeWidgetItem] = {}
+        self._was_maximized = False
+        self._tray_now = False       # the quit popup's Minimize to Tray, with no tray option on
         self.raw_log: QPlainTextEdit | None = None
         self.raw_lines: list[str] = []
         self.setWindowIcon(QIcon(str(ASSETS / "bchat.ico")))
+        set_icon_theme(cfg.theme)        # before any button is made: a light theme tints the white icons
         self.setStyleSheet(stylesheet(cfg.theme))
         self.resize(cfg.win_width, cfg.win_height)
         if cfg.win_x >= 0 and QGuiApplication.screenAt(QPoint(cfg.win_x + 50, cfg.win_y + 10)) is not None:
@@ -277,6 +288,10 @@ class MainWindow(FramelessWindow):
         self.dcc = DccManager(self)
         self.plugins = PluginManager(self)
         self._tabs_busy = False
+        self.updater = Updater(cfg, cfg_dir, self)
+        self.updater.install_requested.connect(self._install_update_now)
+        self._update_restart = False
+        self.update_window: UpdateDialog | None = None
         self._build()
         self._build_menus()
         self.default_keys = {name: a.shortcut().toString() for name, a in self.named_actions().items()}
@@ -301,10 +316,12 @@ class MainWindow(FramelessWindow):
         self.split.setHandleWidth(3)
         self.split.setChildrenCollapsible(False)
 
-        self.tree = QTreeWidget(self.split)
+        self.tree = SwitcherTree(self.cfg.theme, self.split)
         self.tree.setHeaderHidden(True)
-        self.tree.setIndentation(14)
         self.tree.setRootIsDecorated(True)
+        self.tree.setExpandsOnDoubleClick(False)
+        self.tree.itemClicked.connect(self._tree_clicked)
+        self.tree.itemDoubleClicked.connect(self._tree_double_clicked)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._tree_menu)
         self.tree.currentItemChanged.connect(self._tree_selected)
@@ -376,6 +393,9 @@ class MainWindow(FramelessWindow):
         self.split.setStretchFactor(0, 0)
         self.split.setStretchFactor(1, 1)
         self.split.setStretchFactor(2, 0)
+        if not self.cfg.tree_widened:      # once only, so a narrower width the user drags later is kept
+            self.cfg.pane_left = max(self.cfg.pane_left, 180)
+            self.cfg.tree_widened = True
         self.split.setSizes([self.cfg.pane_left, 720, self.cfg.pane_right])
         lay.addWidget(self.split, 1)
         self.body_lay = lay
@@ -414,7 +434,7 @@ class MainWindow(FramelessWindow):
         self.emoji_btn = QToolButton(body)
         self.emoji_btn.setText("\U0001F642")
         self.emoji_btn.setToolTip("Emoji (Windows: Win + . for all of them)")
-        self.emoji_btn.setStyleSheet("QToolButton { font-family: 'Segoe UI Emoji'; }")
+        self._style_emoji_btn()
         self.emoji_btn.clicked.connect(self._emoji_for_input)
         bottom.addWidget(self.emoji_btn)
         self.status_strip = QLabel(body)
@@ -519,7 +539,13 @@ class MainWindow(FramelessWindow):
 
         h = m.addMenu("&Help")
         self._act(h, "&Contents", self.open_help, "F1", "help")
+        self._act(h, "Check for &Updates...", self.check_updates)
         self._act(h, "&About", self._about, "", "about")
+        # after Help: shows only while an update waits, downloads, is ready or failed
+        self.update_act = QAction(" ", self)
+        self.update_act.triggered.connect(self.open_update_window)
+        m.addAction(self.update_act)
+        self.update_badge = UpdateBadge(m, self.update_act, self.updater, self.cfg.theme)
 
         for key, delta in (("Ctrl+PgUp", -1), ("Ctrl+PgDown", 1)):
             a = QAction(self)
@@ -613,25 +639,20 @@ class MainWindow(FramelessWindow):
         it.setText(0, b.name)
         it.setData(0, Qt.ItemDataRole.UserRole, b)
         self.items[id(b)] = it
-        if b.kind == SERVER:
-            pass
         self._load_replay(b)
         self.chat.doc_for(b)
         if b.kind == SERVER:
+            it.setIcon(0, tree_icon("server"))
             self.tree.addTopLevelItem(it)
             it.setExpanded(True)
         else:
-            parent = self.items.get(id(b.session.server_buffer))
-            parent.addChild(it)
-            parent.setExpanded(True)
+            self._file_item(b)
             # a new tab only takes the front when nothing is being read, or the user asked for it
             asked = lower(b.name) == b.session.focus_next
             reading_server = self.buf is None or (self.buf.kind == SERVER and self.buf.session is b.session)
             focus = self.cfg.tab_focus
             if asked:
                 b.session.focus_next = ""
-            if self.cfg.tab_sort:
-                parent.sortChildren(0, Qt.SortOrder.AscendingOrder)
             if focus == 1 or (focus == 2 and (asked or (b.kind == CHANNEL and reading_server))) or (focus == 0 and self.buf is None):
                 self.select_buffer(b)
             if b.kind == QUERY and self.cfg.dialogs_in_windows and b.name != "(notices)":
@@ -646,7 +667,10 @@ class MainWindow(FramelessWindow):
             w.deleteLater()
         it = self.items.pop(id(b), None)
         if it is not None:
-            (it.parent() or self.tree.invisibleRootItem()).removeChild(it)
+            folder = it.parent()
+            (folder or self.tree.invisibleRootItem()).removeChild(it)
+            if folder is not None:
+                self._folder_changed(b.session, folder)
         self.chat.forget(b)
         if self.buf is b:
             self.buf = None
@@ -658,7 +682,10 @@ class MainWindow(FramelessWindow):
             self._sync_button_bars()
         it = self.items.get(id(b))
         if it is not None:
+            renamed = it.text(0) != self._short_name(b)
             it.setText(0, self._short_name(b))
+            if renamed and self.cfg.tab_sort and it.parent() is not None:
+                it.parent().sortChildren(0, Qt.SortOrder.AscendingOrder)
             it.setToolTip(0, b.name.replace("&", "&amp;").replace("<", "&lt;"))
             t = self.cfg.theme
             colour = {0: t.text, 1: t.new_data, 2: t.new_msg, 3: t.new_highlight}.get(b.activity, t.text)
@@ -707,6 +734,8 @@ class MainWindow(FramelessWindow):
         if cur is None:
             return
         b = cur.data(0, Qt.ItemDataRole.UserRole)
+        if b is None:      # a folder row
+            return
         if id(b) in self.detached:      # it lives in its own window: raise that, the main window keeps its tab
             self.select_buffer(b)
             self.tree.blockSignals(True)
@@ -721,13 +750,67 @@ class MainWindow(FramelessWindow):
         n = self.cfg.tab_trunc
         return b.name[:n] + ".." if n and len(b.name) > n + 2 else b.name
 
-    def _switcher_order(self) -> list[Buffer]:
+    def _tree_clicked(self, it, _col=0) -> None:
+        if it.data(0, Qt.ItemDataRole.UserRole) is None:     # a folder row opens and closes
+            it.setExpanded(not it.isExpanded())
+
+    def _tree_double_clicked(self, it, _col=0) -> None:
+        b = it.data(0, Qt.ItemDataRole.UserRole)
+        if b is not None and b.kind == SERVER:
+            it.setExpanded(not it.isExpanded())
+
+    def _file_item(self, b: Buffer) -> None:
+        """Puts a tab in its server's Channel or Private folder, making the folder when it's the first one."""
+        s = b.session
+        it = self.items[id(b)]
+        kind = "Channel" if b.kind == CHANNEL else "Private"
+        key = (id(s), kind)
+        folder = self.folders.get(key)
+        if folder is None:
+            folder = self.folders[key] = QTreeWidgetItem()
+            folder.setIcon(0, tree_icon("folder"))
+            folder.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            folder.setData(0, Qt.ItemDataRole.UserRole, None)
+            folder.setData(0, Qt.ItemDataRole.UserRole + 1, kind)
+            top = self.items[id(s.server_buffer)]
+            top.insertChild(0 if kind == "Channel" else top.childCount(), folder)
+            top.setExpanded(True)
+        old = it.parent()
+        if old is folder:
+            return
+        if old is not None:
+            old.removeChild(it)
+            self._folder_changed(s, old)
+        folder.addChild(it)
+        it.setIcon(0, tree_icon("channel" if b.kind == CHANNEL else "query"))
+        folder.setExpanded(True)
+        self._folder_changed(s, folder)
+
+    def _folder_changed(self, s: Session, folder: QTreeWidgetItem) -> None:
+        kind = folder.data(0, Qt.ItemDataRole.UserRole + 1)
+        if not folder.childCount():
+            top = folder.parent()
+            if top is not None:
+                top.removeChild(folder)
+            self.folders.pop((id(s), kind), None)
+            return
+        folder.setText(0, f"{kind}: {folder.childCount()}")
+        if self.cfg.tab_sort:
+            folder.sortChildren(0, Qt.SortOrder.AscendingOrder)
+
+    def _buffer_rows(self) -> list[QTreeWidgetItem]:
+        """Every row that is a tab, in the order shown: folders don't count for Alt+1-9 or Ctrl+PageUp/Down."""
         order = []
         for i in range(self.tree.topLevelItemCount()):
             top = self.tree.topLevelItem(i)
-            order.append(top.data(0, Qt.ItemDataRole.UserRole))
-            order.extend(top.child(j).data(0, Qt.ItemDataRole.UserRole) for j in range(top.childCount()))
+            order.append(top)
+            for j in range(top.childCount()):
+                folder = top.child(j)
+                order.extend(folder.child(n) for n in range(folder.childCount()))
         return order
+
+    def _switcher_order(self) -> list[Buffer]:
+        return [it.data(0, Qt.ItemDataRole.UserRole) for it in self._buffer_rows()]
 
     def _rebuild_tabs(self) -> None:
         if self.cfg.tab_layout != "tabs":
@@ -819,8 +902,8 @@ class MainWindow(FramelessWindow):
         self.tree.setStyleSheet(f"QTreeWidget {{ {small} }}" if small else "")
         self.tabbar.setStyleSheet(f"QTabBar {{ {small} }}" if small else "")
         if c.tab_sort:
-            for i in range(self.tree.topLevelItemCount()):
-                self.tree.topLevelItem(i).sortChildren(0, Qt.SortOrder.AscendingOrder)
+            for folder in self.folders.values():
+                folder.sortChildren(0, Qt.SortOrder.AscendingOrder)
 
     def _refresh_meters(self) -> None:
         mode = self.cfg.meters
@@ -882,6 +965,7 @@ class MainWindow(FramelessWindow):
         b = s.buffer(name)
         b.kind = CHANNEL
         b.placeholder = True
+        self._file_item(b)      # it was filed before it became a channel tab
         s.add(b, INFO, "*", "Type /join #channel to use this tab.")
         self.select_buffer(b)
         return b
@@ -946,6 +1030,8 @@ class MainWindow(FramelessWindow):
         it = self.items.pop(id(b), None)
         if it is not None:
             self.tree.invisibleRootItem().removeChild(it)
+        for key in [k for k in self.folders if k[0] == id(s)]:
+            del self.folders[key]
         self.chat.forget(b)
         self.sessions.pop(s.net.name, None)
         s.deleteLater()
@@ -1228,7 +1314,7 @@ class MainWindow(FramelessWindow):
 
     def _tree_menu(self, pos) -> None:
         it = self.tree.itemAt(pos)
-        if it is not None:
+        if it is not None and it.data(0, Qt.ItemDataRole.UserRole) is not None:
             self._switcher_menu(it.data(0, Qt.ItemDataRole.UserRole)).exec(self.tree.viewport().mapToGlobal(pos))
 
     def _switcher_menu(self, b: Buffer) -> QMenu:
@@ -1269,11 +1355,7 @@ class MainWindow(FramelessWindow):
 
     def _change_page(self, delta: int = 0, number: int = 0) -> None:
         """Ctrl+PageUp/Down and Alt+1-9 move through the tree in order, like XChat's default keys."""
-        order = []
-        for i in range(self.tree.topLevelItemCount()):
-            top = self.tree.topLevelItem(i)
-            order.append(top)
-            order.extend(top.child(j) for j in range(top.childCount()))
+        order = self._buffer_rows()
         if not order:
             return
         if number:
@@ -1504,7 +1586,8 @@ class MainWindow(FramelessWindow):
             pass
 
     def _sync_tray(self) -> None:
-        if self.cfg.tray_icon and self.tray is None and QSystemTrayIcon.isSystemTrayAvailable():
+        wanted = self.cfg.tray_icon or self.cfg.minimize_to_tray or self.cfg.close_to_tray or self._tray_now
+        if wanted and self.tray is None and QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = QSystemTrayIcon(self.windowIcon(), self)
             self.tray.setToolTip("BChat")
             menu = QMenu(self)
@@ -1512,9 +1595,9 @@ class MainWindow(FramelessWindow):
             menu.addSeparator()
             menu.addAction("Quit", self._quit_for_real)
             self.tray.setContextMenu(menu)
-            self.tray.activated.connect(lambda why: why == QSystemTrayIcon.ActivationReason.Trigger and self._restore_from_tray())
+            self.tray.activated.connect(lambda why: why in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick) and self._restore_from_tray())
             self.tray.show()
-        elif not self.cfg.tray_icon and self.tray is not None:
+        elif not wanted and self.tray is not None:
             self._stop_blink()
             self.tray.hide()
             self.tray.deleteLater()
@@ -1523,9 +1606,16 @@ class MainWindow(FramelessWindow):
     def _quit_for_real(self) -> None:
         self.really_quit = True
         self.close()
+        self.really_quit = False     # still here means the user answered No to the quit question
 
     def _restore_from_tray(self) -> None:
-        self.showNormal() if self.isMinimized() else self.show()
+        if self.isMinimized() or self._was_maximized:
+            self.showMaximized() if self._was_maximized else self.showNormal()
+        else:
+            self.show()
+        self._was_maximized = False
+        self._tray_now = False
+        self._sync_tray()         # the popup's one-time tray icon goes again, unless an option wants it
         self.raise_()
         self.activateWindow()
         self._stop_blink()
@@ -1546,7 +1636,15 @@ class MainWindow(FramelessWindow):
     def changeEvent(self, ev):
         if ev.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
             self._stop_blink()
+        elif ev.type() == QEvent.Type.WindowStateChange and self.isMinimized() and self.cfg.minimize_to_tray and self.tray is not None:
+            self._was_maximized = bool(ev.oldState() & Qt.WindowState.WindowMaximized)
+            QTimer.singleShot(0, self._hide_if_minimized)     # hiding inside the state change itself leaves a taskbar ghost
         super().changeEvent(ev)
+
+    def _hide_if_minimized(self) -> None:
+        # Windows can report one minimize twice, and a late report must not hide a window that has come back since
+        if self.isMinimized() and self.cfg.minimize_to_tray and self.tray is not None:
+            self.hide()
 
     # --- logging: per tab, from the tab's right-click menu ----------------------------
 
@@ -1719,10 +1817,36 @@ class MainWindow(FramelessWindow):
         d.finished.connect(lambda _: setattr(self, "raw_log", None))
         d.show()
 
+    def _about_box(self) -> AboutDialog:
+        return AboutDialog(self.cfg.theme, self)
+
     def _about(self) -> None:
-        QMessageBox.about(self, "About BChat",
-                          f"<b>BChat {__version__}</b><br>Dark IRC client in the classic XChat 2 style.<br>"
-                          "BajuBesi Labs. Icons from XChat 2 (GPL).")
+        self._about_box().exec()
+
+    # --- updates ------------------------------------------------------------------
+
+    def open_update_window(self) -> UpdateDialog:
+        if self.update_window is None:
+            self.update_window = UpdateDialog(self, self.updater)
+            self.update_window.finished.connect(lambda _r: setattr(self, "update_window", None))
+            self.update_window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.update_window.sync()
+        self.update_window.show()
+        self.update_window.raise_()
+        return self.update_window
+
+    def check_updates(self) -> None:
+        self.updater.check(manual=True)
+        self.open_update_window()
+
+    def _install_update_now(self) -> None:
+        """Install Now: close BChat the normal way (settings saved, networks told), the installer opens it again."""
+        self._update_restart = True
+        keep = getattr(self, "skip_quit_prompt", False)
+        self.skip_quit_prompt = True
+        self._quit_for_real()
+        self.skip_quit_prompt = keep
+        self._update_restart = False
 
     def _import_settings(self) -> None:
         sources = xchat_import.default_sources()
@@ -1798,6 +1922,11 @@ class MainWindow(FramelessWindow):
         from .preferences import PreferencesDialog
         PreferencesDialog(self, page).exec()
 
+    def _style_emoji_btn(self) -> None:
+        t = self.cfg.theme
+        self.emoji_btn.setStyleSheet(f"QToolButton {{ font-family: 'Segoe UI Emoji'; background: {t.thumb}; border: 1px solid {t.bar};"
+                                     f" border-radius: 2px; }} QToolButton:hover {{ background: {t.thumb_hover}; }}")
+
     def apply_preferences(self) -> None:
         """After Preferences > OK: new colours everywhere, chat redrawn with the new font and text settings."""
         self.setStyleSheet(stylesheet(self.cfg.theme))
@@ -1806,6 +1935,11 @@ class MainWindow(FramelessWindow):
         self.chat.reload_all()
         self.userlist.set_buffer(self.buf if self.buf is not None and self.buf.kind == CHANNEL else None)
         self.userlist.viewport().update()
+        self.tree.viewport().update()          # tree lines and boxes come from the theme
+        self.update_badge.update()
+        self.topic.restyle()
+        self._style_emoji_btn()
+        set_icon_theme(self.cfg.theme, self)
         for b in [b for s in self.sessions.values() for b in s.all_buffers()]:
             self._buffer_changed(b)
         config.save(self.cfg, self.cfg_dir)
@@ -1959,11 +2093,23 @@ class MainWindow(FramelessWindow):
             ev.ignore()
             return
         live = [s for s in self.sessions.values() if s.state == "connected"]
-        if live and not getattr(self, "skip_quit_prompt", False):
-            r = QMessageBox.question(self, "Quit BChat", f"Disconnect from {len(live)} network(s) and quit?")
-            if r != QMessageBox.StandardButton.Yes:
+        if live and self.cfg.ask_on_quit and not getattr(self, "skip_quit_prompt", False):
+            choice, dont_ask = QuitDialog(self, len(live)).ask()
+            if choice == "cancel":
                 ev.ignore()
                 return
+            if choice == "tray":
+                # ticked: from now on the close button does this by itself
+                self.cfg.close_to_tray = self.cfg.close_to_tray or dont_ask
+                self._tray_now = True
+                self._sync_tray()
+                if dont_ask:
+                    self.save_config()
+                self.hide()
+                ev.ignore()
+                return
+            if dont_ask:
+                self.cfg.ask_on_quit = False
         self.dcc.shutdown()
         for s in self.sessions.values():
             s.disconnect_from_network()
@@ -1979,4 +2125,7 @@ class MainWindow(FramelessWindow):
         if right > 0:
             self.cfg.pane_right = right
         config.save(self.cfg, self.cfg_dir)
+        if self.updater.state == READY:
+            self.updater.install(restart=self._update_restart)
         super().closeEvent(ev)
+        self.quit_requested.emit()

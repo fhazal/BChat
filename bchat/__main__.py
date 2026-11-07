@@ -39,6 +39,9 @@ def main(argv: list[str] | None = None) -> int:
             xchat_import.import_into(cfg, sources)
             config.save(cfg, args.config_dir)
     win = MainWindow(cfg, args.config_dir)
+    # the window can be hidden in the tray while a tool window closes, and that must not end the program
+    app.setQuitOnLastWindowClosed(False)
+    win.quit_requested.connect(app.quit)
     if cfg.start_minimized:
         win.showMinimized()
     elif cfg.win_maximized:
@@ -47,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         win.show()
 
     def start():
+        win.updater.start()
         if not args.no_autoconnect:
             win.autoconnect()
         if not win.sessions and not cfg.skip_network_list:

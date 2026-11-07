@@ -6,19 +6,67 @@ import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-# Catppuccin Mocha, https://catppuccin.com (MIT)
-MOCHA = dict(rosewater="#f5e0dc", flamingo="#f2cdcd", pink="#f5c2e7", mauve="#cba6f7", red="#f38ba8", maroon="#eba0ac",
-             peach="#fab387", yellow="#f9e2af", green="#a6e3a1", teal="#94e2d5", sky="#89dceb", sapphire="#74c7ec",
-             blue="#89b4fa", lavender="#b4befe", text="#cdd6f4", subtext1="#bac2de", subtext0="#a6adc8", overlay2="#9399b2",
-             overlay1="#7f849c", overlay0="#6c7086", surface2="#585b70", surface1="#45475a", surface0="#313244",
-             base="#1e1e2e", mantle="#181825", crust="#11111b")
+# Theme palettes. Every theme is described with Catppuccin's colour names, so one mapping (make_theme) serves them all.
+# Catppuccin, https://github.com/catppuccin/palette palette.json (MIT)
+CATPPUCCIN = {
+    "Catppuccin Mocha": dict(rosewater="#f5e0dc", flamingo="#f2cdcd", pink="#f5c2e7", mauve="#cba6f7", red="#f38ba8", maroon="#eba0ac",
+                             peach="#fab387", yellow="#f9e2af", green="#a6e3a1", teal="#94e2d5", sky="#89dceb", sapphire="#74c7ec",
+                             blue="#89b4fa", lavender="#b4befe", text="#cdd6f4", subtext1="#bac2de", subtext0="#a6adc8", overlay2="#9399b2",
+                             overlay1="#7f849c", overlay0="#6c7086", surface2="#585b70", surface1="#45475a", surface0="#313244",
+                             base="#1e1e2e", mantle="#181825", crust="#11111b"),
+    "Catppuccin Macchiato": dict(rosewater="#f4dbd6", flamingo="#f0c6c6", pink="#f5bde6", mauve="#c6a0f6", red="#ed8796", maroon="#ee99a0",
+                                 peach="#f5a97f", yellow="#eed49f", green="#a6da95", teal="#8bd5ca", sky="#91d7e3", sapphire="#7dc4e4",
+                                 blue="#8aadf4", lavender="#b7bdf8", text="#cad3f5", subtext1="#b8c0e0", subtext0="#a5adcb", overlay2="#939ab7",
+                                 overlay1="#8087a2", overlay0="#6e738d", surface2="#5b6078", surface1="#494d64", surface0="#363a4f",
+                                 base="#24273a", mantle="#1e2030", crust="#181926"),
+    "Catppuccin Frappé": dict(rosewater="#f2d5cf", flamingo="#eebebe", pink="#f4b8e4", mauve="#ca9ee6", red="#e78284", maroon="#ea999c",
+                              peach="#ef9f76", yellow="#e5c890", green="#a6d189", teal="#81c8be", sky="#99d1db", sapphire="#85c1dc",
+                              blue="#8caaee", lavender="#babbf1", text="#c6d0f5", subtext1="#b5bfe2", subtext0="#a5adce", overlay2="#949cbb",
+                              overlay1="#838ba7", overlay0="#737994", surface2="#626880", surface1="#51576d", surface0="#414559",
+                              base="#303446", mantle="#292c3c", crust="#232634"),
+    "Catppuccin Latte": dict(rosewater="#dc8a78", flamingo="#dd7878", pink="#ea76cb", mauve="#8839ef", red="#d20f39", maroon="#e64553",
+                             peach="#fe640b", yellow="#df8e1d", green="#40a02b", teal="#179299", sky="#04a5e5", sapphire="#209fb5",
+                             blue="#1e66f5", lavender="#7287fd", text="#4c4f69", subtext1="#5c5f77", subtext0="#6c6f85", overlay2="#7c7f93",
+                             overlay1="#8c8fa1", overlay0="#9ca0b0", surface2="#acb0be", surface1="#bcc0cc", surface0="#ccd0da",
+                             base="#eff1f5", mantle="#e6e9ef", crust="#dce0e8"),
+}
+# One Dark Pro, https://github.com/Binaryify/OneDark-Pro themes/OneDark-Pro.json (MIT): editor, side bar, input,
+# list, focus, scrollbar and line number colours, the syntax colours and the cursor blue. The in-between greys
+# (subtext, overlay 1-2) are picked between its text and comment colours.
+ONE_DARK_PRO = dict(rosewater="#e06c75", flamingo="#e06c75", pink="#c678dd", mauve="#c678dd", red="#e06c75", maroon="#be5046",
+                    peach="#d19a66", yellow="#e5c07b", green="#98c379", teal="#56b6c2", sky="#56b6c2", sapphire="#61afef",
+                    blue="#61afef", lavender="#528bff", text="#abb2bf", subtext1="#9da5b4", subtext0="#8b929e", overlay2="#7f848e",
+                    overlay1="#6b717d", overlay0="#5c6370", surface2="#4e5666", surface1="#3e4452", surface0="#2c313a",
+                    base="#282c34", mantle="#21252b", crust="#1d1f23")
+# Dracula, https://github.com/dracula/visual-studio-code src/dracula.yml (MIT): base, ansi and UI variant colours.
+# Dracula has no blue: purple takes that place, as in Dracula's own themes. The in-between greys
+# (subtext, overlay 1-2) are picked between its foreground and comment colours.
+DRACULA = dict(rosewater="#ff79c6", flamingo="#ff92df", pink="#ff79c6", mauve="#bd93f9", red="#ff5555", maroon="#ff6e6e",
+               peach="#ffb86c", yellow="#f1fa8c", green="#50fa7b", teal="#8be9fd", sky="#a4ffff", sapphire="#8be9fd",
+               blue="#bd93f9", lavender="#d6acff", text="#f8f8f2", subtext1="#e2e2dc", subtext0="#c4c5c4", overlay2="#9da7c8",
+               overlay1="#7f8ab6", overlay0="#6272a4", surface2="#44475a", surface1="#424450", surface0="#343746",
+               base="#282a36", mantle="#21222c", crust="#191a21")
+PALETTES = {**CATPPUCCIN, "One Dark Pro": ONE_DARK_PRO, "Dracula": DRACULA}
+LIGHT_THEMES = {"Catppuccin Latte"}
+THEME_NAMES = list(PALETTES)
+MOCHA = CATPPUCCIN["Catppuccin Mocha"]
 _m = MOCHA
 
-# IRC colour codes 0-15 mapped to Mocha shades. 1 is normally black, which can't be read here, so it is a dark grey.
-DEFAULT_PALETTE = [
-    _m["text"], _m["surface1"], _m["blue"], _m["green"], _m["red"], _m["maroon"], _m["mauve"], _m["peach"],
-    _m["yellow"], _m["teal"], _m["teal"], _m["sky"], _m["sapphire"], _m["pink"], _m["overlay1"], _m["subtext0"],
-]
+
+def blend(a: str, b: str, k: float) -> str:
+    """Colour a with k of colour b mixed in."""
+    ca, cb = [int(a[i:i + 2], 16) for i in (1, 3, 5)], [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x * (1 - k) + y * k):02x}" for x, y in zip(ca, cb))
+
+
+def irc_palette(p: dict) -> list[str]:
+    """IRC colour codes 0-15 in the theme's own shades. 1 is normally black, which can't be read on a dark chat,
+    so it is the theme's dark grey (on a light theme, a light grey, and 0 is the dark text colour)."""
+    return [p["text"], p["surface1"], p["blue"], p["green"], p["red"], p["maroon"], p["mauve"], p["peach"],
+            p["yellow"], p["teal"], p["teal"], p["sky"], p["sapphire"], p["pink"], p["overlay1"], p["subtext0"]]
+
+
+DEFAULT_PALETTE = irc_palette(MOCHA)
 
 
 @dataclass
@@ -51,6 +99,7 @@ class NetworkConfig:
 
 @dataclass
 class Theme:
+    name: str = "Catppuccin Mocha"   # the preset these colours came from (Custom when they differ)
     window: str = _m["mantle"]
     panel: str = _m["base"]
     border: str = _m["surface0"]
@@ -90,7 +139,38 @@ class Theme:
     motd_mark: str = _m["overlay0"]    # server tab: "-" before MOTD lines
     motd_text: str = _m["subtext1"]
     ssl_mark: str = _m["sapphire"]     # server tab: "SSL" before certificate lines
+    title: str = _m["pink"]            # big titles: About's BChat
+    muted: str = _m["subtext0"]        # quiet text: taglines, notes
+    tree_line: str = _m["surface2"]    # tree connector lines
+    tree_box: str = _m["overlay1"]     # tree +/- boxes
     palette: list[str] = field(default_factory=lambda: list(DEFAULT_PALETTE))
+
+
+def make_theme(name: str) -> Theme:
+    """A preset theme. Mocha gives exactly the Theme() defaults, so older settings stay Mocha, not Custom."""
+    p = PALETTES[name]
+    light = name in LIGHT_THEMES
+    return Theme(
+        name=name, window=p["mantle"], panel=p["base"], border=p["surface0"], text=p["text"], chat_bg=p["base"], chat_fg=p["text"],
+        nick=p["lavender"], join=p["green"], topic=p["mauve"], highlight=p["yellow"], selected=p["surface2"], away=p["overlay1"],
+        stamp=p["overlay0"], marker=p["red"], new_data=p["peach"], new_msg=p["red"], new_highlight=p["blue"], bar=p["crust"],
+        popup=p["surface0"], thumb=p["surface1"], thumb_hover=p["surface2"], disabled=p["overlay0"], status_off=p["red"],
+        status_connecting=p["yellow"], status_on=p["green"], status_op=p["sapphire"], status_lag=p["peach"], check=p["sapphire"],
+        marking_fg=p["text"] if light else "#ffffff", self_nick=p["teal"], self_text=blend(p["text"], p["teal"], 0.3),
+        server_mark=p["mauve"], connect=p["mauve"], send_bracket=p["green"], notice_bracket=p["blue"], notice_nick=p["pink"],
+        motd_mark=p["overlay0"], motd_text=p["subtext1"], ssl_mark=p["sapphire"], title=p["pink"], muted=p["subtext0"],
+        tree_line=p["surface2"], tree_box=p["overlay1"], palette=irc_palette(p))
+
+
+def theme_values(t: Theme) -> dict:
+    d = asdict(t)
+    d.pop("name")
+    return d
+
+
+def is_custom(t: Theme) -> bool:
+    """True when the colours differ from the preset the theme is named after."""
+    return t.name not in PALETTES or theme_values(t) != theme_values(make_theme(t.name))
 
 
 @dataclass
@@ -193,6 +273,15 @@ class Config:
     start_with_windows: bool = False
     start_minimized: bool = False
     close_to_tray: bool = False
+    minimize_to_tray: bool = False
+    ask_on_quit: bool = True
+    # Updates
+    update_check: bool = True          # at start-up, then once a day
+    update_auto_download: bool = False
+    update_test_versions: bool = False  # a TEST build always looks at test versions too
+    update_last_check: float = 0.0
+    update_ready_file: str = ""        # a checked download waiting to be installed
+    update_ready_entry: dict | None = None
     # Settings > Advanced lists. None means the defaults, until the user saves their own
     user_commands: list | None = None
     auto_replace: list | None = None
@@ -222,7 +311,8 @@ class Config:
     win_x: int = -1
     win_y: int = -1
     win_maximized: bool = False
-    pane_left: int = 104
+    pane_left: int = 180
+    tree_widened: bool = False     # the folder tree needs more room: an old narrow width is widened once
     pane_right: int = 124
     ignores: list[str] = field(default_factory=list)
     log_tabs: list[str] = field(default_factory=list)

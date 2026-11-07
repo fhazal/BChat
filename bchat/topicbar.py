@@ -268,20 +268,22 @@ class TopicBar(QWidget):
         h = self.edit.height()
         self.buttons: dict[str, QToolButton] = {}
 
+        self._css: dict[str, str] = {}
+
         def tb(key, text, tip, slot, css=""):
             b = QToolButton(self)
             b.setText(text)
             b.setToolTip(tip)
             b.setFixedSize(24, h)
-            b.setStyleSheet(f"QToolButton {{ {css} }} QToolButton:disabled {{ color: {theme.disabled}; }}")
             b.clicked.connect(slot)
             lay.addWidget(b)
             self.buttons[key] = b
+            self._css[key] = css
 
         tb("bold", "B", "Bold (Ctrl+B)", self.edit.toggle_bold, "font-weight: bold;")
         tb("underline", "U", "Underline (Ctrl+U)", self.edit.toggle_underline, "text-decoration: underline;")
         tb("italic", "I", "Italic (Ctrl+I)", self.edit.toggle_italic, "font-style: italic;")
-        tb("fg", "Fg", "Text colour", lambda: self._pop("fg"), f"color: {theme.palette[4]};")
+        tb("fg", "Fg", "Text colour", lambda: self._pop("fg"), "FG")
         tb("bg", "Bg", "Background colour", lambda: self._pop("bg"))
         tb("emoji", "\U0001F642", "Emoji (Windows: Win + . for all of them)", lambda: self._pop("emoji"),
            "font-family: 'Segoe UI Emoji';")
@@ -292,6 +294,18 @@ class TopicBar(QWidget):
         self.set_btn.clicked.connect(self._submit)
         lay.addWidget(self.set_btn)
         self.popup: Popup | None = None
+        self.restyle()
+
+    def restyle(self) -> None:
+        """Button colours from the theme (again after a theme change). Without them Qt draws a fixed grey,
+        which hides dark text on a light theme."""
+        t = self.theme
+        for key, b in self.buttons.items():
+            css = self._css[key].replace("FG", f"color: {t.palette[4]};")
+            text = "" if "color:" in css else f"color: {t.text};"
+            b.setStyleSheet(f"QToolButton {{ background: {t.thumb}; border: 1px solid {t.bar}; border-radius: 2px; {text} {css} }}"
+                            f"QToolButton:hover {{ background: {t.thumb_hover}; }}"
+                            f"QToolButton:disabled {{ color: {t.disabled}; }}")
 
     def _pop(self, which: str) -> None:
         if which == "emoji":

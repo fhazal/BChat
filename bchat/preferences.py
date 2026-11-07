@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QColorDialog, QComboBox,
                                QHBoxLayout, QLabel, QLineEdit, QPushButton, QRadioButton, QScrollArea, QSpinBox, QStackedWidget,
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from .config import Config, Theme
+from .config import PALETTES, THEME_NAMES, Config, Theme, is_custom, make_theme
 from .widgets import FramedDialog, icon
 
 CATEGORIES = {"Interface": ["Text box", "Input box", "User list", "Channel switcher", "Colors"],
@@ -393,7 +393,14 @@ class PreferencesDialog(FramedDialog):
         lay.addWidget(_heading("Starting and Closing"))
         self.start_win = self._check(lay, "Start with Windows", c.start_with_windows, "Only for the installed BChat")
         self.start_min = self._check(lay, "Start minimized", c.start_minimized)
-        self.close_tray = self._check(lay, "Closing the window keeps BChat in the system tray", c.close_to_tray, "Needs the tray icon: Alerts > Enable system tray icon")
+        self.ask_quit = self._check(lay, "Ask before quitting while connected", c.ask_on_quit)
+        self.min_tray = self._check(lay, "Minimize button sends BChat to the tray", c.minimize_to_tray)
+        self.close_tray = self._check(lay, "Close button sends BChat to the tray", c.close_to_tray, "To really quit: right-click the tray icon > Quit, or BChat > Quit (Ctrl+Q)")
+        lay.addWidget(QLabel("Either tray option shows the tray icon by itself."))
+        lay.addWidget(_heading("Updates"))
+        self.upd_check = self._check(lay, "Check for updates when BChat starts and once a day", c.update_check)
+        self.upd_auto = self._check(lay, "Download updates by themselves", c.update_auto_download, "A downloaded update installs when you quit BChat")
+        self.upd_test = self._check(lay, "Include test versions", c.update_test_versions, "TEST builds always look at test versions too")
         lay.addStretch(1)
         return page
 
@@ -563,6 +570,17 @@ class PreferencesDialog(FramedDialog):
         lay = QVBoxLayout(page)
         lay.setContentsMargins(14, 6, 14, 6)
         self.swatches: dict[str, Swatch] = {}
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Theme:"))
+        self.theme_box = QComboBox(page)
+        self.theme_box.addItems(THEME_NAMES)
+        self.theme_box.setMinimumWidth(240)
+        self.theme_box.activated.connect(self._theme_picked)
+        row.addWidget(self.theme_box)
+        row.addStretch(1)
+        self.theme_box.setToolTip("Picking a theme sets every colour below. Change any of them and it becomes Custom.")
+        lay.addSpacing(4)
+        lay.addLayout(row)
         lay.addWidget(_heading("Text Colors"))
         g = QGridLayout()
         g.setHorizontalSpacing(6)
@@ -591,7 +609,8 @@ class PreferencesDialog(FramedDialog):
                 self.swatches[field] = sw
             g.setColumnStretch(4, 1)
             lay.addLayout(g)
-        reset = QPushButton("Reset to Catppuccin Mocha", page)
+        reset = QPushButton("Reset to Theme", page)
+        reset.setToolTip("Back to the colours of the theme picked above")
         reset.setAutoDefault(False)
         reset.clicked.connect(self.reset_colours)
         r = QHBoxLayout()
@@ -600,7 +619,33 @@ class PreferencesDialog(FramedDialog):
         lay.addSpacing(6)
         lay.addLayout(r)
         lay.addStretch(1)
+        self._sync_theme_box()
         return page
+
+    def _sync_theme_box(self) -> None:
+        """Shows the preset, or "Custom (based on ...)" as an extra last entry once a colour differs from it."""
+        box = self.theme_box
+        while box.count() > len(THEME_NAMES):
+            box.removeItem(box.count() - 1)
+        base = self.theme.name if self.theme.name in PALETTES else THEME_NAMES[0]
+        if is_custom(self.theme):
+            box.addItem(f"Custom (based on {base})")
+            box.setCurrentIndex(box.count() - 1)
+        else:
+            box.setCurrentIndex(THEME_NAMES.index(base))
+
+    def _theme_picked(self, index: int) -> None:
+        if index < len(THEME_NAMES):
+            self.load_theme(make_theme(THEME_NAMES[index]))
+
+    def load_theme(self, fresh: Theme) -> None:
+        for f in fields(Theme):
+            setattr(self.theme, f.name, list(fresh.palette) if f.name == "palette" else getattr(fresh, f.name))
+        for i, sw in enumerate(self.palette_swatches):
+            sw.set_colour(self.theme.palette[i])
+        for field, sw in self.swatches.items():
+            sw.set_colour(getattr(self.theme, field))
+        self._sync_theme_box()
 
     def _pick(self, key) -> None:
         now = self.theme.palette[key[1]] if isinstance(key, tuple) else getattr(self.theme, key)
@@ -616,15 +661,10 @@ class PreferencesDialog(FramedDialog):
         else:
             setattr(self.theme, key, colour)
             self.swatches[key].set_colour(colour)
+        self._sync_theme_box()
 
     def reset_colours(self) -> None:
-        fresh = Theme()
-        for f in fields(Theme):
-            setattr(self.theme, f.name, list(fresh.palette) if f.name == "palette" else getattr(fresh, f.name))
-        for i, sw in enumerate(self.palette_swatches):
-            sw.set_colour(self.theme.palette[i])
-        for field, sw in self.swatches.items():
-            sw.set_colour(getattr(self.theme, field))
+        self.load_theme(make_theme(self.theme.name if self.theme.name in PALETTES else THEME_NAMES[0]))
 
     # --- OK -----------------------------------------------------------------------------
 
@@ -677,6 +717,12 @@ class PreferencesDialog(FramedDialog):
         if self.start_win.isChecked() != c.start_with_windows:
             self.win.set_autostart(self.start_win.isChecked())
         c.start_with_windows, c.start_minimized, c.close_to_tray = self.start_win.isChecked(), self.start_min.isChecked(), self.close_tray.isChecked()
+        c.minimize_to_tray, c.ask_on_quit = self.min_tray.isChecked(), self.ask_quit.isChecked()
+        c.update_check, c.update_auto_download, c.update_test_versions = self.upd_check.isChecked(), self.upd_auto.isChecked(), self.upd_test.isChecked()
+        if not c.update_check:
+            self.win.updater.timer.stop()
+        elif not self.win.updater.timer.isActive():
+            self.win.updater.start()
         c.whois_on_notify, c.url_grabber = self.notify_whois.isChecked(), self.url_grab.isChecked()
         c.url_limit, c.opacity = self.url_limit.value(), self.opacity.value()
         c.raw_modes, c.hide_joinpart = self.raw_modes.isChecked(), self.hide_jp.isChecked()

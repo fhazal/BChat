@@ -2084,11 +2084,11 @@ def test_switcher_sort_trunc_small_focus_notices_autodialog(live):
     srv.send(":Zed!z@h PRIVMSG Badaboom :hi")
     srv.send(":Abe!a@h PRIVMSG Badaboom :hi")
     assert wait(app, lambda: "abe" in s.buffers and "zed" in s.buffers)
-    top = win.items[id(s.server_buffer)]
-    assert [top.child(i).data(0, Qt.ItemDataRole.UserRole).name for i in range(top.childCount())] == ["#skinhead", "Abe", "Zed"]
-    assert top.child(0).text(0) == "#sk.." and "8pt" in win.tree.styleSheet()
+    chans, privs = win.folders[(id(s), "Channel")], win.folders[(id(s), "Private")]
+    assert [privs.child(i).data(0, Qt.ItemDataRole.UserRole).name for i in range(privs.childCount())] == ["Abe", "Zed"]
+    assert chans.child(0).text(0) == "#sk.." and "8pt" in win.tree.styleSheet()
     prefs(win, lambda d: (d.sw_trunc.setValue(0), d.sw_small.setChecked(False), d.sw_sort.setChecked(False)))
-    assert top.child(0).text(0) == "#skinhead" and win.tree.styleSheet() == ""
+    assert chans.child(0).text(0) == "#skinhead" and win.tree.styleSheet() == ""
     # focus: never
     prefs(win, lambda d: d.sw_focus.setCurrentIndex(0))
     s.focus_next = "#asked"
@@ -2748,6 +2748,511 @@ def test_help_has_no_blank_lines_for_real_commands(live):
     assert not missing, missing
 
 
+def _rows(win):
+    """The tree as text, with depth: what the user reads."""
+    out = []
+    def walk(it, d):
+        out.append((d, it.text(0)))
+        for i in range(it.childCount()):
+            walk(it.child(i), d + 1)
+    for i in range(win.tree.topLevelItemCount()):
+        walk(win.tree.topLevelItem(i), 0)
+    return out
+
+
+def test_tree_folders_counts_and_empty_folders_go(live):
+    app, srv, win, s = live
+    b = s.buffers["#skinhead"]
+    assert _rows(win) == [(0, "SkinIRC"), (1, "Channel: 1"), (2, "#skinhead")]
+    srv.send(":Badaboom!x@h JOIN #chat")
+    srv.send(":Belon!b@h PRIVMSG Badaboom :hi")
+    assert wait(app, lambda: "#chat" in s.buffers and "belon" in s.buffers)
+    assert _rows(win) == [(0, "SkinIRC"), (1, "Channel: 2"), (2, "#skinhead"), (2, "#chat"), (1, "Private: 1"), (2, "Belon")]
+    # a private one first still leaves Channel on top
+    win.close_buffer(s.buffers["belon"])
+    assert _rows(win) == [(0, "SkinIRC"), (1, "Channel: 2"), (2, "#skinhead"), (2, "#chat")]
+    assert (id(s), "Private") not in win.folders
+    srv.send(":Oracle!o@h PRIVMSG Badaboom :hi")
+    assert wait(app, lambda: "oracle" in s.buffers)
+    win.close_buffer(s.buffers["#chat"])
+    win.close_buffer(b)
+    assert wait(app, lambda: _rows(win) == [(0, "SkinIRC"), (1, "Private: 1"), (2, "Oracle")]), _rows(win)
+    srv.send(":Badaboom!x@h JOIN #back")
+    assert wait(app, lambda: _rows(win) == [(0, "SkinIRC"), (1, "Channel: 1"), (2, "#back"), (1, "Private: 1"), (2, "Oracle")]), _rows(win)
+    # a renamed private tab stays put, and every tab kept its data
+    srv.send(":Oracle!o@h NICK :Sage")
+    assert wait(app, lambda: (2, "Sage") in _rows(win))
+    assert win._switcher_order() == [s.server_buffer, s.buffers["#back"], s.buffers["sage"]]
+
+
+def test_tree_every_row_click_key_menu_and_icon(live):
+    app, srv, win, s = live
+    b = s.buffers["#skinhead"]
+    srv.send(":Belon!b@h PRIVMSG Badaboom :hi")
+    assert wait(app, lambda: "belon" in s.buffers)
+    q = s.buffers["belon"]
+    win.select_buffer(b)
+    app.processEvents()
+    click = lambda it, btn=Qt.MouseButton.LeftButton: QTest.mouseClick(win.tree.viewport(), btn, pos=win.tree.visualItemRect(it).center())
+    # tabs select, and icons are there at the right kind
+    click(win.items[id(q)])
+    assert win.buf is q
+    click(win.items[id(s.server_buffer)])
+    assert win.buf is s.server_buffer
+    assert all(not win.items[id(x)].icon(0).isNull() for x in (b, q, s.server_buffer))
+    # a folder row can't take the selection: it opens and closes, the chat stays
+    win.select_buffer(b)
+    folder = win.folders[(id(s), "Private")]
+    assert not folder.flags() & Qt.ItemFlag.ItemIsSelectable and folder.data(0, Qt.ItemDataRole.UserRole) is None
+    click(folder)
+    assert not folder.isExpanded() and win.buf is b
+    click(folder)
+    assert folder.isExpanded() and win.buf is b
+    # double click on a folder ends up toggled once, like a single click
+    r = win.tree.visualItemRect(folder).center()
+    QTest.mouseClick(win.tree.viewport(), Qt.MouseButton.LeftButton, pos=r)
+    QTest.mouseDClick(win.tree.viewport(), Qt.MouseButton.LeftButton, pos=r)
+    assert not folder.isExpanded()
+    folder.setExpanded(True)
+    # the boxed +/- works by itself: click right on it
+    rect = win.tree.visualItemRect(folder)
+    box = QPoint(rect.left() - win.tree.indentation() // 2, rect.center().y())
+    QTest.mouseClick(win.tree.viewport(), Qt.MouseButton.LeftButton, pos=box)
+    assert not folder.isExpanded() and win.buf is b
+    QTest.mouseClick(win.tree.viewport(), Qt.MouseButton.LeftButton, pos=box)
+    assert folder.isExpanded()
+    # double click on the server collapses, a single click only selects
+    top = win.items[id(s.server_buffer)]
+    QTest.mouseClick(win.tree.viewport(), Qt.MouseButton.LeftButton, pos=win.tree.visualItemRect(top).center())
+    assert top.isExpanded() and win.buf is s.server_buffer
+    QTest.mouseDClick(win.tree.viewport(), Qt.MouseButton.LeftButton, pos=win.tree.visualItemRect(top).center())
+    assert not top.isExpanded()
+    top.setExpanded(True)
+    # keys skip the folders
+    order = [s.server_buffer, b, q]
+    win.select_buffer(s.server_buffer)
+    for want in (b, q, s.server_buffer):
+        win._change_page(1)
+        assert win.buf is want
+    for n, want in enumerate(order, 1):
+        win._change_page(number=n)
+        assert win.buf is want
+    # keyboard arrows through the tree never land the chat on nothing
+    win.select_buffer(s.server_buffer)
+    win.tree.setFocus()
+    for _ in range(6):
+        QTest.keyClick(win.tree, Qt.Key.Key_Down)
+        assert win.buf in order
+    # no menu on a folder, a full menu on a tab
+    shown = []
+    orig = win._switcher_menu
+    win._switcher_menu = lambda x: shown.append(x) or orig(x)
+    import bchat.mainwindow as mw
+    class NoBlock(mw.QMenu):
+        def exec(self, *a):
+            return None
+    keep = mw.QMenu
+    mw.QMenu = NoBlock
+    try:
+        win._tree_menu(win.tree.visualItemRect(folder).center())
+        assert not shown
+        win._tree_menu(win.tree.visualItemRect(win.items[id(q)]).center())
+        assert shown == [q]
+    finally:
+        mw.QMenu = keep
+        del win._switcher_menu
+    # it draws, with real marks where the lines go, and a second network gets its own folders
+    img = win.tree.viewport().grab().toImage()
+    k = img.devicePixelRatio()
+    bg = img.pixelColor(img.width() - 2, img.height() - 2)
+    marks = sum(img.pixelColor(int((box.x() + dx) * k), int((box.y() + dy) * k)) != bg for dx in range(-5, 6) for dy in range(-5, 6))
+    assert marks > 10, marks
+    # names aren't cut off at the width it starts with
+    it = win.items[id(b)]
+    assert win.tree.visualItemRect(it).right() <= win.tree.viewport().width()
+    assert win.tree.width() >= 170
+
+
+def test_tree_two_networks_and_closing_one(app, tmp_path):
+    a, c = FakeIrcd(), FakeIrcd()
+    win, net = make_win(tmp_path, a.port)
+    other = NetworkConfig("Other", [Server("127.0.0.1", c.port)], autojoin="#two")
+    s1 = win.connect_network(net)
+    s2 = win.connect_network(other)
+    assert wait(app, lambda: "#skinhead" in s1.buffers and "#two" in s2.buffers)
+    assert (0, "Other") in _rows(win) and _rows(win).count((1, "Channel: 1")) == 2
+    win.close_buffer(s2.server_buffer)
+    assert _rows(win) == [(0, "SkinIRC"), (1, "Channel: 1"), (2, "#skinhead")]
+    assert all(k[0] != id(s2) for k in win.folders)
+    win.close(); a.stop(); c.stop()
+
+
+def test_empty_channel_tab_files_under_channel(live):
+    app, srv, win, s = live
+    b = win.new_channel_tab()
+    assert (2, "<none>") in _rows(win) and (1, "Channel: 2") in _rows(win) and not any(r[1].startswith("Private") for r in _rows(win))
+    assert win.items[id(b)].parent() is win.folders[(id(s), "Channel")]
+    win.close_buffer(b)
+    assert (1, "Channel: 1") in _rows(win)
+
+
+def test_detached_and_tabs_still_work_with_folders(live):
+    app, srv, win, s = live
+    b = s.buffers["#skinhead"]
+    win.select_buffer(b)
+    win.detach(b)
+    assert win.buf is s.server_buffer and id(b) in win.detached
+    win.tree.setCurrentItem(win.items[id(b)])
+    assert win.buf is s.server_buffer
+    win.attach(b)
+    assert win.buf is b
+    prefs(win, lambda d: d.sw_type.setCurrentIndex(1))
+    assert [win.tabbar.tabText(i) for i in range(win.tabbar.count())] == ["SkinIRC", "#skinhead"]
+    prefs(win, lambda d: d.sw_type.setCurrentIndex(0))
+
+
+def test_tray_minimize_and_close_options(live, monkeypatch):
+    from PySide6.QtWidgets import QSystemTrayIcon
+    app, srv, win, s = live
+    monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: True))
+    assert win.tray is None
+    # off: minimize stays an ordinary minimize, in the taskbar
+    win.showMinimized()
+    wait(app, lambda: False, 100)
+    assert win.isVisible() and win.isMinimized()
+    win.showNormal()
+    # either option brings the tray icon by itself
+    prefs(win, lambda d: d.min_tray.setChecked(True))
+    assert win.tray is not None and not win.cfg.tray_icon
+    win.showMinimized()
+    assert wait(app, lambda: not win.isVisible())
+    assert s.state == "connected"
+    win._restore_from_tray()
+    assert win.isVisible() and not win.isMinimized()
+    # comes back maximized if it was
+    win.showMaximized()
+    wait(app, lambda: False, 50)
+    win.showMinimized()
+    assert wait(app, lambda: not win.isVisible())
+    win._restore_from_tray()
+    assert wait(app, lambda: win.isMaximized() and win.isVisible())
+    win.showNormal()
+    # the tray icon's click brings it back too
+    win.showMinimized()
+    assert wait(app, lambda: not win.isVisible())
+    win.tray.activated.emit(QSystemTrayIcon.ActivationReason.Trigger)
+    assert win.isVisible()
+    # close is separate: with only minimize on, close really closes
+    prefs(win, lambda d: (d.min_tray.setChecked(False), d.close_tray.setChecked(True)))
+    assert win.tray is not None
+    win.showMinimized()
+    wait(app, lambda: False, 100)
+    assert win.isVisible()                # minimize no longer hides
+    win.showNormal()
+    win.close()
+    assert not win.isVisible() and s.state == "connected" and not any(x.startswith("QUIT") for x in srv.received)
+    win._restore_from_tray()
+    # both off: the icon goes
+    prefs(win, lambda d: d.close_tray.setChecked(False))
+    assert win.tray is None
+    # the Alerts tick keeps it on its own
+    prefs(win, lambda d: d.tray_icon.setChecked(True))
+    assert win.tray is not None
+    prefs(win, lambda d: d.tray_icon.setChecked(False))
+    # saved
+    from bchat import config
+    prefs(win, lambda d: d.min_tray.setChecked(True))
+    assert config.load(win.cfg_dir).minimize_to_tray is True
+    prefs(win, lambda d: d.min_tray.setChecked(False))
+
+
+def test_tray_quit_with_no_to_the_question_keeps_tray_behaviour(live, monkeypatch):
+    from PySide6.QtWidgets import QSystemTrayIcon, QMessageBox
+    app, srv, win, s = live
+    monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: True))
+    prefs(win, lambda d: d.close_tray.setChecked(True))
+    win.skip_quit_prompt = False
+    import bchat.mainwindow as mw
+    monkeypatch.setattr(mw.QuitDialog, "ask", lambda self: ("cancel", False))
+    win._quit_for_real()
+    assert win.isVisible() and s.state == "connected"
+    win.close()                       # the close button still goes to the tray
+    assert not win.isVisible()
+    win._restore_from_tray()
+    win.skip_quit_prompt = True
+    prefs(win, lambda d: d.close_tray.setChecked(False))
+
+
+def _real_process(tmp_path, probe, **settings):
+    """The real program in its own process: only there can Qt's end-of-program rules show."""
+    import json, os, subprocess, sys as _s, time as _t
+    d = tmp_path / "cfg"
+    (d / "addons").mkdir(parents=True)
+    (d / "config.json").write_text(json.dumps({"nick": "T", "imported": True, "skip_network_list": True, **settings}))
+    (d / "addons" / "probe.py").write_text(probe)
+    root = Path(__file__).resolve().parents[1]
+    env = {k: v for k, v in os.environ.items() if k != "QT_QPA_PLATFORM"}     # a real window: the off-screen mode has no tray
+    p = subprocess.Popen([_s.executable, "-W", "ignore", "-m", "bchat", "--config-dir", str(d), "--no-autoconnect"], cwd=root, env=env)
+    end = _t.time() + 25
+    while p.poll() is None and _t.time() < end:
+        _t.sleep(0.1)
+    code = p.poll()
+    if code is None:
+        p.kill()
+    return code, d
+
+
+PROBE_HEAD = """
+__module_name__ = "probe"
+import xchat, json, os
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication
+from bchat.mainwindow import MainWindow
+def win():
+    return [w for w in QApplication.topLevelWidgets() if isinstance(w, MainWindow)][0]
+def out(name):
+    open(os.path.join(xchat.get_info("configdir") or ".", name), "w").close()
+"""
+
+
+def test_narrow_saved_tree_width_widens_once_then_stays(app, tmp_path):
+    from bchat import config
+    cfg = Config(nick="T", pane_left=104)
+    win = MainWindow(cfg, tmp_path)
+    assert cfg.pane_left == 180 and cfg.tree_widened
+    win.skip_quit_prompt = True
+    win.close()
+    cfg2 = config.load(tmp_path)
+    cfg2.pane_left = 120      # the user drags it narrower on purpose
+    win2 = MainWindow(cfg2, tmp_path)
+    assert cfg2.pane_left == 120
+    win2.skip_quit_prompt = True
+    win2.close()
+
+
+def test_real_program_ends_on_close_and_quit(tmp_path):
+    probe = PROBE_HEAD + """
+QTimer.singleShot(1500, lambda: win().close())
+"""
+    code, d = _real_process(tmp_path, probe)
+    assert code == 0        # ended by itself after the close button, no tray options on
+
+
+def test_real_program_survives_in_tray_until_quit(tmp_path):
+    probe = PROBE_HEAD + """
+def step1():
+    w = win()
+    w.open_tool("chart")
+    w.showMinimized()
+    QTimer.singleShot(800, step2)
+def step2():
+    w = win()
+    out("hidden" if not w.isVisible() else "not-hidden")
+    w.tools["chart"].close()      # the last visible window closing must not end the program
+    QTimer.singleShot(800, step3)
+def step3():
+    out("alive")
+    win()._quit_for_real()
+QTimer.singleShot(1500, step1)
+"""
+    code, d = _real_process(tmp_path, probe, minimize_to_tray=True)
+    assert (d / "hidden").exists() and (d / "alive").exists(), list(d.iterdir())
+    assert code == 0
+
+
+def _answer_quit_popup(win, press, tick=False, seen=None):
+    """Clicks a real button in the real popup while it waits."""
+    from PySide6.QtCore import QTimer
+    from bchat.quitdialog import QuitDialog
+    def act():
+        d = QApplication.activeModalWidget()
+        assert isinstance(d, QuitDialog)
+        if seen is not None:
+            seen.append(d)
+            seen.append(d.count.text())
+            seen.append(d.tray_btn.isVisible())
+        if tick:
+            d.dont_ask.setChecked(True)
+        if press == "red":
+            d.titlebar.close_clicked.emit()
+        elif press == "enter":
+            QTest.keyClick(d, Qt.Key.Key_Return)
+        elif press == "esc":
+            QTest.keyClick(d, Qt.Key.Key_Escape)
+        else:
+            QTest.mouseClick(getattr(d, press + "_btn"), Qt.MouseButton.LeftButton)
+    QTimer.singleShot(100, act)
+
+
+def test_quit_popup_every_button(live, monkeypatch):
+    from PySide6.QtWidgets import QSystemTrayIcon
+    from bchat import config
+    app, srv, win, s = live
+    monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: True))
+    win.skip_quit_prompt = False
+    # Cancel, the red button, Esc and a stray Enter all keep everything as it is
+    for press in ("cancel", "red", "esc", "enter"):
+        seen = []
+        _answer_quit_popup(win, press, seen=seen)
+        win.close()
+        assert win.isVisible() and s.state == "connected" and seen[1] == "You are connected to 1 IRC network.", press
+        assert seen[2]    # the tray button shows when Windows has a tray
+    # ticking "don't ask" and cancelling saves nothing
+    _answer_quit_popup(win, "cancel", tick=True)
+    win.close()
+    assert win.cfg.ask_on_quit and not win.cfg.close_to_tray
+    # Minimize to Tray with no option on: hidden, connected, icon only until it comes back
+    assert win.tray is None
+    _answer_quit_popup(win, "tray")
+    win.close()
+    assert not win.isVisible() and s.state == "connected" and win.tray is not None and not win.cfg.close_to_tray
+    win._restore_from_tray()
+    assert win.isVisible() and win.tray is None
+    # the same, ticked: the close button goes to the tray from now on, with no popup
+    _answer_quit_popup(win, "tray", tick=True)
+    win.close()
+    assert not win.isVisible() and win.cfg.close_to_tray and config.load(win.cfg_dir).close_to_tray
+    win._restore_from_tray()
+    assert win.tray is not None        # the option keeps it
+    win.close()                        # no popup waiting here: this would hang if one came
+    assert not win.isVisible()
+    win._restore_from_tray()
+    # Ctrl+Q still asks, even with the close button on the tray
+    _answer_quit_popup(win, "cancel")
+    win._quit_for_real()
+    assert win.isVisible() and s.state == "connected"
+    win.cfg.close_to_tray = False
+    win._sync_tray()
+    # Quit, with the tick: quits, and later quits don't ask; Preferences brings it back
+    _answer_quit_popup(win, "quit", tick=True)
+    win.close()
+    assert not win.isVisible() and not win.cfg.ask_on_quit and not config.load(win.cfg_dir).ask_on_quit
+    assert wait(app, lambda: any(x.startswith("QUIT") for x in srv.received))
+    win.show()
+    d_val = []
+    prefs(win, lambda d: (d_val.append(d.ask_quit.isChecked()), d.ask_quit.setChecked(True)))
+    assert d_val == [False] and win.cfg.ask_on_quit
+    win.skip_quit_prompt = True
+
+
+def test_quit_popup_only_when_connected_and_counts_networks(app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QSystemTrayIcon
+    a, c = FakeIrcd(), FakeIrcd()
+    win, net = make_win(tmp_path, a.port)
+    win.skip_quit_prompt = False
+    other = NetworkConfig("Other", [Server("127.0.0.1", c.port)], autojoin="#two")
+    s1, s2 = win.connect_network(net), win.connect_network(other)
+    assert wait(app, lambda: s1.state == "connected" and s2.state == "connected")
+    monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: False))
+    seen = []
+    _answer_quit_popup(win, "cancel", seen=seen)
+    win.close()
+    assert seen[1] == "You are connected to 2 IRC networks." and seen[2] is False   # no tray, no tray button
+    s1.disconnect_from_network(); s2.disconnect_from_network()
+    assert wait(app, lambda: s1.state != "connected" and s2.state != "connected")
+    win.close()                # nothing to lose: closes with no popup, this would hang otherwise
+    assert not win.isVisible()
+    a.stop(); c.stop()
+
+
+def test_tree_icons_are_mirc_size_and_sharp(live):
+    from bchat.switchertree import icon_points, tree_icon
+    app, srv, win, s = live
+    dpr = app.primaryScreen().devicePixelRatio()
+    pts = icon_points()
+    assert win.tree.iconSize().width() == pts and abs(pts * dpr - 16) <= max(1, 11 * dpr - 16 + 1)
+    for kind in ("server", "folder", "channel", "query"):
+        pm = tree_icon(kind).pixmap(win.tree.iconSize(), dpr)
+        assert not pm.isNull() and pm.width() <= int(pts * dpr) + 1
+        img = pm.toImage()
+        assert any(img.pixelColor(x, y).alpha() > 200 for x in range(img.width()) for y in range(img.height())), kind
+    assert win.tree.visualItemRect(win.items[id(s.server_buffer)]).height() >= 20
+
+
+def test_no_line_joins_one_server_to_the_next(app, tmp_path):
+    a, c = FakeIrcd(), FakeIrcd()
+    win, net = make_win(tmp_path, a.port)
+    other = NetworkConfig("Other", [Server("127.0.0.1", c.port)], autojoin="#two")
+    s1, s2 = win.connect_network(net), win.connect_network(other)
+    assert wait(app, lambda: "#skinhead" in s1.buffers and "#two" in s2.buffers)
+    wait(app, lambda: False, 100)
+    top1, top2 = win.items[id(s1.server_buffer)], win.items[id(s2.server_buffer)]
+    r1, r2 = win.tree.visualItemRect(top1), win.tree.visualItemRect(top2)
+    img = win.tree.viewport().grab().toImage()
+    k = img.devicePixelRatio()
+    x = r1.left() - win.tree.indentation() // 2      # the column the servers' boxes sit in
+    bg = win.tree.palette().base().color()
+    between = range(int((r1.bottom() + 3) * k), int((r2.top() - 3) * k))
+    assert len(between) > 20
+    colours = {img.pixelColor(int(x * k) + dx, y).name() for y in between for dx in (-1, 0, 1)}
+    assert len(colours) == 1, colours           # nothing but the tree's background
+    # lines inside a server's own group are still there
+    rows = win.items[id(s1.buffers["#skinhead"])].parent()
+    fr = win.tree.visualItemRect(rows)
+    x2 = fr.left() - win.tree.indentation() // 2
+    inner = [img.pixelColor(int(x2 * k) + dx, y) for y in range(int(fr.top() * k), int(fr.bottom() * k)) for dx in (-1, 0, 1)]
+    assert len({c.name() for c in inner}) > 1
+    win.close(); a.stop(); c.stop()
+
+
+def test_server_icon_is_the_drawn_monitor_and_about_has_no_icon_credit(live):
+    """The user's choice (11-07): the code-drawn monitor everywhere, no picture file, no Flaticon credit."""
+    from bchat import switchertree as st
+    app, srv, win, s = live
+    dpr = app.primaryScreen().devicePixelRatio()
+    st._cache.clear()
+    img = st.tree_icon("server").pixmap(win.tree.iconSize(), dpr).toImage()
+    px = [img.pixelColor(x, y) for x in range(img.width()) for y in range(img.height())]
+    assert img.width() == max(16, int(st.icon_points() * dpr))
+    assert any(c.blue() > c.red() + 40 and c.alpha() > 150 for c in px)
+    assert not hasattr(st, "private_server_icon")
+    assert "Flaticon" not in win._about_box().text()
+
+
+def test_tree_lines_are_solid(live):
+    app, srv, win, s = live
+    # a connector column is one unbroken line, no gaps like the old dots
+    win.select_buffer(s.buffers["#skinhead"])
+    srv.send(":Belon!b@h PRIVMSG Badaboom :hi")
+    assert wait(app, lambda: "belon" in s.buffers)
+    wait(app, lambda: False, 100)
+    chan = win.folders[(id(s), "Channel")]
+    priv = win.folders[(id(s), "Private")]
+    r1, r2 = win.tree.visualItemRect(chan), win.tree.visualItemRect(priv)
+    shot = win.tree.viewport().grab().toImage()
+    k = shot.devicePixelRatio()
+    x = int((r1.left() - win.tree.indentation() // 2) * k)
+    ys = range(int((r1.bottom() + 2) * k), int((r2.top() - 6) * k))
+    assert len(ys) > 5
+    columns = [{shot.pixelColor(x + dx, y).name() for y in ys} for dx in range(-2, 3)]
+    assert {win.cfg.theme.tree_line} in columns, columns
+
+
+def test_about_window_like_xchat_with_bee_line_and_site_link(live):
+    from PySide6.QtWidgets import QLabel
+    from bchat import __version__
+    from bchat.about import AboutDialog, SITE, TAGLINE
+    app, srv, win, s = live
+    box = win._about_box()
+    assert isinstance(box, AboutDialog) and box.windowTitle() == "About BChat"
+    assert TAGLINE == "Handle IRC as a bee does a flower" and TAGLINE in box.text()
+    assert box.values["Version"].text() == __version__
+    assert box.values["Built"].text() == "source"          # tests run from source; a build shows the exe's date
+    assert box.values["Processors"].text().isdigit()
+    assert "/" in box.values["Python / Qt"].text()
+    assert "Copyright © 2026 BajuBesi Labs." in box.text() and "XChat 2 (GPL)" in box.text()
+    assert "Flaticon" not in box.text() and "classic XChat 2 style" not in box.text()
+    assert f'href="{SITE}"' in box.link.text() and SITE == "https://bajubesi.org"
+    assert box.link.openExternalLinks() and box.link.textInteractionFlags() & Qt.TextInteractionFlag.LinksAccessibleByMouse
+    assert not box.logo.pixmap().isNull() and box.logo.width() == 120 and 90 < box.logo.height() < 120   # the bee mascot
+    box.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    box.show()
+    wait(app, lambda: False, 100)
+    assert box.close_btn.isDefault()
+    box.close_btn.click()
+    assert wait(app, lambda: not box.isVisible())
+
+
 def test_every_enabled_menu_item_runs(live):
     """Full button check: trigger each enabled menu action; anything that opens a dialog gets closed."""
     from PySide6.QtCore import QTimer
@@ -2774,7 +3279,8 @@ def test_every_enabled_menu_item_runs(live):
                     a.trigger()
                 app.processEvents()
     for top in win.menubar_.actions():
-        walk(top.menu())
+        if top.menu():
+            walk(top.menu())
     assert "Network Li&st..." in seen and "C&lear Text" in seen and "&About" in seen
     assert s.state == "connected"
     for d in win.findChildren(QDialog):

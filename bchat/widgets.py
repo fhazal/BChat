@@ -13,16 +13,41 @@ from .config import Theme
 
 ASSETS = Path(__file__).parent / "assets"
 RED, YELLOW, GREEN = "#ff5f57", "#febc2e", "#28c840"
-_icons: dict[str, QIcon] = {}
+_icons: dict[tuple[str, str], QIcon] = {}
+_light_ink = ""      # on a light theme: the text colour the white "-light" icons are tinted with
 
 
 def icon(name: str) -> QIcon:
-    if name not in _icons:
+    ink = _light_ink if name.endswith("-light") else ""
+    if (name, ink) not in _icons:
         p = ASSETS / f"{name}.png"
         if not p.exists():
             p = ASSETS / "stock" / f"{name}.png"
-        _icons[name] = QIcon(str(p))
-    return _icons[name]
+        if ink:
+            pm = QPixmap(str(p))
+            painter = QPainter(pm)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+            painter.fillRect(pm.rect(), QColor(ink))
+            painter.end()
+            _icons[(name, ink)] = QIcon(pm)
+        else:
+            _icons[(name, ink)] = QIcon(str(p))
+    return _icons[(name, ink)]
+
+
+def set_icon_theme(t: Theme, root=None) -> None:
+    """White "-light" icons are made for dark themes; a light theme tints them with its text colour.
+    Buttons and menu items that already show one get the new one."""
+    global _light_ink
+    old = {icon(n).cacheKey(): n for (n, _ink) in list(_icons) if n.endswith("-light")}
+    _light_ink = t.text if QColor(t.panel).lightness() > 140 else ""
+    if root is None:
+        return
+    from PySide6.QtGui import QAction
+    for w in root.findChildren(QAbstractButton) + root.findChildren(QAction):
+        name = old.get(w.icon().cacheKey())
+        if name:
+            w.setIcon(icon(name))
 
 
 def pixmap(name: str) -> QPixmap:
@@ -61,6 +86,8 @@ def stylesheet(t: Theme) -> str:
     QTreeWidget::item {{ height: 17px; }}
     QTreeWidget::item:selected, QListView::item:selected, QListWidget::item:selected {{ background: {t.selected}; color: {t.marking_fg}; }}
     QTreeWidget::item:disabled {{ color: {t.disabled}; }}
+    QTreeWidget#switcher::item {{ height: 20px; }}
+    QTreeWidget#switcher::branch {{ background: transparent; border-image: none; image: none; }}
     QPushButton#modebtn {{ padding: 0; min-width: 0; }}
     QPushButton#modebtn:checked {{ background: {t.selected}; color: {t.marking_fg}; }}
     QPushButton#ulbtn {{ padding: 1px 4px; min-width: 0; }}

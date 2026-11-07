@@ -98,13 +98,13 @@ class UserDelegate(QStyledItemDelegate):
             # lined up with real screen pixels, or the shine would smear at 125 and 150 %
             x, y = round((r.x() + 3) * dpr) / dpr, round((r.y() + 3) * dpr) / dpr
             p.drawPixmap(QPointF(x, y), pm)
-        col = "#ffffff" if selected else (self.theme.away if u.away else self.theme.text)
+        col = self.theme.marking_fg if selected else (self.theme.away if u.away else self.theme.text)
         p.setPen(QColor(col))
         tr = QRect(r.x() + 3 + self.ICON + 7, r.y(), r.width() - 3 - self.ICON - 7, r.height())
         p.drawText(tr, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, u.nick)
         if self.cfg is not None and self.cfg.ul_hosts and u.host:
             x = p.fontMetrics().horizontalAdvance(u.nick) + 10
-            p.setPen(QColor("#ffffff" if selected else self.theme.away))
+            p.setPen(QColor(self.theme.marking_fg if selected else self.theme.away))
             p.drawText(tr.adjusted(x, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, u.host)
 
 
