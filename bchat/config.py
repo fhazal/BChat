@@ -313,7 +313,17 @@ class Config:
     alert_beep: list[bool] = field(default_factory=lambda: [False, False, False])
     tray_icon: bool = False
     hilite_no: str = ""            # nicks never highlighted
-    hilite_always: str = ""        # nicks always highlighted
+    hilite_always: str = ""        # nicks always highlighted (old XChat list: moved into hl_rules on load)
+    hl_on: bool = True             # mIRC's "Enable highlighting": the rules (your nick always highlights, as in XChat)
+    hl_rules: list = field(default_factory=list)   # highlights.NEW_RULE dicts: match, on, where, colour, sound, flash, tip
+    fav_notes: dict = field(default_factory=dict)  # Favourite Channels: "network/#chan" -> note
+    fav_saved: list = field(default_factory=list)  # Favourite Channels not joined on connect: "network/#chan key"
+    # Network > Local (mIRC's Connect > Local): the address DCC offers carry. dcc_ip is the typed IP.
+    local_find: bool = True        # find it on connect
+    local_show: bool = True        # print "Local host: name (ip)" in the server tab
+    local_lookup: str = "server"   # normal (this PC) | server (USERIP/USERHOST) | website
+    local_site: str = "icanhazip.com"
+    local_host: str = ""           # typed host name, used to find the IP
     # General
     announce_away: bool = False
     away_once: bool = True
@@ -403,7 +413,7 @@ class Config:
     np_players: dict = field(default_factory=dict)     # player id -> allowed (browsers start False)
     np_names: dict = field(default_factory=dict)       # player id -> name shown in Preferences
     np_announce: bool = False          # post each new song on its own, only in np_announce_in
-    np_announce_in: str = ""           # "#chat, #skinhead": the only channels announce posts to
+    np_announce_in: str = ""           # "SkinIRC/#skinhead, #chat": the only channels announce posts to (no network = all)
     whois_on_notify: bool = False
     notify_timeout: int = 120
     url_grabber: bool = True
@@ -476,6 +486,10 @@ def load(directory: Path) -> Config:
         try:
             d = json.loads(path.read_text(encoding="utf-8"))
             cfg = _from_dict(d)
+            if "local_lookup" not in d and not cfg.dcc_ip_from_server:
+                cfg.local_lookup = "normal"          # older settings: "Get my address from the IRC server" off
+            from .highlights import migrate
+            migrate(cfg)
         except (ValueError, TypeError) as e:
             # keep the broken file for inspection rather than overwriting it on next save
             path.replace(path.with_suffix(".broken.json"))

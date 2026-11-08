@@ -29,6 +29,7 @@ class Line:
     text: str
     ts: float = field(default_factory=time.time)
     rank: str = ""   # light name (op, voice, ...) the speaker had when the line was said
+    colour: str = ""  # a highlight rule's own colour ("" = the theme's)
 
 
 @dataclass
@@ -108,6 +109,7 @@ class Session(QObject):
     friends_changed = Signal()
     cert_question = Signal(object)    # a certificate BChat can't verify: the window asks the user
     pins_changed = Signal()
+    host_info = Signal(object)    # QHostInfo for our own address (Network > Local), back on the GUI thread
     notify = Signal(object, str)  # buffer, event: chan priv hilight join part kick notice invite connect disconnect
     lines_inserted = Signal(object)  # history went in above existing lines: the tab is drawn again
     invited = Signal(object, str, str)   # session, channel, who: the window offers Join / Ignore (never joins by itself)
@@ -179,6 +181,9 @@ class Session(QObject):
         self.server_hook = None      # plugins
         self.print_hook = None
         self.external_ip = ""
+        self.local_name = ""               # Network > Local: the host name found for external_ip
+        self._local_waiting = 0
+        self.userip = False
         self._userhost_waiting = 0
         self.on_command = None       # the main window's way to run a typed-style command
         self.list_sink = None        # Channel List window while it wants 322/323
@@ -238,8 +243,8 @@ class Session(QObject):
     def all_buffers(self) -> list[Buffer]:
         return [self.server_buffer, *self.buffers.values()]
 
-    def add(self, b: Buffer, kind: str, left: str, text: str, ts: float | None = None) -> None:
-        line = Line(kind, left, text, ts if ts is not None else time.time())
+    def add(self, b: Buffer, kind: str, left: str, text: str, ts: float | None = None, colour: str = "") -> None:
+        line = Line(kind, left, text, ts if ts is not None else time.time(), colour=colour)
         if b.kind == CHANNEL and kind in (MSG, SELF, HILITE) and left and left[0] not in "<>-":
             u = b.users.get(lower(left))
             if u is not None:
@@ -324,6 +329,7 @@ class Session(QObject):
         self._ping_sent = 0.0
         self.away = False
         self.whox = False
+        self.userip = False
         self.statusmsg = ""
         self.chathistory_max = -1
         self._history = {}
@@ -926,7 +932,8 @@ class Session(QObject):
             elif me:
                 lines.append(Line(SELF, nick, text, ts))
             else:
-                lines.append(Line(HILITE if self._is_hilite(text, nick) else MSG, nick, text, ts))
+                hit = self._is_hilite(text, nick, b.name)
+                lines.append(Line(HILITE if hit else MSG, nick, text, ts, colour=self._hilite_colour() if hit else ""))
         if not lines:
             return
         word = "messages you missed" if since else "earlier messages, sent before you joined"
@@ -1000,8 +1007,8 @@ class Session(QObject):
                 b = self.buffer(dest)
                 if new and not from_me:
                     self._whois_new_query(b, m.nick)
-                hit = self._is_hilite(rest, m.nick)
-                self.add(b, ACTION if not hit else HILITE, "*", f"{m.nick} {rest}", ts)
+                hit = self._is_hilite(rest, m.nick, b.name)
+                self.add(b, ACTION if not hit else HILITE, "*", f"{m.nick} {rest}", ts, colour=self._hilite_colour() if hit else "")
                 self._bump(b, 3 if hit else 2)
                 if not from_me:
                     self.notify.emit(b, "priv" if b.kind == QUERY else "hilight" if hit else "chan")
@@ -1018,13 +1025,13 @@ class Session(QObject):
         if from_me:
             self.add(b, SELF, m.nick, text, ts)
             return
-        hit = self._is_hilite(text, m.nick)
+        hit = self._is_hilite(text, m.nick, b.name)
         hl = hit or b.kind == QUERY
         if self.print_hook is not None:
             event = "Private Message to Dialog" if b.kind == QUERY else "Channel Msg Hilight" if hit else "Channel Message"
             if self.print_hook(event, (m.nick, text)):
                 return
-        self.add(b, HILITE if hl else MSG, m.nick, text, ts)
+        self.add(b, HILITE if hl else MSG, m.nick, text, ts, colour=self._hilite_colour() if hit else "")
         self._bump(b, 3 if hl else 2)
         self.notify.emit(b, "priv" if b.kind == QUERY else "hilight" if hit else "chan")
 
@@ -1076,30 +1083,19 @@ class Session(QObject):
         low = lower(nick)
         return any(fnmatch.fnmatchcase(low, lower(p.strip())) for p in patterns.split(",") if p.strip())
 
-    def _is_hilite(self, text: str, sender: str = "") -> bool:
-        """XChat's is_hilight: never from "no highlight" nicks, always from "always" nicks, else your nick or extra words."""
-        if sender and self._matches(sender, self.cfg.hilite_no):
-            return False
-        if sender and self._matches(sender, self.cfg.hilite_always):
-            return True
-        words = [self.nick] + [w.strip() for w in self.cfg.highlight.split(",") if w.strip()]
-        low = lower(text)
-        tokens = low.split()
-        for w in words:
-            lw = lower(w)
-            if "*" in lw or "?" in lw:
-                if any(fnmatch.fnmatchcase(tok, lw) for tok in tokens):
-                    return True
-                continue
-            at = low.find(lw)
-            while at != -1:
-                before = low[at - 1] if at else " "
-                end = at + len(lw)
-                after = low[end] if end < len(low) else " "
-                if not (before.isalnum() or before in "_-{}|^") and not (after.isalnum() or after in "_-{}|^"):
-                    return True
-                at = low.find(lw, at + 1)
-        return False
+    def _is_hilite(self, text: str, sender: str = "", target: str = "") -> bool:
+        """Highlight rules (highlights.find); the rule that matched is kept in last_hilite for the colour and alerts."""
+        from .highlights import find
+        self.last_hilite = find(self.cfg, self.nick, text, sender, self.net.name, target)
+        return self.last_hilite is not None
+
+    def _hilite_colour(self) -> str:
+        """The matched rule's colour as #rrggbb; "" = the theme's highlight colour."""
+        r = getattr(self, "last_hilite", None)
+        if not r or r.get("colour", "") in ("", None):
+            return ""
+        from .highlightdialog import colour_of
+        return colour_of(self.cfg.theme, r["colour"])
 
     def _bump(self, b: Buffer, level: int) -> None:
         if level == 3:
@@ -1265,7 +1261,7 @@ class Session(QObject):
     def _irc_mode(self, m: Message) -> None:
         target = m.param(0)
         if not self.is_channel(target):
-            self.add(self.server_buffer, INFO, "*", f"Your modes: {' '.join(m.params[1:])}")
+            self.te("Your Modes", self.server_buffer, INFO, (target, " ".join(m.params[1:])))
             return
         b = self.buffer(target)
         if self.cfg.raw_modes:   # Advanced: "Display MODEs in raw form"
@@ -1379,11 +1375,11 @@ class Session(QObject):
             self.ban_sinks[lower(m.param(1))].ban_item({367: "b", 348: "e", 346: "I"}[n], m.param(2), m.param(3), m.param(4))
         elif n in (368, 349, 347) and lower(m.param(1)) in self.ban_sinks:
             self.ban_sinks[lower(m.param(1))].ban_end({368: "b", 349: "e", 347: "I"}[n])
-        elif n == 302 and self._userhost_waiting:
-            self._userhost_waiting -= 1
-            host = m.param(-1).strip().split("@")[-1]
-            if host:
-                QHostInfo.lookupHost(host, self, self._own_host_found)
+        elif n in (302, 340) and self._local_waiting:          # USERHOST / USERIP for ourselves
+            self._local_waiting -= 1
+            reply = m.param(-1).strip().split()
+            host = reply[0].split("@")[-1] if reply else ""
+            self._local_found(host)
         elif n == 303 and self._ison_waiting:
             self._ison_waiting -= 1
             on = {lower(x) for x in m.param(-1).split()}
@@ -1495,6 +1491,8 @@ class Session(QObject):
                 self.statusmsg = v
             elif k == "WHOX":
                 self.whox = True
+            elif k == "USERIP":
+                self.userip = True
             elif k == "CHATHISTORY":
                 self.chathistory_max = int(v) if v.isdigit() else 0
             elif k == "CHANMODES" and v.count(",") >= 2:
@@ -1506,18 +1504,83 @@ class Session(QObject):
                 self.server_buffer.name = v if not self.net.name else self.net.name
                 self.buffer_changed.emit(self.server_buffer)
 
+    # --- Network > Local: the address DCC offers carry, found the way mIRC does -------------
+
+    def find_local(self) -> None:
+        """Typed IP/host win; else this PC, the IRC server (USERIP if offered, else USERHOST) or a website."""
+        c = self.cfg
+        if c.dcc_ip.strip() or c.local_host.strip():
+            self._local_found(c.dcc_ip.strip() or c.local_host.strip())
+        elif c.local_lookup == "server":
+            self._local_waiting += 1
+            self.send_raw(f"{'USERIP' if self.userip else 'USERHOST'} {self.nick}", quiet=True)
+        elif c.local_lookup == "website":
+            self._ask_website()
+        else:
+            self._local_found(self.sock.localAddress().toString())
+
+    def _ask_website(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+        site = self.cfg.local_site.strip() or "icanhazip.com"
+        url = QUrl(site if "://" in site else "https://" + site)
+        if getattr(self, "_web", None) is None:
+            self._web = QNetworkAccessManager(self)
+        req = QNetworkRequest(url)
+        req.setTransferTimeout(10000)
+        reply = self._web.get(req)
+
+        def done():
+            text = bytes(reply.readAll()).decode("utf-8", "replace")
+            reply.deleteLater()
+            m = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b|([0-9a-fA-F:]{3,}:[0-9a-fA-F:]+)", text)
+            if m:
+                self._local_found(m.group(0))
+            else:
+                self.add(self.server_buffer, ERROR, "*", f"Local host: {site} didn't give an address. "
+                                                         "Network > Local can use the IRC server instead.")
+        reply.finished.connect(done)
+
+    def _local_found(self, host: str) -> None:
+        """host is a name or an address: look up the other half, keep both, print the Local Host line."""
+        if not host:
+            return
+        from ipaddress import ip_address
+        try:
+            ip_address(host)
+            self.external_ip = host            # an address already: DCC can use it now, the name can follow
+        except ValueError:
+            pass
+        self._local_asked = host
+        if not getattr(self, "_host_info_wired", False):
+            self.host_info.connect(self._own_host_found)
+            self._host_info_wired = True
+        QHostInfo.lookupHost(host, self.host_info.emit)
+
     def _own_host_found(self, info) -> None:
-        for a in info.addresses():
-            if a.protocol() == QAbstractSocket.NetworkLayerProtocol.IPv4Protocol:
-                self.external_ip = a.toString()
-                return
+        from ipaddress import ip_address
+        asked = getattr(self, "_local_asked", "") or info.hostName()
+        try:
+            ip_address(asked)
+            ip, name = asked, info.hostName()
+        except ValueError:
+            ip, name = "", asked
+            for a in info.addresses():
+                if a.protocol() == QAbstractSocket.NetworkLayerProtocol.IPv4Protocol:
+                    ip = a.toString()
+                    break
+        if name == ip:
+            name = ""                                           # no name for it: mIRC says unknown
+        self.external_ip = ip or self.external_ip
+        self.local_name = name
+        if self.cfg.local_show:
+            self.te("Local Host", self.server_buffer, INFO, (name or "unknown", ip or "unknown"))
 
     def _after_welcome(self) -> None:
         self._tick()            # first lag reading now, not after the 15 s keepalive
         self.start_friends()
-        if self.cfg.dcc_ip_from_server:     # the address others can reach us on, for DCC offers
-            self._userhost_waiting += 1
-            self.send_raw(f"USERHOST {self.nick}", quiet=True)
+        if self.cfg.local_find:              # the address others can reach us on, for DCC offers
+            self.find_local()
         if self.net.nickserv:
             self.send_raw(f"PRIVMSG NickServ :IDENTIFY {self.net.nickserv}", secret=True)
         for cmd in self.net.commands:

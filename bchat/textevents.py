@@ -29,6 +29,9 @@ EVENTS = {
     "Notify Online": ("*$tNotify: $1 is online ($2).", ("nick", "network"), ("Belon", "SkinIRC")),
     "Notify Offline": ("*$tNotify: $1 is offline ($2).", ("nick", "network"), ("Belon", "SkinIRC")),
     "CTCP Generic": ("*$tReceived a CTCP $1 from $2", ("what", "nick"), ("VERSION", "Belon")),
+    # 0.2.0: your own modes on connect (one line, the user's wording) and mIRC's Local host line
+    "Your Modes": ("*$t$1 sets mode: %C11[%O $2 %C11]%O", ("nick", "modes"), ("Belon", "+iwxz")),   # brackets like Raw Modes
+    "Local Host": ("*$tLocal host: $1 ($2)", ("host", "ip"), ("unknown", "192.168.1.20")),
 }
 _CODE = re.compile(r"\$(\d|t)|%([BUCOR%])")
 _CODES = {"B": "\x02", "U": "\x1f", "C": "\x03", "O": "\x0f", "R": "\x16", "%": "%"}

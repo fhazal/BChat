@@ -256,7 +256,7 @@ def test_right_click_share_menu(app, tmp_path):
     ann = share().actions()[-1]
     assert ann.isEnabled()
     ann.trigger()
-    assert win.cfg.np_announce and win.cfg.np_announce_in == "#skinhead" and win.announcer.timer.isActive()
+    assert win.cfg.np_announce and win.cfg.np_announce_in == "SkinIRC/#skinhead" and win.announcer.timer.isActive()
     assert any("Announcing new songs in #skinhead" in l.text for l in b.lines)
     ann = share().actions()[-1]
     assert ann.isChecked()
@@ -265,16 +265,50 @@ def test_right_click_share_menu(app, tmp_path):
     win.close(); srv.stop()
 
 
-def test_preferences_save_the_announce_settings(app, tmp_path):
-    from bchat.preferences import PreferencesDialog
-    win = MainWindow(Config(nick="T", skip_network_list=True, welcome_done=True, np_enabled=True), tmp_path)
+def test_now_playing_has_its_own_page_with_the_announce_list(app, tmp_path):
+    from bchat.preferences import CATEGORIES, PreferencesDialog
+    assert CATEGORIES["Chatting"].index("Now Playing") == CATEGORIES["Chatting"].index("Advanced") - 1
+    win = MainWindow(Config(nick="T", skip_network_list=True, welcome_done=True, np_enabled=True,
+                            np_announce_in="ZNC-Belon-BSN/#skinhead, #chat, ZNC-Fhazal-SKN/#help"), tmp_path)
     win.skip_quit_prompt = True
-    d = PreferencesDialog(win)
+    d = PreferencesDialog(win, "Now Playing")
+    assert d.pages.currentWidget().isAncestorOf(d.np_on) and d.pages.currentWidget().isAncestorOf(d.np_ann_list)
+    rows = [(d.np_ann_list.topLevelItem(i).text(0), d.np_ann_list.topLevelItem(i).text(1)) for i in range(d.np_ann_list.topLevelItemCount())]
+    assert rows == [("ZNC-Belon-BSN", "#skinhead"), ("Every network", "#chat"), ("ZNC-Fhazal-SKN", "#help")]
     assert not d.np_ann.isChecked() and d.np_ann.isEnabled()
-    d.np_ann.setChecked(True); d.np_ann_in.setText("#chat  #skinhead,#chat")
+    d.np_ann.setChecked(True)
+    d.np_ann_list.setCurrentItem(d.np_ann_list.topLevelItem(1)); d.np_ann_remove.click()
     d.accept()
-    assert win.cfg.np_announce and win.cfg.np_announce_in == "#chat, #skinhead"
+    assert win.cfg.np_announce and win.cfg.np_announce_in == "ZNC-Belon-BSN/#skinhead, ZNC-Fhazal-SKN/#help"
     win.close()
+
+
+def test_announce_targets_network_and_channel():
+    assert nowplaying.announce_targets("Net A/#x, #y") == [("Net A", "#x"), ("", "#y")]
+    text = "ZNC-Belon-BSN/#skinhead, #chat"
+    assert nowplaying.announces_in(text, "znc-belon-bsn", "#SKINHEAD")
+    assert not nowplaying.announces_in(text, "ZNC-Fhazal-SKN", "#skinhead")        # same channel, other network: no
+    assert nowplaying.announces_in(text, "anything", "#chat")                       # old plain entry: every network
+
+
+def test_announce_skips_the_same_channel_on_another_network(app, tmp_path):
+    srv, win, s, b = live(app, tmp_path, np_enabled=True, np_announce=True, np_announce_in="OtherNet/#skinhead")
+    win._announce(nowplaying.tidy(song()))
+    wait(app, lambda: False, 300)
+    assert not any("ACTION" in x for x in srv.received)
+    win.cfg.np_announce_in = "SkinIRC/#skinhead"
+    win._announce(nowplaying.tidy(song()))
+    assert wait(app, lambda: any(x.startswith("PRIVMSG #skinhead :ACTION") for x in srv.received))
+    win.close(); srv.stop()
+
+
+def test_ticking_a_tab_replaces_an_old_every_network_entry(app, tmp_path):
+    srv, win, s, b = live(app, tmp_path, np_enabled=True, np_announce=True, np_announce_in="#skinhead, #chat")
+    win.announce_here(b, True)
+    assert win.cfg.np_announce_in == "#chat, SkinIRC/#skinhead"
+    win.announce_here(b, False)
+    assert win.cfg.np_announce_in == "#chat"
+    win.close(); srv.stop()
 
 
 def test_dialog_lines_are_soft_in_every_theme():

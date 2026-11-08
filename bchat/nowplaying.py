@@ -147,7 +147,7 @@ def choose(tracks: list[Track], cfg) -> tuple[Track | None, str]:
         return None, "Nothing is playing right now (or the player doesn't tell Windows)."
     allowed = [t for t in tracks if cfg.np_players.get(t.player_id)]
     if not allowed:
-        return None, f"Nothing to share: {', '.join(sorted({t.player for t in tracks}))} isn't ticked in Preferences > Advanced > Now playing."
+        return None, f"Nothing to share: {', '.join(sorted({t.player for t in tracks}))} isn't ticked in Preferences > Chatting > Now Playing."
     if cfg.np_music_only:
         music = [t for t in allowed if t.music]
         if not music:
@@ -171,12 +171,30 @@ POLL_MS = 2000
 
 
 def announce_channels(text: str) -> list[str]:
-    """"#chat, #skinhead" -> ["#chat", "#skinhead"] (commas or spaces, no doubles, as typed)."""
+    """"Net A/#chat, #skinhead #x" -> ["Net A/#chat", "#skinhead", "#x"]: commas between entries (network names may
+    have spaces), spaces only between plain channels; no doubles, as typed."""
     out: list[str] = []
-    for name in re.split(r"[,\s]+", text or ""):
-        if name and name.lower() not in [n.lower() for n in out]:
-            out.append(name)
+    for part in (text or "").split(","):
+        part = part.strip()
+        for name in ([part] if "/" in part else part.split()):
+            if name and name.lower() not in [n.lower() for n in out]:
+                out.append(name)
     return out
+
+
+def announce_targets(text: str) -> list[tuple[str, str]]:
+    """"ZNC-Belon-BSN/#skinhead, #chat" -> [("ZNC-Belon-BSN", "#skinhead"), ("", "#chat")]. No network = every network."""
+    out = []
+    for entry in announce_channels(text):
+        net, sep, chan = entry.rpartition("/")
+        out.append((net if sep else "", chan if sep else entry))
+    return out
+
+
+def announces_in(text: str, network: str, channel: str, this_network_only: bool = False) -> bool:
+    lo = str.lower
+    return any(lo(c) == lo(channel) and ((not n and not this_network_only) or lo(n) == lo(network))
+               for n, c in announce_targets(text))
 
 
 class Announcer(QObject):

@@ -10,16 +10,16 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QColorDialog, QComboBox, QFileDialog, QFontDialog, QFrame, QGridLayout,
                                QHBoxLayout, QLabel, QLineEdit, QPushButton, QRadioButton, QScrollArea, QSpinBox, QStackedWidget,
-                               QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QHeaderView, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .config import DARK_THEMES, LIGHT_THEME_ORDER, PALETTES, THEME_NAMES, Config, Theme, is_custom, make_theme
 from .widgets import FramedDialog, icon
 
 CATEGORIES = {"Interface": ["Text box", "Input box", "User list", "Channel switcher", "Colors"],
-              "Chatting": ["Alerts", "General", "Logging", "Sound", "Advanced"],
-              "Network": ["Network setup", "File transfers"],
+              "Chatting": ["Alerts", "Highlights", "General", "Logging", "Sound", "Now Playing", "Advanced"],
+              "Network": ["Network setup", "Local", "File transfers"],
               "BChat": ["Updates"]}
-BUILT = ("Text box", "Input box", "User list", "Channel switcher", "Colors", "Alerts", "General", "Logging", "Sound", "Advanced", "Network setup", "File transfers", "Updates")
+BUILT = ("Text box", "Input box", "User list", "Channel switcher", "Colors", "Alerts", "Highlights", "General", "Logging", "Sound", "Now Playing", "Advanced", "Network setup", "Local", "File transfers", "Updates")
 SWITCHER_POS = ("Left", "Right", "Top", "Bottom", "Hidden")
 SORTS = ("A-Z, Ops first", "A-Z", "Z-A, Ops last", "Z-A", "Unsorted")
 # Sound page: session notify event -> the name XChat's Sound page uses
@@ -39,6 +39,16 @@ COLOUR_ROWS = [
     ("Interface Colors", [("New data:", "new_data"), ("Marker line:", "marker"), ("New message:", "new_msg"),
                           ("Away user:", "away"), ("Highlight:", "new_highlight")]),
 ]
+
+
+def home_address(ip: str) -> bool:
+    """192.168.x, 10.x, 172.16-31.x, 127.x, 100.64-127.x (carrier NAT): people on the internet can't reach it."""
+    from ipaddress import ip_address
+    try:
+        a = ip_address(ip.strip())
+    except ValueError:
+        return False
+    return a.is_private or a.is_loopback or a.is_link_local or (a.version == 4 and a in __import__("ipaddress").ip_network("100.64.0.0/10"))
 
 
 def _heading(text: str) -> QLabel:
@@ -107,9 +117,9 @@ class PreferencesDialog(FramedDialog):
         rl.addWidget(self.pages, 1)
         self.page_of["Text box"] = self.pages.addWidget(self._text_page())
         self.page_of["Colors"] = self.pages.addWidget(self._colors_page())
-        for name, build in (("File transfers", self._files_page), ("Channel switcher", self._switcher_page), ("Input box", self._input_page), ("User list", self._userlist_page), ("Alerts", self._alerts_page),
-                            ("General", self._general_page), ("Logging", self._logging_page), ("Sound", self._sound_page),
-                            ("Advanced", self._advanced_page), ("Network setup", self._network_page), ("Updates", self._updates_page)):
+        for name, build in (("File transfers", self._files_page), ("Channel switcher", self._switcher_page), ("Input box", self._input_page), ("User list", self._userlist_page), ("Alerts", self._alerts_page), ("Highlights", self._highlights_page),
+                            ("General", self._general_page), ("Logging", self._logging_page), ("Sound", self._sound_page), ("Now Playing", self._np_page),
+                            ("Advanced", self._advanced_page), ("Network setup", self._network_page), ("Local", self._local_page), ("Updates", self._updates_page)):
             self.page_of[name] = self.pages.addWidget(build())
         row.addWidget(self.tree)
         row.addWidget(right, 1)
@@ -372,16 +382,129 @@ class PreferencesDialog(FramedDialog):
         g.setColumnStretch(4, 1)
         lay.addLayout(g)
         self.tray_icon = self._check(lay, "Enable system tray icon", c.tray_icon)
-        lay.addWidget(_heading("Highlighted Messages"))
-        lay.addWidget(QLabel("Highlighted messages are ones where your nickname is mentioned, but also:"))
-        g = QGridLayout()
-        self.hl_extra = self._entry(g, 0, "Extra words to highlight:", c.highlight)
-        self.hl_no = self._entry(g, 1, "Nick names not to highlight:", c.hilite_no)
-        self.hl_always = self._entry(g, 2, "Nick names to always highlight:", c.hilite_always)
-        lay.addLayout(g)
-        lay.addWidget(QLabel("Separate multiple words with commas. Wildcards are accepted."))
+        hint = QLabel("Words and nicks to highlight are on Chatting > Highlights.")
+        hint.setStyleSheet(f"color: {c.theme.muted};")
+        lay.addWidget(hint)
         lay.addStretch(1)
         return page
+
+    # --- Highlights (mIRC's Highlight list) -------------------------------------------------
+
+    def _highlights_page(self) -> QWidget:
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Highlight Rules"))
+        self.hl_on = self._check(lay, "Enable highlighting", c.hl_on,
+                                 "Your nick always highlights. This turns the rules below on or off, as in mIRC")
+        self.hl_rules = [dict(r) for r in c.hl_rules]
+        self.hl_list = QTreeWidget()
+        self.hl_list.setRootIsDecorated(False)
+        self.hl_list.setHeaderLabels(["Highlight", "Match on", "From", "Colour", "Sound"])
+        for col, w in ((0, 128), (1, 62), (2, 100), (3, 46)):
+            self.hl_list.setColumnWidth(col, w)
+        self.hl_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.hl_list.setFixedHeight(160)
+        self.hl_list.itemDoubleClicked.connect(lambda *_: self._hl_edit())
+        row = QHBoxLayout()
+        row.addWidget(self.hl_list, 1)
+        col = QVBoxLayout()
+        self.hl_add = QPushButton(icon("new"), "Add...", objectName="compact")
+        self.hl_add.clicked.connect(lambda: self._hl_edit(new=True))
+        self.hl_edit = QPushButton(icon("edit"), "Edit...", objectName="compact")
+        self.hl_edit.clicked.connect(lambda: self._hl_edit())
+        self.hl_remove = QPushButton(icon("close-light"), "Remove", objectName="compact")
+        self.hl_remove.clicked.connect(self._hl_remove)
+        self.hl_up = QPushButton(icon("up"), "Up", objectName="compact")
+        self.hl_up.clicked.connect(lambda: self._hl_move(-1))
+        self.hl_down = QPushButton(icon("down"), "Down", objectName="compact")
+        self.hl_down.clicked.connect(lambda: self._hl_move(1))
+        for b in (self.hl_add, self.hl_edit, self.hl_remove, self.hl_up, self.hl_down):
+            col.addWidget(b)
+        col.addStretch(1)
+        row.addLayout(col)
+        lay.addLayout(row)
+        self.hl_list.currentItemChanged.connect(lambda *_: self._hl_buttons())
+        self._hl_fill()
+        hint = QLabel("Your nick always highlights. Wildcards: restart* matches restarting. The first rule that matches wins.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {c.theme.muted};")
+        lay.addWidget(hint)
+        lay.addWidget(_heading("Never Highlight"))
+        g = QGridLayout()
+        self.hl_no = self._entry(g, 0, "Nick names:", c.hilite_no)
+        self.hl_no.setPlaceholderText("*Serv, Global")
+        lay.addLayout(g)
+        n = QLabel("Messages from these nicks never highlight you, not even your nick. Commas between, wildcards work.")
+        n.setWordWrap(True)
+        n.setStyleSheet(f"color: {c.theme.muted};")
+        lay.addWidget(n)
+        lay.addStretch(1)
+        return page
+
+    def _hl_fill(self, select: int = -1) -> None:
+        from .highlightdialog import rule_row, swatch
+        self.hl_list.clear()
+        for r in self.hl_rules:
+            it = QTreeWidgetItem(rule_row(self.cfg.theme, r))
+            it.setIcon(3, swatch(self.cfg.theme, r.get("colour", "")))
+            self.hl_list.addTopLevelItem(it)
+        s = getattr(self.win, "session", None)
+        own = QTreeWidgetItem([f"{s.nick if s is not None else self.cfg.nick} (your nick)", "Message", "Everywhere", "", "Default"])
+        own.setIcon(3, swatch(self.cfg.theme, ""))
+        own.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        for i in range(5):
+            own.setForeground(i, QColor(self.cfg.theme.muted))
+        own.setToolTip(0, "Always a highlight. Its sound and alerts are on the Alerts and Sound pages")
+        self.hl_list.addTopLevelItem(own)
+        if 0 <= select < len(self.hl_rules):
+            self.hl_list.setCurrentItem(self.hl_list.topLevelItem(select))
+        self._hl_buttons()
+
+    def _hl_index(self) -> int:
+        it = self.hl_list.currentItem()
+        i = self.hl_list.indexOfTopLevelItem(it) if it is not None else -1
+        return i if 0 <= i < len(self.hl_rules) else -1
+
+    def _hl_buttons(self) -> None:
+        i = self._hl_index()
+        self.hl_edit.setEnabled(i >= 0)
+        self.hl_remove.setEnabled(i >= 0)
+        self.hl_up.setEnabled(i > 0)
+        self.hl_down.setEnabled(0 <= i < len(self.hl_rules) - 1)
+
+    def _hl_edit(self, new: bool = False) -> None:
+        from .highlightdialog import HighlightDialog
+        i = -1 if new else self._hl_index()
+        if not new and i < 0:
+            return
+        d = HighlightDialog(self, self.cfg.theme, None if new else self.hl_rules[i])
+        self.hl_dialog = d
+
+        def done(code: int) -> None:
+            if not code:
+                return
+            r = d.result_rule()
+            if new:
+                self.hl_rules.append(r)
+                self._hl_fill(len(self.hl_rules) - 1)
+            else:
+                self.hl_rules[i] = r
+                self._hl_fill(i)
+        d.finished.connect(done)
+        d.open()
+
+    def _hl_remove(self) -> None:
+        i = self._hl_index()
+        if i >= 0:
+            del self.hl_rules[i]
+            self._hl_fill(min(i, len(self.hl_rules) - 1))
+
+    def _hl_move(self, step: int) -> None:
+        i = self._hl_index()
+        j = i + step
+        if i >= 0 and 0 <= j < len(self.hl_rules):
+            self.hl_rules[i], self.hl_rules[j] = self.hl_rules[j], self.hl_rules[i]
+            self._hl_fill(j)
 
     # --- General ------------------------------------------------------------------------
 
@@ -499,7 +622,18 @@ class PreferencesDialog(FramedDialog):
         self.sys_line.setToolTip("Words you can use: " + " ".join("{%s}" % w for w in sysinfo.WORDS)
                                  + ". Delete any you don't want to share. Your IP address, PC name and user name are never included.")
         lay.addLayout(g)
-        lay.addWidget(_heading("Now Playing (/np)"))
+        lay.addStretch(1)
+        return page
+
+    # --- Now Playing ----------------------------------------------------------------------
+
+    def _np_page(self) -> QWidget:
+        """/np and announcing, on their own page (0.2.0). Announce channels are network + channel, added from the
+        chat's right click > Share so names can't be mistyped; a plain #channel (older settings) means every network."""
+        from . import nowplaying
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Share with /np"))
         self.np_on = self._check(lay, "Let /np share what I'm listening to", c.np_enabled,
                                  "Off when BChat is new. Nothing is ever shared on its own: only when you type /np")
         self.np_music = self._check(lay, "Only music: skip videos and anything not marked as music", c.np_music_only)
@@ -524,21 +658,123 @@ class PreferencesDialog(FramedDialog):
         lay.addLayout(g)
         lay.addWidget(_heading("Announce each new song"))
         self.np_ann = self._check(lay, "Post every new song on its own", c.np_announce,
-                                  "Off when BChat is new. Only in the channels below; right click in a channel > Share also adds or removes it")
-        g = QGridLayout()
-        g.setContentsMargins(20, 0, 0, 0)
-        self.np_ann_in = self._entry(g, 0, "In:", c.np_announce_in)
-        self.np_ann_in.setPlaceholderText("#chat, #skinhead")
-        lay.addLayout(g)
+                                  "Off when BChat is new. Only in the channels listed below")
+        box = QHBoxLayout()
+        box.setContentsMargins(20, 0, 0, 0)
+        self.np_ann_list = QTreeWidget()
+        self.np_ann_list.setHeaderLabels(["Network", "Channel"])
+        self.np_ann_list.setRootIsDecorated(False)
+        self.np_ann_list.setFixedHeight(96)
+        self.np_ann_list.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for net, chan in nowplaying.announce_targets(c.np_announce_in):
+            it = QTreeWidgetItem([net or "Every network", chan])
+            it.setData(0, Qt.ItemDataRole.UserRole, f"{net}/{chan}" if net else chan)
+            self.np_ann_list.addTopLevelItem(it)
+        box.addWidget(self.np_ann_list, 1)
+        col = QVBoxLayout()
+        self.np_ann_remove = QPushButton(icon("close-light"), "Remove", objectName="compact")
+        self.np_ann_remove.clicked.connect(lambda: [self.np_ann_list.takeTopLevelItem(self.np_ann_list.indexOfTopLevelItem(i))
+                                                    for i in self.np_ann_list.selectedItems()])
+        self.np_ann_add = QPushButton(icon("new"), "Add...", objectName="compact")
+        self.np_ann_add.clicked.connect(self._np_add_channel)
+        col.addWidget(self.np_ann_add)
+        col.addWidget(self.np_ann_remove)
+        col.addStretch(1)
+        box.addLayout(col)
+        lay.addLayout(box)
+        self.np_ann_hint = QLabel("Or right click in a channel > Share > Announce Songs Here.")
+        self.np_ann_hint.setStyleSheet(f"color: {c.theme.muted}; margin-left: 20px;")
+        lay.addWidget(self.np_ann_hint)
         self.np_ann_note = QLabel(f"Only these channels, once a song has played {int(nowplaying.ANNOUNCE_AFTER)} seconds.")
         self.np_ann_note.setToolTip("Each song is posted once. Paused or skipped songs are never sent.")
         self.np_ann_note.setStyleSheet(f"color: {c.theme.muted}; margin-left: 20px;")
         lay.addWidget(self.np_ann_note)
-        for w in (self.np_music, self.np_ask, self.np_line, self.np_ann, self.np_ann_in, self.np_ann_note, *self.np_boxes.values()):
+        for w in (self.np_music, self.np_ask, self.np_line, self.np_ann, self.np_ann_list, self.np_ann_add, self.np_ann_remove, self.np_ann_hint, self.np_ann_note, *self.np_boxes.values()):
             w.setEnabled(c.np_enabled)
             self.np_on.toggled.connect(w.setEnabled)
         lay.addStretch(1)
         return page
+
+    def _np_channels_of(self, network: str) -> list[str]:
+        """Channels to offer for a network: the ones open there now, then its auto-join list."""
+        seen: list[str] = []
+        def add(name):
+            if name and name.lower() not in [n.lower() for n in seen]:
+                seen.append(name)
+        for s in getattr(self.win, "sessions", {}).values():
+            if not network or s.net.name.lower() == network.lower():
+                for b in s.buffers.values():
+                    if b.kind == "channel":
+                        add(b.name)
+        for n in self.cfg.networks:
+            if not network or n.name.lower() == network.lower():
+                for ch in n.autojoin.split(" ", 1)[0].split(","):
+                    add(ch.strip())
+        return seen
+
+    def _np_add_channel(self) -> None:
+        """Add...: pick the network (or every network) and the channel; the channel list follows the network."""
+        d = FramedDialog("Announce Songs In", self)
+        d.setFixedWidth(380)
+        g = QGridLayout()
+        g.setVerticalSpacing(8)
+        d.net = QComboBox()
+        names = ["Every network"]
+        for n in [s.net.name for s in getattr(self.win, "sessions", {}).values()] + [n.name for n in self.cfg.networks]:
+            if n and n not in names:
+                names.append(n)
+        d.net.addItems(names)
+        cur = getattr(self.win, "session", None)
+        if cur is not None and cur.net.name in names:
+            d.net.setCurrentText(cur.net.name)
+        d.chan = QComboBox()
+        d.chan.setEditable(True)
+
+        def fill():
+            net = "" if d.net.currentIndex() == 0 else d.net.currentText()
+            d.chan.clear()
+            d.chan.addItems(self._np_channels_of(net))
+        d.net.currentIndexChanged.connect(fill)
+        fill()
+        g.addWidget(QLabel("Network:"), 0, 0)
+        g.addWidget(d.net, 0, 1)
+        g.addWidget(QLabel("Channel:"), 1, 0)
+        g.addWidget(d.chan, 1, 1)
+        g.setColumnStretch(1, 1)
+        d.body.addLayout(g)
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        d.body.addWidget(line)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        cancel = QPushButton(icon("cancel"), "&Cancel")
+        cancel.setAutoDefault(False)
+        cancel.clicked.connect(d.reject)
+        ok = QPushButton(icon("done"), "&Add")
+        ok.setDefault(True)
+        ok.clicked.connect(d.accept)
+        row.addWidget(cancel)
+        row.addWidget(ok)
+        d.body.addLayout(row)
+
+        def done(code: int) -> None:
+            chan = d.chan.currentText().strip()
+            if not code or not chan:
+                return
+            if chan[0] not in "#&!+":
+                chan = "#" + chan
+            net = "" if d.net.currentIndex() == 0 else d.net.currentText()
+            entry = f"{net}/{chan}" if net else chan
+            for i in range(self.np_ann_list.topLevelItemCount()):
+                if self.np_ann_list.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole).lower() == entry.lower():
+                    return
+            it = QTreeWidgetItem([net or "Every network", chan])
+            it.setData(0, Qt.ItemDataRole.UserRole, entry)
+            self.np_ann_list.addTopLevelItem(it)
+            self.np_ann_list.setCurrentItem(it)
+        d.finished.connect(done)
+        self.np_add_dialog = d
+        d.open()
 
     # --- File transfers -----------------------------------------------------------------
 
@@ -566,13 +802,15 @@ class PreferencesDialog(FramedDialog):
         lay.addLayout(g)
         lay.addWidget(QLabel("Programs (.exe and the like) are never auto accepted."))
         self.dcc_nick = self._check(lay, "Save nick name in filenames", c.dcc_with_nick)
-        lay.addWidget(_heading("Network Settings"))
-        self.dcc_from_server = self._check(lay, "Get my address from the IRC server", c.dcc_ip_from_server)
+        lay.addWidget(_heading("Ports"))
         g = QGridLayout()
-        self.dcc_ip = self._entry(g, 0, "DCC IP address:", c.dcc_ip)
-        self.dcc_first = self._number(g, 1, "First DCC send port:", c.dcc_first_port, 0, 65535)
-        self.dcc_last = self._number(g, 2, "Last DCC send port:", c.dcc_last_port, 0, 65535)
+        self.dcc_first = self._number(g, 0, "First DCC send port:", c.dcc_first_port, 0, 65535)
+        self.dcc_last = self._number(g, 1, "Last DCC send port:", c.dcc_last_port, 0, 65535)
+        g.setColumnStretch(2, 1)
         lay.addLayout(g)
+        where = QLabel("The address file offers carry is on Network > Local.")
+        where.setStyleSheet(f"color: {c.theme.muted};")
+        lay.addWidget(where)
         lay.addWidget(_heading("Maximum File Transfer Speeds (KB/s, 0 = no limit)"))
         g = QGridLayout()
         self.dcc_up = self._number(g, 0, "One upload:", c.dcc_max_send, 0, 999999)
@@ -588,6 +826,70 @@ class PreferencesDialog(FramedDialog):
         self.dcc_open_chat = self._check(row, "Chat window", c.dcc_open_chat)
         row.addStretch(1)
         lay.addLayout(row)
+        lay.addStretch(1)
+        return page
+
+    # --- Local (mIRC's Connect > Local) -----------------------------------------------------
+
+    def _local_page(self) -> QWidget:
+        """Where the address that file offers (DCC) carry comes from, and the Local host line on connect."""
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("On Connect"))
+        self.local_find = self._check(lay, "Find my address when I connect", c.local_find)
+        self.local_show = self._check(lay, "Show it in the server tab (Local host: ...)", c.local_show,
+                                      "Only you see it, but it shows your IP in screenshots")
+        self.local_show.setStyleSheet("margin-left: 20px;")
+        self.local_find.toggled.connect(self.local_show.setEnabled)
+        self.local_show.setEnabled(c.local_find)
+        lay.addWidget(_heading("Lookup Method"))
+        group = QButtonGroup(page)
+        self.local_ways = {}
+        for key, text in (("normal", "This PC (Normal)"), ("server", "The IRC server (Server)")):
+            r = QRadioButton(text)
+            group.addButton(r)
+            lay.addWidget(r)
+            self.local_ways[key] = r
+        row = QHBoxLayout()
+        r = QRadioButton("A website:")
+        group.addButton(r)
+        self.local_ways["website"] = r
+        row.addWidget(r)
+        self.local_site = QLineEdit(c.local_site or "icanhazip.com")
+        self.local_site.setFixedWidth(220)
+        row.addWidget(self.local_site)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self.local_ways.get(c.local_lookup, self.local_ways["server"]).setChecked(True)
+        note = QLabel("A website gives your real internet address, but BChat has to ask that site. Off unless you pick it.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {c.theme.muted}; margin-left: 20px;")
+        lay.addWidget(note)
+        lay.addWidget(_heading("Your Address"))
+        g = QGridLayout()
+        self.local_host = self._entry(g, 0, "Host name:", c.local_host)
+        self.local_host.setPlaceholderText("Found when you connect")
+        self.dcc_ip = self._entry(g, 1, "IP address:", c.dcc_ip)
+        self.dcc_ip.setPlaceholderText("Found when you connect")
+        lay.addLayout(g)
+        s = getattr(self.win, "session", None)
+        found = ""
+        if s is not None and s.external_ip:
+            found = f"Found now: <b>{s.local_name or 'unknown'} ({s.external_ip})</b> from {s.net.name}"
+        self.local_found = QLabel("Type one only to always use it." + (" " + found if found else ""))
+        self.local_found.setWordWrap(True)
+        self.local_found.setStyleSheet(f"color: {c.theme.muted};")
+        lay.addWidget(self.local_found)
+        self.local_warn = QLabel()
+        self.local_warn.setWordWrap(True)
+        warn = c.theme.palette[7]
+        self.local_warn.setStyleSheet(f"color: {warn}; border: 1px solid {warn}; border-radius: 4px; padding: 6px 8px;")
+        ip = c.dcc_ip.strip() or (s.external_ip if s is not None else "")
+        self.local_warn.setVisible(home_address(ip))
+        if home_address(ip):
+            self.local_warn.setText(f"⚠  {ip} is a home-network address: people outside your network can't reach it for "
+                                    "file sends. Pick A website, or send with passive DCC.")
+        lay.addWidget(self.local_warn)
         lay.addStretch(1)
         return page
 
@@ -771,7 +1073,8 @@ class PreferencesDialog(FramedDialog):
         for key, boxes in self.alert_boxes.items():
             setattr(c, key, [b.isChecked() for b in boxes])
         c.tray_icon = self.tray_icon.isChecked()
-        c.highlight, c.hilite_no, c.hilite_always = self.hl_extra.text().strip(), self.hl_no.text().strip(), self.hl_always.text().strip()
+        c.hilite_no = self.hl_no.text().strip()
+        c.hl_on, c.hl_rules = self.hl_on.isChecked(), [dict(r) for r in self.hl_rules]
         c.quit_reason = self.quit_msg.text() or "Leaving"
         c.part_reason = self.part_msg.text() or "Leaving"
         c.away_reason = self.away_msg.text() or "I'm busy"
@@ -784,8 +1087,13 @@ class PreferencesDialog(FramedDialog):
         c.reconnect_delay = self.reconnect.value()
         c.dcc_auto = self.dcc_auto.currentIndex()
         c.dcc_dir, c.dcc_done_dir = self.dcc_dir.text().strip(), self.dcc_done.text().strip()
-        c.dcc_with_nick, c.dcc_ip_from_server = self.dcc_nick.isChecked(), self.dcc_from_server.isChecked()
-        c.dcc_ip, c.dcc_first_port, c.dcc_last_port = self.dcc_ip.text().strip(), self.dcc_first.value(), self.dcc_last.value()
+        c.dcc_with_nick = self.dcc_nick.isChecked()
+        c.dcc_first_port, c.dcc_last_port = self.dcc_first.value(), self.dcc_last.value()
+        c.local_find, c.local_show = self.local_find.isChecked(), self.local_show.isChecked()
+        c.local_lookup = next(k for k, r in self.local_ways.items() if r.isChecked())
+        c.local_site = self.local_site.text().strip() or "icanhazip.com"
+        c.local_host, c.dcc_ip = self.local_host.text().strip(), self.dcc_ip.text().strip()
+        c.dcc_ip_from_server = c.local_lookup == "server"        # kept in step for older builds
         c.dcc_max_send, c.dcc_max_get = self.dcc_up.value(), self.dcc_down.value()
         c.dcc_max_send_all, c.dcc_max_get_all = self.dcc_up_all.value(), self.dcc_down_all.value()
         c.dcc_open_send, c.dcc_open_recv, c.dcc_open_chat = self.dcc_open_send.isChecked(), self.dcc_open_recv.isChecked(), self.dcc_open_chat.isChecked()
@@ -813,7 +1121,8 @@ class PreferencesDialog(FramedDialog):
         for pid, box in self.np_boxes.items():
             c.np_players[pid] = box.isChecked()
         c.np_announce = self.np_ann.isChecked()
-        c.np_announce_in = ", ".join(nowplaying.announce_channels(self.np_ann_in.text()))
+        c.np_announce_in = ", ".join(self.np_ann_list.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole)
+                                     for i in range(self.np_ann_list.topLevelItemCount()))
         c.url_limit, c.opacity = self.url_limit.value(), self.opacity.value()
         c.raw_modes, c.hide_joinpart = self.raw_modes.isChecked(), self.hide_jp.isChecked()
         c.bind_host, c.proxy_host = self.bind.text().strip(), self.proxy_host.text().strip()

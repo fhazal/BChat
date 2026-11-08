@@ -388,7 +388,7 @@ class DccManager(QObject):
         c = self.cfg
         if c.dcc_ip.strip():
             return c.dcc_ip.strip()
-        if c.dcc_ip_from_server and s.external_ip:
+        if s.external_ip:                    # Network > Local found it (this PC, the server or a website)
             return s.external_ip
         return s.sock.localAddress().toString() or "127.0.0.1"
 

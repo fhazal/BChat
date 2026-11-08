@@ -561,7 +561,7 @@ def test_wrong_password_stops_retrying(app, tmp_path):
 
 def test_session_limit_stops_retrying(live):
     app, srv, win, s = live
-    srv.send(":OperServ!s@services.my NOTICE Badaboom :The session limit for your IP 192.168.50.1 has been exceeded.")
+    srv.send(":OperServ!s@services.my NOTICE Badaboom :The session limit for your IP 192.168.1.20 has been exceeded.")
     assert wait(app, lambda: any("will not retry" in l.text for l in s.server_buffer.lines))
     srv.client.close()
     assert wait(app, lambda: s.state == "disconnected")
@@ -1287,7 +1287,13 @@ def test_prefs_highlight_lists(live):
     app, srv, win, s = live
     b = s.buffers["#skinhead"]
     win.select_buffer(b)
-    prefs(win, lambda d: (d.hl_extra.setText("radio, skin*"), d.hl_no.setText("Bot*"), d.hl_always.setText("Boss")))
+    from bchat.highlights import rule
+
+    def set_rules(d):                       # 0.2.0: the three XChat lists are rules now (Chatting > Highlights)
+        d.hl_rules[:] = [rule(match="radio, skin*"), rule(match="Boss", on="nick")]
+        d._hl_fill()
+        d.hl_no.setText("Bot*")
+    prefs(win, set_rules)
     for sender, words, expect in (("Belon", "the radio is on", "hilite"), ("Belon", "skinhead rules", "hilite"), ("Belon", "nothing here", "msg"),
                                   ("BotOne", "Badaboom radio", "msg"), ("Boss", "anything at all", "hilite")):
         srv.send(f":{sender}!x@h PRIVMSG #skinhead :{words}")
@@ -2709,9 +2715,10 @@ def test_plugins_xchat_api_window_and_errors(live, tmp_path, monkeypatch):
 def test_files_page_saved(app, tmp_path):
     from bchat import config
     win, _ = make_win(tmp_path, 1)
-    prefs(win, lambda d: (d.dcc_auto.setCurrentIndex(1), d.dcc_dir.setText("D:/in"), d.dcc_ip.setText("1.2.3.4"), d.dcc_down_all.setValue(5), d.dcc_open_chat.setChecked(False), d.dcc_from_server.setChecked(False)))
+    # 0.2.0: the IP field and the lookup moved to Network > Local
+    prefs(win, lambda d: (d.dcc_auto.setCurrentIndex(1), d.dcc_dir.setText("D:/in"), d.dcc_ip.setText("1.2.3.4"), d.dcc_down_all.setValue(5), d.dcc_open_chat.setChecked(False), d.local_ways["normal"].setChecked(True)))
     back = config.load(tmp_path)
-    assert (back.dcc_auto, back.dcc_dir, back.dcc_ip, back.dcc_max_get_all, back.dcc_open_chat, back.dcc_ip_from_server) == (1, "D:/in", "1.2.3.4", 5, False, False)
+    assert (back.dcc_auto, back.dcc_dir, back.dcc_ip, back.dcc_max_get_all, back.dcc_open_chat, back.local_lookup, back.dcc_ip_from_server) == (1, "D:/in", "1.2.3.4", 5, False, "normal", False)
     win.close()
 
 

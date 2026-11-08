@@ -171,6 +171,8 @@ class ChatView(QTextBrowser):
         cur = QTextCursor(d)
         cur.movePosition(QTextCursor.MoveOperation.End)
         left_col, text_col = self._kind_colours(ln.kind)
+        if ln.kind == HILITE and ln.colour:              # a highlight rule's own colour
+            left_col = text_col = ln.colour
         stamp = self._stamp(ln.ts)
         pic = self.PICTURES.get(ln.kind)
         side = self.fm.height() - 2

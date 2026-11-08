@@ -8,8 +8,8 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QInputMethodEvent, QTextCharFormat, QActionGroup, QShortcut, QAction, QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence, QPixmap, QTextDocument
-from PySide6.QtWidgets import (QProgressBar, QTabBar, QToolButton, QApplication, QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
+from PySide6.QtGui import QInputMethodEvent, QTextCharFormat, QTextCursor, QActionGroup, QShortcut, QAction, QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence, QPixmap, QTextDocument
+from PySide6.QtWidgets import (QBoxLayout, QProgressBar, QTabBar, QToolButton, QApplication, QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QSystemTrayIcon, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction)
 
@@ -208,15 +208,73 @@ class InputBox(QLineEdit):
             self._format_key(self.FORMAT_KEYS[ev.key()])
         elif mods == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier) and ev.key() == Qt.Key.Key_I:
             self._format_key(self.ITALIC)
+        elif ev.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and mods & Qt.KeyboardModifier.ShiftModifier:
+            at = self.cursorPosition()                     # Shift+Enter: a new line, the box grows
+            text = self.text()
+            self.expand(text[:at] + "\n" + text[at:], at + 1)
         elif ev.key() == Qt.Key.Key_Up and self.history:
             self.pos_ = max(0, self.pos_ - 1)
-            self.setText(self.history[self.pos_])
+            self._show_history(self.history[self.pos_])
         elif ev.key() == Qt.Key.Key_Down:
             self.pos_ = min(len(self.history), self.pos_ + 1)
-            self.setText(self.history[self.pos_] if self.pos_ < len(self.history) else "")
+            self._show_history(self.history[self.pos_] if self.pos_ < len(self.history) else "")
         else:
             self._cycle = []
             super().keyPressEvent(ev)
+
+    def _show_history(self, text: str) -> None:
+        if "\n" in text:
+            self.expand(text, len(text))
+        else:
+            self.setText(text)
+
+    # --- several lines: Shift+Enter swaps this box for a growing one, and back when it is one line again ---
+
+    multi = None
+
+    def _layout(self):
+        par = self.parentWidget()
+        for lay in [par.layout(), *par.findChildren(QBoxLayout)]:
+            if lay is not None and lay.indexOf(self) != -1:
+                return lay
+        return None
+
+    def expand(self, text: str, cursor: int) -> None:
+        if self.multi is None:
+            self.multi = MultiInput(self)
+        lay = self._layout()
+        if lay is None:
+            return
+        lay.replaceWidget(self, self.multi)
+        self.hide()
+        self.multi.show_text(text, cursor)
+
+    def collapse(self, text: str, cursor: int) -> None:
+        m = self.multi
+        lay = None
+        par = m.parentWidget()
+        for l in [par.layout(), *par.findChildren(QBoxLayout)]:
+            if l is not None and l.indexOf(m) != -1:
+                lay = l
+        if lay is not None:
+            lay.replaceWidget(m, self)
+        m.hide()
+        self.show()
+        self.setText(text)
+        self.setCursorPosition(min(cursor, len(text)))
+        self.setFocus()
+
+    def is_multi(self) -> bool:
+        return self.multi is not None and self.multi.isVisible()
+
+    def send_multi(self) -> None:
+        """Enter in the big box: every line goes as a message (paced, the paste window over 5 lines)."""
+        text = self.multi.toPlainText()
+        self.collapse("", 0)
+        if not text.strip():
+            return
+        self.remember(text)
+        self.win.paste_lines(text, self.fixed)
 
     def _format_key(self, code: str) -> None:
         """Insert a format code; with text selected, bold/underline/reverse/strike/italic go round it."""
@@ -274,6 +332,127 @@ class InputBox(QLineEdit):
         self._cycle_text = self.text()
 
 
+class MultiInput(QPlainTextEdit):
+    """The input box with several lines (Shift+Enter). Grows to MAX_LINES, then scrolls. Enter sends them all,
+    Tab completes, Ctrl+B and the other format keys work; back to one line, it gives the text back to the line box."""
+    MAX_LINES = 5
+
+    def __init__(self, owner: InputBox):
+        super().__init__(owner.parentWidget())
+        self.owner = owner
+        self.setObjectName("multiinput")
+        self.setFont(owner.font())
+        self.setTabChangesFocus(False)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.document().setDocumentMargin(2)
+        self.textChanged.connect(self._changed)
+        self._cycle: list[str] = []
+        self._cycle_i = 0
+        self._cycle_start = 0
+        self._cycle_text = ""
+
+    def show_text(self, text: str, cursor: int) -> None:
+        self.blockSignals(True)
+        self.setPlainText(text)
+        self.blockSignals(False)
+        c = self.textCursor()
+        c.setPosition(min(cursor, len(text)))
+        self.setTextCursor(c)
+        self.show()
+        self.fit()
+        self.setFocus()
+
+    def lines_shown(self) -> int:
+        n = 0
+        block = self.document().begin()
+        while block.isValid():
+            n += max(1, block.layout().lineCount()) if block.layout() is not None else 1
+            block = block.next()
+        return n
+
+    def fit(self) -> None:
+        n = max(2, min(self.MAX_LINES, self.lines_shown()))
+        h = n * self.fontMetrics().lineSpacing() + 2 * int(self.document().documentMargin()) + 2 * self.frameWidth() + 2
+        self.setFixedHeight(h)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded if self.lines_shown() > self.MAX_LINES
+                                        else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def _changed(self) -> None:
+        if self.document().blockCount() == 1:              # one line again: back to the line box
+            self.owner.collapse(self.toPlainText(), self.textCursor().position())
+            return
+        self.fit()
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        if self.isVisible():
+            QTimer.singleShot(0, self.fit)
+
+    def event(self, ev):
+        if ev.type() == QEvent.Type.KeyPress and ev.key() == Qt.Key.Key_Tab:
+            self._complete()
+            return True
+        return super().event(ev)
+
+    def keyPressEvent(self, ev):
+        mods = ev.modifiers()
+        if ev.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if mods & Qt.KeyboardModifier.ShiftModifier:
+                self.insertPlainText("\n")
+            else:
+                self.owner.send_multi()
+            return
+        if mods == Qt.KeyboardModifier.ControlModifier and ev.key() in InputBox.FORMAT_KEYS:
+            self._format_key(InputBox.FORMAT_KEYS[ev.key()])
+            return
+        if mods == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier) and ev.key() == Qt.Key.Key_I:
+            self._format_key(InputBox.ITALIC)
+            return
+        self._cycle = []
+        super().keyPressEvent(ev)
+
+    def _format_key(self, code: str) -> None:
+        c = self.textCursor()
+        if code in InputBox.WRAPS and c.hasSelection():
+            c.insertText(code + c.selectedText() + code)
+        else:
+            c.insertText(code)
+
+    def _complete(self) -> None:
+        """Tab: the same nick, channel and command completion as the line box, on the word before the cursor."""
+        b = self.owner.fixed or self.owner.win.buf
+        if b is None:
+            return
+        text = self.toPlainText()
+        if text != self._cycle_text:
+            self._cycle = []
+        c = self.textCursor()
+        if not self._cycle:
+            cur = c.position()
+            line_start = text.rfind("\n", 0, cur) + 1
+            self._cycle_start = max(line_start, text.rfind(" ", 0, cur) + 1)
+            word = text[self._cycle_start:cur]
+            if not word:
+                return
+            self._cycle = self.owner._candidates(word, self._cycle_start == 0)
+            self._cycle_i = 0
+            self._cycle_end = cur
+            if not self._cycle:
+                return
+        item = self._cycle[self._cycle_i % len(self._cycle)]
+        self._cycle_i += 1
+        is_nick = not item.startswith("/") and not b.session.is_channel(item)
+        suffix = self.owner.win.cfg.nick_suffix if is_nick and self._cycle_start == text.rfind("\n", 0, self._cycle_start) + 1 else ""
+        c.setPosition(self._cycle_start)
+        c.setPosition(self._cycle_end if self._cycle_i == 1 else self._last_end, QTextCursor.MoveMode.KeepAnchor)
+        c.insertText(item + suffix + " ")
+        self._last_end = c.position()
+        self.setTextCursor(c)
+        self._cycle_text = self.toPlainText()
+
+
 class MainWindow(FramelessWindow):
     quit_requested = Signal()
 
@@ -282,6 +461,8 @@ class MainWindow(FramelessWindow):
         self.cfg = cfg
         self.cfg_dir = cfg_dir
         self.sessions: dict[str, Session] = {}
+        from .highlights import migrate
+        migrate(cfg)                                    # XChat's highlight lists -> rules, however cfg was made
         from .nowplaying import Announcer
         self.announcer = Announcer(cfg, self._announce, self)     # off unless /np and announcing are both on
         self.announcer.refresh()
@@ -537,6 +718,7 @@ class MainWindow(FramelessWindow):
         self._act(s, "&Disconnect", lambda: self.session and self.session.disconnect_from_network(), "", "disconnect")
         self._act(s, "&Reconnect", lambda: self.session and self.session.reconnect(), "", "connect")
         self._act(s, "Join a Channel...", self._join_dialog, "", "jump")
+        self._act(s, "Favourite Channels...", self.open_favourites, "", "favourite")
         self._act(s, "List of Channels...", lambda: self.session and self.open_channel_list(self.session), "", "justify")
         s.addSeparator()
         self.away_act = self._act(s, "Marked Away", self._toggle_away, "Alt+A", checkable=True)
@@ -1377,6 +1559,14 @@ class MainWindow(FramelessWindow):
                 menu.addAction("Edit Network...", lambda: self.edit_network(s.net))
             elif s.net.servers:
                 menu.addAction(icon("connect"), "Add Network", lambda: self.add_network_from(s))
+        if b.kind == CHANNEL and s.net in self.cfg.networks:
+            from . import favourites
+            fav = favourites.find(favourites.entries(self.cfg), s.net.name, b.name)
+            auto = menu.addAction("Join on Connect")
+            auto.setCheckable(True)
+            auto.setChecked(fav is not None and fav.join)
+            auto.toggled.connect(lambda on: self.join_on_connect(b, on))
+        menu.addAction(icon("favourite"), "Favourite Channels...", self.open_favourites)
         menu.addSeparator()
         log = menu.addAction("Log to Disk")
         log.setCheckable(True)
@@ -1688,7 +1878,7 @@ class MainWindow(FramelessWindow):
     def _share_menu(self, menu: QMenu, s, b) -> QMenu:
         """AdiIRC's System Info and Now Playing, under Share. Announce only for channels, and only once /np is on."""
         from . import commands
-        from .nowplaying import announce_channels
+        from .nowplaying import announces_in
         share = menu.addMenu("Share")
         share.setToolTipsVisible(True)
         share.addAction("System Info", lambda: commands.run(self, s, b, "/sysinfo"))
@@ -1697,10 +1887,13 @@ class MainWindow(FramelessWindow):
             share.addSeparator()
             ann = share.addAction("Announce Songs Here")
             ann.setCheckable(True)
-            ann.setChecked(self.cfg.np_announce and lower(b.name) in {lower(n) for n in announce_channels(self.cfg.np_announce_in)})
+            mine = self.cfg.np_announce and announces_in(self.cfg.np_announce_in, s.net.name, b.name, this_network_only=True)
+            ann.setChecked(mine)
             ann.setEnabled(self.cfg.np_enabled)
             if not self.cfg.np_enabled:
-                ann.setToolTip("Turn on Now Playing in Preferences > Advanced first")
+                ann.setToolTip("Turn on Now Playing in Preferences > Chatting > Now Playing first")
+            elif not mine and self.cfg.np_announce and announces_in(self.cfg.np_announce_in, s.net.name, b.name):
+                ann.setToolTip(f"Now announced in {b.name} on every network. Tick to announce only on {s.net.name}")
             ann.toggled.connect(lambda on: self.announce_here(b, on))
         return share
 
@@ -1717,16 +1910,25 @@ class MainWindow(FramelessWindow):
     # --- alerts: XChat's Alerts page, and its Sound page ------------------------------
 
     def _on_notify(self, b: Buffer, kind: str) -> None:
-        self._play_sound(kind)
+        rule = getattr(b.session, "last_hilite", None) if kind == "hilight" else None
+        sound = (rule or {}).get("sound", "") or ""
+        if sound == "none":
+            pass                                           # this highlight rule is silent
+        elif sound:
+            self._play_sound(kind, path=sound)             # the rule's own sound
+        else:
+            self._play_sound(kind)
         which = {"chan": 0, "priv": 1, "hilight": 2}.get(kind)
         if which is None or self.isActiveWindow():
             return
         c = self.cfg
-        if c.alert_flash[which]:
+        flash = rule.get("flash") if rule and rule.get("flash") is not None else c.alert_flash[which]
+        tip = rule.get("tip") if rule and rule.get("tip") is not None else c.alert_popup[which]
+        if flash:
             QApplication.alert(self)
         if c.alert_beep[which]:
             QApplication.beep()
-        if c.alert_popup[which] and b.lines:
+        if tip and b.lines:
             self._pop_up(b, kind)
         if self.tray is not None:
             if c.alert_tray[which] and not self._blink_timer.isActive():
@@ -1754,8 +1956,8 @@ class MainWindow(FramelessWindow):
         if b is not None and any(b in s.all_buffers() for s in self.sessions.values()):
             self.select_buffer(b)
 
-    def _play_sound(self, kind: str) -> None:
-        path = self.cfg.sounds.get(kind)
+    def _play_sound(self, kind: str, path: str = "") -> None:
+        path = path or self.cfg.sounds.get(kind)
         if not path:
             return
         now = time.monotonic()
@@ -1929,10 +2131,11 @@ class MainWindow(FramelessWindow):
         if len(rows) > len(keep) * 2:     # keep the file from growing forever
             path.write_text("\n".join(keep) + "\n", encoding="utf-8")
 
-    def paste_lines(self, text: str) -> None:
-        """Multi-line paste: each line goes as a message. They are never run as commands, so a paste can't /quit."""
+    def paste_lines(self, text: str, buf: Buffer | None = None) -> None:
+        """Multi-line paste (or the multi-line box): each line goes as a message. Never run as commands,
+        so a paste can't /quit."""
         lines = [l for l in text.splitlines() if l.strip()]
-        b = self.buf
+        b = buf or self.buf
         if b is None or not lines:
             return
         if b.kind == SERVER:
@@ -2296,7 +2499,7 @@ class MainWindow(FramelessWindow):
 
     def now_playing(self, s, b, only_me: bool = False) -> None:
         if not self.cfg.np_enabled:
-            s.add(b, INFO, "*", "Now playing is off. Turn it on in Preferences > Advanced > Now playing.")
+            s.add(b, INFO, "*", "Now playing is off. Turn it on in Preferences > Chatting > Now Playing.")
             return
         from .nowplaying import NowPlaying
         np = NowPlaying(self.cfg, self, reader=self.np_reader)
@@ -2334,28 +2537,66 @@ class MainWindow(FramelessWindow):
 
     def _announce(self, t) -> None:
         """A new song (announcer rules already met): one /me line in each listed channel that is open and joined."""
-        from .nowplaying import DEFAULT_LINE, announce_channels, render
+        from .nowplaying import DEFAULT_LINE, announces_in, render
         line = render(self.cfg.np_line or DEFAULT_LINE, t)
-        wanted = {lower(n) for n in announce_channels(self.cfg.np_announce_in)}
         for s in list(self.sessions.values()):
             if s.state != "connected":
                 continue
             for b in list(s.buffers.values()):
-                if b.kind == CHANNEL and b.joined and lower(b.name) in wanted:
+                if b.kind == CHANNEL and b.joined and announces_in(self.cfg.np_announce_in, s.net.name, b.name):
                     s.action(b.name, line)
         self.save_config()                         # players seen go into Preferences
 
     def announce_here(self, b, on: bool) -> None:
-        """Right click > Share > Announce Songs Here: adds or takes this channel off the announce list."""
+        """Right click > Share > Announce Songs Here: adds or takes this network's channel off the announce list
+        (an old plain "#chan" entry for every network goes too, so the tick always means just this tab)."""
         from .nowplaying import announce_channels
-        names = [n for n in announce_channels(self.cfg.np_announce_in) if lower(n) != lower(b.name)]
+        here = f"{b.session.net.name}/{b.name}"
+        names = [n for n in announce_channels(self.cfg.np_announce_in) if lower(n) not in (lower(here), lower(b.name))]
         if on:
-            names.append(b.name)
+            names.append(here)
             self.cfg.np_announce = True
         self.cfg.np_announce_in = ", ".join(names)
         self.save_config()
         self.announcer.refresh()
         b.session.add(b, INFO, "*", f"Announcing new songs in {b.name}." if on else f"Stopped announcing songs in {b.name}.")
+
+    # --- Favourite Channels ----------------------------------------------------------------
+
+    def open_favourites(self) -> None:
+        from .favourites import FavouritesDialog
+        d = getattr(self, "fav_dialog", None)
+        if d is None or not d.isVisible():
+            d = FavouritesDialog(self)
+            self.fav_dialog = d
+        d.show()
+        d.raise_()
+
+    def join_on_connect(self, b, on: bool) -> None:
+        """Tab menu > Join on Connect: this channel joins (with its key) whenever this network connects."""
+        from . import favourites
+        s = b.session
+        favourites.set_join(self.cfg, s.net.name, b.name, b.mode_args.get("k", ""), on)
+        self.save_config()
+        d = getattr(self, "fav_dialog", None)
+        if d is not None and d.isVisible():
+            d.favs = favourites.entries(self.cfg)
+            d.fill()
+        s.add(b, INFO, "*", f"{b.name} will be joined when you connect to {s.net.name}." if on
+              else f"{b.name} won't be joined on connect any more (still in Favourite Channels).")
+
+    def join_favourite(self, f) -> None:
+        """Join a favourite: right away if its network is connected, else connect it and join after login."""
+        net = next((n for n in self.cfg.networks if n.name == f.network), None)
+        if net is None:
+            return
+        s = self.session_for(net)
+        if s.state == "connected":
+            s.focus_next = lower(f.channel)
+            s.send("JOIN", f.channel, *([f.key] if f.key else []))
+            return
+        s.join_once.append((f.channel, f.key))
+        self.connect_network(net)
 
     def _say_here(self, text: str) -> None:
         b = self.buf

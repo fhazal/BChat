@@ -53,7 +53,7 @@ HELP = {
     "ghost": "GHOST <nick> <password>: frees your nick through NickServ",
     "help": "HELP [<command>]: this help",
     "id": "ID <password>: identifies to NickServ",
-    "np": "NP [-e]: shares the song playing now (turn it on in Preferences > Advanced). -e shows it only to you",
+    "np": "NP [-e]: shares the song playing now (turn it on in Preferences > Chatting > Now Playing). -e shows it only to you",
     "sysinfo": "SYSINFO [-e]: shares one line about your PC (OS, CPU, RAM, disks, GPU, uptime). -e shows it only to you",
     "notify": "NOTIFY [<nick> [<networks>]]: adds a friend, or takes them off if already there. Alone: opens the Friends List",
     "ignore": "IGNORE <mask> [CHAN PRIV NOTI CTCP DCC INVI ALL UNIGNORE]: hides someone. See Window > Ignore List",
