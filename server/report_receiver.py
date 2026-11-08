@@ -16,6 +16,12 @@ Settings (environment):
   BCHAT_RR_DISCORD_USER  Discord user id to ping
   BCHAT_RR_TRUST_PROXY   1 = take the visitor's address from X-Real-IP when the request comes from 127.0.0.1
   BCHAT_RR_INTERNAL      comma list of address prefixes allowed to read /bchat/new (default 127.,10.10.10.)
+  BCHAT_RR_KEEP_DAYS     reports older than this are deleted (default 90); pictures go after a third of it
+  BCHAT_RR_PICTURES_MB   pictures folder cap: above it, new reports are kept without their picture (default 200)
+  BCHAT_RR_DB_MB         database cap: above it, new reports are refused with 507 (default 300)
+
+Flood defence: nginx limits each address at the door (limit_req), then this program: 10 reports per sender an
+hour, 300 an hour in all, the size caps above, old reports deleted, Discord 30 posts an hour.
 """
 from __future__ import annotations
 
@@ -40,15 +46,22 @@ PER_IP_HOUR = 10
 ALL_HOUR = 300
 DISCORD_HOUR = 30
 WAVE_COUNT, WAVE_MINUTES = 5, 30
+MB = 1024 * 1024
 
 
 def env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
+class Full(Exception):
+    """The database is at its cap: the report is refused (BChat keeps it and tries again later)."""
+
+
 class Store:
-    def __init__(self, db: str, pictures: str) -> None:
+    def __init__(self, db: str, pictures: str, keep_days: float = 90, pictures_mb: float = 200, db_mb: float = 300) -> None:
         self.lock = threading.Lock()
+        self.path = Path(db)
+        self.keep_days, self.pictures_max, self.db_max = keep_days, pictures_mb * MB, db_mb * MB
         self.db = sqlite3.connect(db, check_same_thread=False)
         self.db.execute("""CREATE TABLE IF NOT EXISTS reports (
             n INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, who TEXT, sig TEXT, kind TEXT, bchat TEXT,
@@ -57,15 +70,50 @@ class Store:
         self.db.commit()
         self.pictures = Path(pictures)
         self.pictures.mkdir(parents=True, exist_ok=True)
+        self.picture_bytes = sum(f.stat().st_size for f in self.pictures.glob("*.png"))
+
+    def db_bytes(self) -> int:
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return 0
+        free = self.db.execute("PRAGMA freelist_count").fetchone()[0] * self.db.execute("PRAGMA page_size").fetchone()[0]
+        return max(0, size - free)          # pages freed by prune() are used again before the file grows
+
+    def prune(self, now: float | None = None) -> tuple[int, int]:
+        """Deletes reports older than keep_days and pictures older than a third of that. (rows, pictures) gone."""
+        now = now if now is not None else time.time()
+        rows = pics = 0
+        with self.lock:
+            for n, name in self.db.execute("SELECT n, picture FROM reports WHERE picture!='' AND ts<?",
+                                           (now - self.keep_days / 3 * 86400,)).fetchall():
+                f = self.pictures / name
+                try:
+                    size = f.stat().st_size
+                    f.unlink()
+                    self.picture_bytes -= size
+                    pics += 1
+                except OSError:
+                    pass
+                self.db.execute("UPDATE reports SET picture='' WHERE n=?", (n,))
+            rows = self.db.execute("DELETE FROM reports WHERE ts<?", (now - self.keep_days * 86400,)).rowcount
+            self.db.commit()
+        return rows, pics
 
     def add(self, who: str, r: dict, picture: bytes) -> tuple[int, int]:
         with self.lock:
+            if self.db_bytes() > self.db_max:
+                raise Full()
+            if picture and self.picture_bytes + len(picture) > self.pictures_max:
+                picture = b""                                  # keep the report, drop the picture
+                r["picture_dropped"] = 1
             cur = self.db.execute("INSERT INTO reports (ts, who, sig, kind, bchat, data, picture) VALUES (?,?,?,?,?,?,?)",
                                   (time.time(), who, r["sig"], r["kind"], r["bchat"], json.dumps(r), ""))
             n = cur.lastrowid
             if picture:
                 name = f"BR-{n}.png"
                 (self.pictures / name).write_bytes(picture)
+                self.picture_bytes += len(picture)
                 self.db.execute("UPDATE reports SET picture=? WHERE n=?", (name, n))
             seen = 1
             if r["sig"]:
@@ -224,6 +272,7 @@ def make_handler(store: Store, limits: Limits, discord: Discord, trust_proxy: bo
     class H(BaseHTTPRequestHandler):
         server_version = "BChatReports/1"
         sys_version = ""
+        timeout = 20                            # a client that stops sending halfway is dropped
 
         def log_message(self, fmt, *args):      # no visitor addresses in the logs
             pass
@@ -237,6 +286,8 @@ def make_handler(store: Store, limits: Limits, discord: Discord, trust_proxy: bo
         def reply(self, code: int, body: dict) -> None:
             data = json.dumps(body).encode()
             self.send_response(code)
+            if code in (429, 507):
+                self.send_header("Retry-After", "3600")
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -265,7 +316,12 @@ def make_handler(store: Store, limits: Limits, discord: Discord, trust_proxy: bo
                 r, picture = clean(json.loads(self.rfile.read(size).decode("utf-8")))
             except (ValueError, UnicodeDecodeError):
                 return self.reply(400, {"error": "not a BChat report"})
-            n, seen = store.add(who, r, picture)
+            try:
+                n, seen = store.add(who, r, picture)
+            except Full:
+                return self.reply(507, {"error": "report storage full, try later"})
+            if r.get("picture_dropped"):
+                picture = b""
             self.reply(200, {"id": f"BR-{n}", "seen": seen})
 
             def notify():
@@ -283,7 +339,8 @@ def serve(port: int | None = None, ready=None) -> ThreadingHTTPServer:
     wf = env("BCHAT_RR_WEBHOOK_FILE")
     if wf and Path(wf).is_file():
         url = Path(wf).read_text(encoding="utf-8").strip()
-    store = Store(env("BCHAT_RR_DB", "reports.db"), env("BCHAT_RR_PICTURES", "pictures"))
+    store = Store(env("BCHAT_RR_DB", "reports.db"), env("BCHAT_RR_PICTURES", "pictures"), float(env("BCHAT_RR_KEEP_DAYS", "90")),
+                  float(env("BCHAT_RR_PICTURES_MB", "200")), float(env("BCHAT_RR_DB_MB", "300")))
     handler = make_handler(store, Limits(), Discord(url, env("BCHAT_RR_DISCORD_USER")), env("BCHAT_RR_TRUST_PROXY") == "1",
                            tuple(x for x in env("BCHAT_RR_INTERNAL", "127.,10.10.10.").split(",") if x))
     httpd = ThreadingHTTPServer((env("BCHAT_RR_BIND", "127.0.0.1"), port if port is not None else int(env("BCHAT_RR_PORT", "8765"))), handler)
@@ -309,8 +366,20 @@ def internal_listener(main: ThreadingHTTPServer, where: str) -> ThreadingHTTPSer
     return inner
 
 
+def prune_loop(store: Store, every: float = 3600) -> None:
+    while True:
+        try:
+            rows, pics = store.prune()
+            if rows or pics:
+                print(f"pruned {rows} old reports, {pics} old pictures", flush=True)
+        except Exception as e:
+            print("prune:", type(e).__name__, e, flush=True)
+        time.sleep(every)
+
+
 if __name__ == "__main__":
     s = serve()
+    threading.Thread(target=prune_loop, args=(s.store,), name="prune", daemon=True).start()
     internal_listener(s, env("BCHAT_RR_INTERNAL_BIND"))
     print("BChat report receiver on", s.server_address, flush=True)
     s.serve_forever()

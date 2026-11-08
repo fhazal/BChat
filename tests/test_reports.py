@@ -300,3 +300,74 @@ def test_internal_listener_for_buzz_shares_the_reports(app, receiver):
         assert rr.internal_listener(srv, "") is None and rr.internal_listener(srv, "10.255.255.1:1") is None   # no tunnel: no crash
     finally:
         inner.shutdown()
+
+
+class _Answer(BaseHTTPRequestHandler):
+    code = 429
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.send_response(type(self).code)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+def test_busy_server_keeps_the_report_junk_answer_does_not(app, win):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _Answer)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    pending = win.cfg_dir / "reports" / "pending"
+    try:
+        for code, kept in ((429, 1), (507, 2), (400, 2)):
+            _Answer.code = code
+            s = reports.Sender(win, f"http://127.0.0.1:{srv.server_address[1]}/bchat/report")
+            why = []
+            s.failed.connect(why.append)
+            s.send({"v": 1, "kind": "Slow", "bchat": "0.3.0"})
+            assert wait(app, lambda: bool(why), 10000)
+            assert len(list(pending.glob("*.json"))) == kept, (code, why)
+            assert ("busy" in why[0] and "saved" in why[0]) if code != 400 else "didn't accept" in why[0]
+    finally:
+        srv.shutdown()
+    s = reports.Sender(win, "http://127.0.0.1:9/never")
+    for i in range(15):                                   # a long offline spell never makes a pile
+        s.keep({"v": 1, "kind": "Slow", "bchat": "0.3.0", "n": i})
+        time.sleep(0.002)
+    left = sorted(pending.glob("*.json"))
+    assert len(left) == reports.Sender.MAX_PENDING and json.loads(left[-1].read_text())["n"] == 14
+
+
+def test_receiver_storage_caps_and_old_reports_go(tmp_path):
+    import report_receiver as rr
+    png = b"\x89PNG\r\n\x1a\n" + b"x" * 600_000
+    st = rr.Store(str(tmp_path / "r.db"), str(tmp_path / "pics"), keep_days=90, pictures_mb=1, db_mb=50)
+    r = {"v": 1, "kind": "Slow", "bchat": "0.3.0", "sig": "ab"}
+    n1, _ = st.add("a", dict(r), png)
+    n2, _ = st.add("a", dict(r), png)                     # pictures folder over 1 MB: kept without the picture
+    assert (tmp_path / "pics" / f"BR-{n1}.png").exists() and not (tmp_path / "pics" / f"BR-{n2}.png").exists()
+    assert json.loads(st.db.execute("SELECT data FROM reports WHERE n=?", (n2,)).fetchone()[0])["picture_dropped"] == 1
+    # a report from 40 days ago loses its picture, one from 100 days ago goes
+    st.db.execute("UPDATE reports SET ts=? WHERE n=?", (time.time() - 40 * 86400, n1))
+    n3, _ = st.add("b", dict(r), b"")
+    st.db.execute("UPDATE reports SET ts=? WHERE n=?", (time.time() - 100 * 86400, n3))
+    st.db.commit()
+    assert st.prune() == (1, 1)
+    assert not (tmp_path / "pics" / f"BR-{n1}.png").exists() and st.picture_bytes == 0
+    assert [x[0] for x in st.db.execute("SELECT n FROM reports ORDER BY n")] == [n1, n2]
+    st.db_max = 0                                         # database at its cap: refused, BChat keeps it
+    with pytest.raises(rr.Full):
+        st.add("c", dict(r), b"")
+
+
+def test_receiver_answers_507_with_retry_after_when_full(app, receiver):
+    import urllib.error
+    import urllib.request
+    srv, base = receiver
+    srv.store.db_max = 0
+    req = urllib.request.Request(base + "/bchat/report", data=json.dumps({"v": 1, "kind": "Slow", "bchat": "0.3.0"}).encode(),
+                                 method="POST")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req)
+    assert e.value.code == 507 and e.value.headers["Retry-After"] == "3600"

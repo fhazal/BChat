@@ -392,6 +392,8 @@ class Sender(QObject):
     """POSTs a report. Answer: {"id": "BR-42", "seen": 3}. No answer: saved, sent again at the next start."""
     done = Signal(dict)       # the server's answer
     failed = Signal(str)      # why, in plain words
+    BUSY = (429, 502, 503, 504, 507)
+    MAX_PENDING = 10
 
     def __init__(self, win, url: str = "") -> None:
         super().__init__(win)
@@ -424,11 +426,15 @@ class Sender(QObject):
             why = "The report server gave an answer BChat doesn't understand."
         else:
             status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
-            why = "Too many reports from here just now. Please try again later." if status == 429 else \
-                  "BChat couldn't reach the report server."
-        if keep and why.startswith("BChat couldn't"):
-            self.keep(report)
-            why += " It's saved, and BChat sends it the next time it starts."
+            if status in self.BUSY:          # busy or flooded by others: the report is fine, try again later
+                why = "The report server is busy right now."
+            elif status:
+                why = "The report server didn't accept this report."
+            else:
+                why = "BChat couldn't reach the report server."
+            if keep and (not status or status in self.BUSY):
+                self.keep(report)
+                why += " It's saved, and BChat sends it the next time it starts."
         self.failed.emit(why)
 
     def _remember(self, ans: dict, report: dict) -> None:
@@ -443,6 +449,12 @@ class Sender(QObject):
 
     def keep(self, report: dict) -> None:
         self.pending_dir.mkdir(parents=True, exist_ok=True)
+        waiting = sorted(self.pending_dir.glob("*.json"))
+        for old in waiting[:max(0, len(waiting) - (self.MAX_PENDING - 1))]:   # never a pile: the oldest go
+            try:
+                old.unlink()
+            except OSError:
+                pass
         (self.pending_dir / f"{int(time.time() * 1000)}.json").write_text(json.dumps(report), encoding="utf-8")
 
     def send_pending(self) -> int:
