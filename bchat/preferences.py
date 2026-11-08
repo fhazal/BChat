@@ -556,10 +556,37 @@ class PreferencesDialog(FramedDialog):
         lay.addWidget(_heading("Logging"))
         self.replay = self._check(lay, "Display scrollback from previous session", c.text_replay)
         self.log_all = self._check(lay, "Enable logging of conversations to disk", c.log_all, 'Single tabs: right-click the tab, "Log to Disk"')
+        from . import logs
         g = QGridLayout()
-        self.log_mask = self._entry(g, 0, "Log filename:", c.log_mask)
+        split = logs.SPLITS.index(c.log_split) if c.log_split in logs.SPLITS else 0
+        self.log_split = self._menu(g, 0, "Start a new file:", ("Every day", "Every month", "Never (one file)"), split)
+        keep = logs.KEEP_DAYS.index(c.log_keep_days) if c.log_keep_days in logs.KEEP_DAYS else 0
+        self.log_keep = self._menu(g, 1, "Delete logs older than:", ("Never", "1 month", "6 months", "1 year"), keep)
+        self.log_mask_label = QLabel("Log filename:")
+        g.addWidget(self.log_mask_label, 2, 0, Qt.AlignmentFlag.AlignRight)
+        self.log_mask = QLineEdit(c.log_mask)
+        g.addWidget(self.log_mask, 2, 1, 1, 2)
+        g.setColumnStretch(2, 1)
         lay.addLayout(g)
-        lay.addWidget(QLabel("%s=Server %c=Channel %n=Network. A / makes a folder."))
+        self.log_mask_hint = QLabel("%s=Server %c=Channel %n=Network. A / makes a folder.")
+        lay.addWidget(self.log_mask_hint)
+        self.log_saved = QLabel()
+        self.log_saved.setStyleSheet(f"color: {c.theme.muted};")
+        lay.addWidget(self.log_saved)
+        row = QHBoxLayout()
+        view = QPushButton(icon("find"), "View Logs...")
+        view.setAutoDefault(False)
+        view.clicked.connect(self._view_logs)
+        folder = QPushButton(icon("open"), "Open Logs Folder")
+        folder.setAutoDefault(False)
+        folder.clicked.connect(lambda: self.win.open_logs_folder())
+        row.addWidget(view)
+        row.addWidget(folder)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self.log_split.currentIndexChanged.connect(lambda _i: self._log_split_changed())
+        self.log_mask.textChanged.connect(lambda _t: self._log_split_changed())
+        self._log_split_changed()
         lay.addWidget(_heading("Time Stamps"))
         self.log_stamps = self._check(lay, "Insert timestamps in logs", c.log_stamps)
         g = QGridLayout()
@@ -568,6 +595,31 @@ class PreferencesDialog(FramedDialog):
         lay.addWidget(QLabel("%H hour, %M minute, %S second, %d day, %b month name."))
         lay.addStretch(1)
         return page
+
+    def _view_logs(self) -> None:
+        """Preferences is modal, so it saves and closes first; then the Logs window can be used."""
+        from PySide6.QtCore import QTimer
+        self.accept()
+        QTimer.singleShot(0, self.win.open_logs)
+
+    def _log_split_changed(self) -> None:
+        """The filename mask only matters for one file per tab; the Saved as line shows where today's lines go."""
+        import time as _time
+        from . import logs
+        split = logs.SPLITS[self.log_split.currentIndex()]
+        one = split == "none"
+        for w in (self.log_mask_label, self.log_mask, self.log_mask_hint):
+            w.setVisible(one)
+        b = getattr(self.win, "buf", None)
+        clean = getattr(self.win, "_clean", lambda x: x)
+        net = clean(b.session.net.name) if b is not None and b.session is not None else "Network"
+        chan = clean(b.name) if b is not None and b.kind != "server" else "#channel"
+        if one:
+            mask = self.log_mask.text().strip() or "%n-%c.log"
+            name = mask.replace("%n", net).replace("%s", net).replace("%c", chan).replace("/", "\\")
+        else:
+            name = f"{net}\\{chan}\\{logs.dated_name(split, _time.time())}"
+        self.log_saved.setText(f"Saved as: logs\\{name}")
 
     # --- Sound --------------------------------------------------------------------------
 
@@ -1085,6 +1137,9 @@ class PreferencesDialog(FramedDialog):
         c.rejoin_on_kick, c.whois_on_query = self.rejoin_kick.isChecked(), self.whois_query.isChecked()
         c.text_replay, c.log_all = self.replay.isChecked(), self.log_all.isChecked()
         c.log_mask = self.log_mask.text().strip() or "%n-%c.log"
+        from . import logs
+        c.log_split = logs.SPLITS[self.log_split.currentIndex()]
+        c.log_keep_days = logs.KEEP_DAYS[self.log_keep.currentIndex()]
         c.log_stamps, c.log_stamp_format = self.log_stamps.isChecked(), self.log_fmt.text()
         c.sounds = {k: e.text().strip() for k, e in self.sound_edits.items() if e.text().strip()}
         c.reconnect_delay = self.reconnect.value()

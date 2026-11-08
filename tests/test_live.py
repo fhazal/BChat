@@ -1390,7 +1390,7 @@ def test_prefs_logging_all_mask_stamps_and_replay(app, tmp_path):
     s = win.connect_network(net)
     assert wait(app, lambda: "#skinhead" in s.buffers)
     b = s.buffers["#skinhead"]
-    prefs(win, lambda d: (d.log_all.setChecked(True), d.log_mask.setText("%n/%c-log.txt"), d.log_fmt.setText("<%H> "), d.replay.setChecked(True)))
+    prefs(win, lambda d: (d.log_all.setChecked(True), d.log_split.setCurrentIndex(2), d.log_mask.setText("%n/%c-log.txt"), d.log_fmt.setText("<%H> "), d.replay.setChecked(True)))
     srv.send(":Belon!b@h PRIVMSG #skinhead :first logged line")
     path = win.log_path(b)
     assert path.name == "#skinhead-log.txt" and path.parent.name == "SkinIRC" and (tmp_path / "logs") in path.parents

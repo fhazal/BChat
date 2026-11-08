@@ -652,6 +652,10 @@ class MainWindow(FramelessWindow):
         self._status_timer = QTimer(self, interval=1000, timeout=self._refresh_status)
         self._status_timer.start()
         self._blink_timer = QTimer(self, interval=500, timeout=self._blink_tray)
+        # 0.3.0: Delete logs older than ..., a moment after start and every 6 hours
+        self._log_clean_timer = QTimer(self, interval=6 * 3600 * 1000, timeout=self.clean_old_logs)
+        self._log_clean_timer.start()
+        QTimer.singleShot(5000, self.clean_old_logs)
         from .invitebar import InviteBar
         self.invite_bar = InviteBar(self, body)
         lay.addWidget(self.invite_bar)
@@ -742,6 +746,7 @@ class MainWindow(FramelessWindow):
         self._act(w, "File Transfers...", self.open_transfers)
         self._act(w, "Friends List...", lambda: self.open_tool("friends"))
         self._act(w, "Ignore List...", lambda: self.open_tool("ignore"))
+        self._act(w, "Logs...", lambda: self.open_logs(), "", "find")
         self._act(w, "Plugins and Scripts...", lambda: self.open_tool("plugins"))
         self._act(w, "Raw Log...", self._open_raw_log)
         self._act(w, "URL Grabber...", lambda: self.open_tool("urls"))
@@ -1625,6 +1630,8 @@ class MainWindow(FramelessWindow):
         log.setCheckable(True)
         log.setChecked(self._log_key(b) in self.cfg.log_tabs)
         log.toggled.connect(lambda on: self._set_logging(b, on))
+        if self.logs_of(b):          # only once there is something to read
+            menu.addAction(icon("find"), "View Log", lambda: self.open_logs(b))
         menu.addSeparator()
         if id(b) in self.detached:
             menu.addAction("Attach", lambda: self.attach(b))
@@ -2112,9 +2119,18 @@ class MainWindow(FramelessWindow):
         # names come from the network, so nothing in them may reach outside our folders
         return re.sub(r"[^\w#&+-]", "_", name) or "_"
 
-    def log_path(self, b: Buffer) -> Path:
-        """Log filename mask from Preferences: %n network, %s server, %c channel. A / in the mask makes a folder."""
+    def logs_dir(self) -> Path:
+        return self.cfg_dir / "logs"
+
+    def log_path(self, b: Buffer, ts: float | None = None) -> Path:
+        """Every day / every month: logs/Network/#channel/2026-11-09.log. Never (one file): the Log filename mask
+        from Preferences, %n network, %s server, %c channel; a / in the mask makes a folder."""
+        from . import logs
         s = b.session
+        split = self.cfg.log_split if self.cfg.log_split in logs.SPLITS else "day"
+        if split != "none":
+            name = logs.dated_name(split, ts if ts is not None else time.time())
+            return self.logs_dir() / self._clean(s.net.name) / self._clean(b.name) / name
         values = {"%n": self._clean(s.net.name), "%s": self._clean(s.server_name or s.net.name), "%c": self._clean(b.name)}
         parts = []
         for part in re.split(r"[/\\]", self.cfg.log_mask or "%n-%c.log"):
@@ -2123,14 +2139,45 @@ class MainWindow(FramelessWindow):
             part = re.sub(r'[<>:"|?*]', "_", part)
             if part and part not in (".", ".."):
                 parts.append(part)
-        return self.cfg_dir.joinpath("logs", *(parts or ["bchat.log"]))
+        return self.logs_dir().joinpath(*(parts or ["bchat.log"]))
+
+    def logs_of(self, b: Buffer) -> list:
+        """This tab's dated log files (View Log on the tab menu)."""
+        from . import logs
+        net, chan = self._clean(b.session.net.name), self._clean(b.name)
+        return [f for f in logs.scan(self.logs_dir()) if f.network == net and f.channel == chan]
+
+    def open_logs(self, b: Buffer | None = None):
+        from .logwindow import LogsWindow
+        w = self.tools.get("logs")
+        if w is None:
+            w = self.tools["logs"] = LogsWindow(self)
+        if b is not None:
+            w.show_for(self._clean(b.session.net.name), self._clean(b.name))
+        else:
+            w.show_for()
+        w.show()
+        w.raise_()
+        return w
+
+    def open_logs_folder(self) -> None:
+        d = self.logs_dir()
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(d)))
+
+    def clean_old_logs(self) -> int:
+        from . import logs
+        return logs.clean_up(self.logs_dir(), self.cfg.log_keep_days)
 
     def _log_line(self, b: Buffer, ln) -> None:
         self._save_replay(b, ln)
         c = self.cfg
         if not c.log_all and self._log_key(b) not in c.log_tabs:
             return
-        path = self.log_path(b)
+        path = self.log_path(b, ln.ts)
         stamp = ""
         if c.log_stamps:
             try:
@@ -2140,7 +2187,7 @@ class MainWindow(FramelessWindow):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as f:
-                f.write(f"{stamp}{ln.left}\t{strip_format(ln.text)}\n")
+                f.write(f"{stamp}{strip_format(ln.left)}\t{strip_format(ln.text)}\n")
         except OSError as e:
             b.session.add(b.session.server_buffer, "error", "*", f"Couldn't write the log: {e}")
             c.log_all = False

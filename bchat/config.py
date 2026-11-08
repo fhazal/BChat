@@ -335,6 +335,8 @@ class Config:
     text_replay: bool = False      # show the last session's scrollback when a tab opens
     log_all: bool = False
     log_mask: str = "%n-%c.log"
+    log_split: str = "day"            # 0.3.0: "day", "month" or "none" (one file from log_mask)
+    log_keep_days: int = 0            # delete dated logs older than this (0 = never)
     log_stamps: bool = True
     log_stamp_format: str = "%b %d %H:%M:%S "
     # Sound: event -> .wav file
