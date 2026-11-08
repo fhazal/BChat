@@ -32,6 +32,9 @@ Type `/join #channelname` and press Enter, or use **Server → Join a Channel...
 
 To join channels automatically on connect, open **Edit...** for the network in the Network List and fill in **Auto-join channels:** (for example `#BChat,#chat`).
 
+### How do I leave a channel?
+Right-click the channel in the list on the left (or its tab) and choose **Leave Channel**, or type `/part` in that channel.
+
 ### How do I change my nickname?
 Type `/nick NewName`. To change it for good, open the Network List and change **Nick name:** under **User Information**, or per network in **Edit...** (untick **Use global user information** first).
 
@@ -100,6 +103,9 @@ Yes: **Settings → Preferences → General → Start with Windows**. Tick **Sta
 ---
 
 ## Looks and themes
+
+### How do I change the theme?
+**Settings → Preferences → Colors**, pick one from the **Theme:** list, and click **OK**. Dark themes: **Catppuccin Mocha** (the default), **Macchiato**, **Frappé**, **One Dark Pro** and **Dracula**. Light theme: **Catppuccin Latte**.
 
 ### How do I switch to a light theme?
 **Settings → Preferences → Colors**, choose **Theme: Catppuccin Latte**, and click **OK**.
