@@ -50,7 +50,7 @@ def info_rows() -> list[tuple[str, str]]:
 
 
 class AboutDialog(FramedDialog):
-    def __init__(self, theme, parent=None):
+    def __init__(self, theme, parent=None, updater=None):
         super().__init__("About BChat", parent)
         self.body.setContentsMargins(22, 18, 22, 14)
         self.body.setSpacing(0)
@@ -95,8 +95,27 @@ class AboutDialog(FramedDialog):
             b.setStyleSheet(f"color: {theme.motd_text};")
             b.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)   # copy for a bug report
             grid.addWidget(a, i, 0)
-            grid.addWidget(b, i, 1)
+            if i == 0:
+                # right after the version: up to date / new version here / ready, from the same updater as everything else
+                self.update_status = QLabel()
+                self.update_status.setTextFormat(Qt.TextFormat.RichText)
+                cell = QHBoxLayout()
+                cell.setSpacing(0)
+                cell.addWidget(b)
+                cell.addWidget(self.update_status)
+                cell.addStretch(1)
+                grid.addLayout(cell, i, 1)
+            else:
+                grid.addWidget(b, i, 1)
             self.values[k] = b
+        self.updater = updater
+        if updater is not None:
+            from .updatepage import about_status
+            sync = lambda: self.update_status.setText(about_status(updater, theme))
+            updater.changed.connect(sync)
+            self.destroyed.connect(lambda *_: _quiet_disconnect(updater.changed, sync))
+            sync()
+        self.update_status.setVisible(updater is not None)
         grid.setColumnStretch(1, 1)
         self.body.addLayout(grid)
         self.body.addSpacing(16)
@@ -153,3 +172,10 @@ class AboutDialog(FramedDialog):
         rows = "\n".join(f"{k}: {v.text()}" for k, v in self.values.items())
         return (f"BChat\n{TAGLINE}\n{rows}\nCopyright © 2026 BajuBesi Labs.\nIcons: Lucide (ISC).\n{self.link.text()}\n"
                 f"{self.support.text()}")
+
+
+def _quiet_disconnect(signal, slot) -> None:
+    try:
+        signal.disconnect(slot)
+    except (RuntimeError, TypeError):
+        pass

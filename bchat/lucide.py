@@ -17,6 +17,9 @@ NAMES = {
     "jump": "hash", "find": "search", "add": "plus", "remove": "minus", "revert": "puzzle", "open": "folder-open",
     "new": "square-plus", "preferences": "settings", "copy": "copy", "about": "info", "book": "server",
     "info": "info", "file": "file-text", "no": "ban", "support": "heart",
+    # updates (11-08): check again, done, get it, new, problem, install, ready
+    "refresh": "refresh-cw", "done": "check", "download": "download", "new-version": "sparkles", "problem": "circle-alert",
+    "install": "rotate-cw", "ready": "package-check",
     # chat line pictures
     "te-join": "arrow-right", "te-part": "arrow-left", "te-action": "asterisk",
 }

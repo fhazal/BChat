@@ -403,7 +403,10 @@ def save(cfg: Config, directory: Path) -> None:
         found = {f: n.get(f, "") for f in SECRET_FIELDS if n.get(f)}
         if found:
             secrets["networks"][key] = found
-    if vault.put(directory, json.dumps(secrets)):
+    if not secrets["networks"] and not secrets["proxy_password"]:
+        vault.clear(directory)              # nothing secret: no empty entry left in Credential Manager
+        d["secrets"] = "none"
+    elif vault.put(directory, json.dumps(secrets)):
         for n in d["networks"]:
             for f in SECRET_FIELDS:
                 n[f] = ""

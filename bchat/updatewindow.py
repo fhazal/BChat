@@ -59,8 +59,7 @@ class UpdateBadge(QWidget):
     def paintEvent(self, _ev) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        hot = self.bar.activeAction() is self.action
-        p.fillRect(self.rect(), QColor(self.theme.popup if hot else self.theme.bar))
+        # no background of its own: the menu bar's colour and its hover highlight show through (TEST24 bug: a dark box)
         c = QColor(colours(self.theme).get(self.up.state, self.theme.text))
         fm = QFontMetrics(self.bar.font())
         x0 = max(4, (self.width() - DOT_ROOM - fm.horizontalAdvance(self.up.label())) // 2)

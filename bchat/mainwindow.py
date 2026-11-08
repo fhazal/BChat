@@ -546,7 +546,7 @@ class MainWindow(FramelessWindow):
 
         h = m.addMenu("&Help")
         self._act(h, "&Contents", self.open_help, "F1", "help")
-        self._act(h, "Check for &Updates...", self.check_updates)
+        self._act(h, "Check for &Updates...", self.check_updates, "", "refresh")
         self._act(h, "&Support BChat on Ko-fi...", self.open_support, "", "support")
         self._act(h, "&About", self._about, "", "about")
         # after Help: shows only while an update waits, downloads, is ready or failed
@@ -1891,7 +1891,9 @@ class MainWindow(FramelessWindow):
         d.show()
 
     def _about_box(self) -> AboutDialog:
-        return AboutDialog(self.cfg.theme, self)
+        d = AboutDialog(self.cfg.theme, self, getattr(self, "updater", None))
+        d.update_status.linkActivated.connect(lambda _l: (d.accept(), self.open_update_window()))
+        return d
 
     def open_support(self) -> None:
         from .about import SUPPORT

@@ -17,8 +17,9 @@ from .widgets import FramedDialog, icon
 
 CATEGORIES = {"Interface": ["Text box", "Input box", "User list", "Channel switcher", "Colors"],
               "Chatting": ["Alerts", "General", "Logging", "Sound", "Advanced"],
-              "Network": ["Network setup", "File transfers"]}
-BUILT = ("Text box", "Input box", "User list", "Channel switcher", "Colors", "Alerts", "General", "Logging", "Sound", "Advanced", "Network setup", "File transfers")
+              "Network": ["Network setup", "File transfers"],
+              "BChat": ["Updates"]}
+BUILT = ("Text box", "Input box", "User list", "Channel switcher", "Colors", "Alerts", "General", "Logging", "Sound", "Advanced", "Network setup", "File transfers", "Updates")
 SWITCHER_POS = ("Left", "Right", "Top", "Bottom", "Hidden")
 SORTS = ("A-Z, Ops first", "A-Z", "Z-A, Ops last", "Z-A", "Unsorted")
 # Sound page: session notify event -> the name XChat's Sound page uses
@@ -108,7 +109,7 @@ class PreferencesDialog(FramedDialog):
         self.page_of["Colors"] = self.pages.addWidget(self._colors_page())
         for name, build in (("File transfers", self._files_page), ("Channel switcher", self._switcher_page), ("Input box", self._input_page), ("User list", self._userlist_page), ("Alerts", self._alerts_page),
                             ("General", self._general_page), ("Logging", self._logging_page), ("Sound", self._sound_page),
-                            ("Advanced", self._advanced_page), ("Network setup", self._network_page)):
+                            ("Advanced", self._advanced_page), ("Network setup", self._network_page), ("Updates", self._updates_page)):
             self.page_of[name] = self.pages.addWidget(build())
         row.addWidget(self.tree)
         row.addWidget(right, 1)
@@ -397,11 +398,17 @@ class PreferencesDialog(FramedDialog):
         self.min_tray = self._check(lay, "Minimize button sends BChat to the tray", c.minimize_to_tray)
         self.close_tray = self._check(lay, "Close button sends BChat to the tray", c.close_to_tray, "To really quit: right-click the tray icon > Quit, or BChat > Quit (Ctrl+Q)")
         lay.addWidget(QLabel("Either tray option shows the tray icon by itself."))
-        lay.addWidget(_heading("Updates"))
-        self.upd_check = self._check(lay, "Check for updates when BChat starts and once a day", c.update_check)
-        self.upd_auto = self._check(lay, "Download updates by themselves", c.update_auto_download, "A downloaded update installs when you quit BChat")
-        self.upd_test = self._check(lay, "Include test versions", c.update_test_versions, "TEST builds always look at test versions too")
         lay.addStretch(1)
+        return page
+
+    # --- Updates (BChat > Updates) -------------------------------------------------------
+
+    def _updates_page(self) -> QWidget:
+        from .updatepage import updates_page
+        page, lay = self._new_page()
+        lay.setContentsMargins(14, 12, 14, 6)
+        lay.setSpacing(6)
+        updates_page(self, lay)
         return page
 
     # --- Logging ------------------------------------------------------------------------

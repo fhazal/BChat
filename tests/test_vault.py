@@ -100,3 +100,16 @@ def test_installed_program_always_uses_credential_manager(monkeypatch, tmp_path)
     assert vault._memory_mode(tmp_path)
     monkeypatch.setenv("BCHAT_VAULT", "memory")
     assert vault._memory_mode(tmp_path)
+
+
+def test_no_passwords_means_no_credential_entry(tmp_path):
+    """A settings folder without passwords leaves nothing in Credential Manager; the last password removed clears it."""
+    config.save(Config(nick="x", networks=[net("Plain")]), tmp_path)
+    assert vault.get(tmp_path) is None
+    assert __import__("json").loads((tmp_path / "config.json").read_text())["secrets"] == "none"
+    back = config.load(tmp_path)
+    assert not getattr(back, "vault_missing", False) and back.networks[0].password == ""
+    config.save(Config(nick="x", networks=[net("SkinIRC", password=SECRETS[0])]), tmp_path)
+    assert vault.get(tmp_path) is not None and config.load(tmp_path).networks[0].password == SECRETS[0]
+    config.save(Config(nick="x", networks=[net("SkinIRC")]), tmp_path)          # password removed
+    assert vault.get(tmp_path) is None and not getattr(config.load(tmp_path), "vault_missing", False)
