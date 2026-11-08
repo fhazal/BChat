@@ -12,7 +12,7 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab?logo=python&logoColor=white)
 ![Qt 6](https://img.shields.io/badge/Qt-6%20(PySide6)-41cd52?logo=qt&logoColor=white)
 [![Latest release](https://img.shields.io/github/v/release/fhazal/BChat?label=release&color=f5c2e7)](https://github.com/fhazal/BChat/releases/latest)
-[![VirusTotal: 0/69 for 0.1.0](https://img.shields.io/badge/VirusTotal-0%2F69%20clean-a6e3a1?logo=virustotal&logoColor=white)](https://www.virustotal.com/gui/file/41ed2213a17245b51c6bb0566734ce9766db03c9daa4ff6a53df495e5e50d7f4)
+[![VirusTotal: 0/66 for 0.2.0](https://img.shields.io/badge/VirusTotal-0%2F66%20clean-a6e3a1?logo=virustotal&logoColor=white)](https://www.virustotal.com/gui/file/d712c0543f8a3336138ba38cde51b5eb928d942263b464a9ef892f662de1eb38)
 
 [![Website](https://img.shields.io/badge/Website-bajubesi.org-8b5cf6?style=for-the-badge)](https://bajubesi.org)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20us-ff5e5b?logo=ko-fi&logoColor=white&style=for-the-badge)](https://ko-fi.com/bajubesi)
@@ -175,7 +175,7 @@ All of them can be changed in *Settings → Advanced → Keyboard Shortcuts*.
 
 ### Antivirus
 
-The 0.1.0 installer was checked by [VirusTotal](https://www.virustotal.com/gui/file/41ed2213a17245b51c6bb0566734ce9766db03c9daa4ff6a53df495e5e50d7f4): none of its 69 antivirus engines flagged it. Because the installer isn't code-signed yet, some antivirus programs may still stop it or the self-update. Either run the installer yourself, or add BChat's install folder as an exception in your antivirus.
+The 0.2.0 installer was checked by [VirusTotal](https://www.virustotal.com/gui/file/d712c0543f8a3336138ba38cde51b5eb928d942263b464a9ef892f662de1eb38): none of the 66 antivirus engines that scanned it flagged it. Because the installer isn't code-signed yet, some antivirus programs may still stop it or the self-update. Either run the installer yourself, or add BChat's install folder as an exception in your antivirus.
 
 ---
 
