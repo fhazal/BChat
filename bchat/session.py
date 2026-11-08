@@ -1342,7 +1342,8 @@ class Session(QObject):
             self.add(self._front(), ERROR, "*", f"Cannot join {m.param(1)} (Requires keyword).")
         elif n == 315:
             pass
-        elif n in (311, 312, 317, 318, 319, 301, 313, 320, 330, 335, 338, 344, 378, 379, 671, 276, 307, 275):
+        elif n in (311, 312, 317, 318, 319, 301, 313, 320, 330, 335, 338, 344, 378, 379, 671, 276, 307, 275, 569):
+            # 569 = UnrealIRCd's RPL_WHOISASN ("is connecting from AS9930 [provider]"), above 400 so named here
             self._whois_line(n, m)
         elif len(p) >= 3 and n < 400 and lower(m.param(1)) in (self._whois_nick, *self._silent_whois):
             # servers add their own whois lines; XChat calls these "WhoIs Special"
@@ -1564,6 +1565,8 @@ class Session(QObject):
             text = f"{tag} is away ({m.param(-1)})"
         elif n == 330:
             text = f"{tag} {m.param(-1)} {m.param(2)}"
+        elif n == 569:
+            text = f"{tag} {m.param(-1)}"        # the AS number is already in the words; don't print it twice
         elif n == 344:
             text = f"{tag} {m.param(-1)}"
             country = self._country_text(m)

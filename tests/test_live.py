@@ -762,6 +762,21 @@ def test_whois_country_and_server_special_lines_stay_in_whois(live):
     assert b.users[lower("Fhazal")].country == "Malaysia"
 
 
+def test_whois_as_number_line_is_a_whois_line(live):
+    """User (11-08): '* Fhazal 9930 is connecting from AS9930 [...]' had no WHOIS icon and the number twice.
+    569 (UnrealIRCd's AS line) is above 400, so it fell out of the WHOIS and onto the generic printer."""
+    app, srv, win, s = live
+    b = s.buffers["#skinhead"]
+    win.select_buffer(b)
+    s.whois("Fhazal")
+    srv.send(":srv 569 Badaboom Fhazal 9930 :is connecting from AS9930 [TIME dotCom Berhad]")
+    srv.send(":srv 318 Badaboom Fhazal :End of /WHOIS list.")
+    assert wait(app, lambda: any("AS9930" in l.text for l in b.lines))
+    line = next(l for l in b.lines if "AS9930" in l.text)
+    assert line.kind == WHOIS and line.left == "i"            # the WHOIS info icon, not "*"
+    assert strip_format(line.text) == "[Fhazal] is connecting from AS9930 [TIME dotCom Berhad]"
+
+
 def test_unrelated_numerics_do_not_join_a_whois(live):
     app, srv, win, s = live
     b = s.buffers["#skinhead"]
