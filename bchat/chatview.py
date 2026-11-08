@@ -310,6 +310,11 @@ class ChatView(QTextBrowser):
 
     def _open_url(self, url: QUrl) -> None:
         """A click on a link: the window checks it first (safety.link_risk) and says who posted it."""
+        if url.scheme().lower() in ("irc", "ircs"):
+            opener = getattr(self.window(), "open_irc_link", None)
+            if opener is not None:
+                opener(url.toString())
+            return
         if url.scheme().lower() not in ("http", "https", "ftp"):
             return
         who, where = self.who_posted(url.toString())

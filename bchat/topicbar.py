@@ -319,7 +319,7 @@ class TopicBar(QWidget):
         tb("bg", "Bg", "Background colour", lambda: self._pop("bg"))
         tb("emoji", "\U0001F642", "Emoji (Windows: Win + . for all of them)", lambda: self._pop("emoji"),
            "font-family: 'Segoe UI Emoji';")
-        self.set_btn = QPushButton("Set", self)
+        self.set_btn = QPushButton("Set", self, objectName="compact")
         self.set_btn.setFixedHeight(h)
         self.set_btn.setToolTip("Set the topic (Enter). Esc puts the old one back.")
         self.set_btn.setAutoDefault(False)

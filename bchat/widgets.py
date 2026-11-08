@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QDialog, QHBoxLayout, QLabel, QMainWindow, QSizePolicy,
                                QVBoxLayout, QWidget)
@@ -102,6 +102,97 @@ def stylesheet(t: Theme) -> str:
     return _sheet(t) + (_light_extra(t) if is_light(t) else "")
 
 
+def _buttons(t: Theme) -> str:
+    """XChat 2's buttons (GTK on Windows 11): soft fill, thin border, round corners, 27 px tall."""
+    if is_light(t):
+        fill, hover, down, edge, bottom, focus = t.panel, t.window, t.popup, t.thumb, t.thumb_hover, t.disabled
+    else:
+        fill, hover, down, edge, bottom, focus = t.popup, t.thumb, t.bar, t.thumb, t.thumb, t.thumb_hover
+    return f"""    QPushButton {{ background: {fill}; border: 1px solid {edge}; border-bottom-color: {bottom}; border-radius: 4px;
+                   padding: 4px 12px; min-height: 17px; }}
+    QPushButton:hover {{ background: {hover}; }}
+    QPushButton:pressed {{ background: {down}; }}
+    QPushButton:focus {{ border-color: {focus}; }}
+    QPushButton:disabled {{ color: {t.disabled}; }}
+"""
+
+
+BUTTON_MIN_WIDTH = 85      # GTK's button box minimum (XChat's Cancel / OK rows)
+ICON_GAP = 6               # extra room between a button's icon and its words, like XChat
+COMPACT = {"modebtn", "ulbtn", "compact"}
+
+
+def _gap_icon(ic: QIcon) -> QIcon:
+    """The same icon with clear space on its right: Qt's stylesheet puts the words right after the picture."""
+    out = QIcon()
+    for px in (16, 20, 24, 32, 48):
+        src = ic.pixmap(QSize(px, px), 1.0)          # real pixels at this size, whatever the screen scale
+        if src.isNull():
+            continue
+        src.setDevicePixelRatio(1.0)
+        gap = round(px * ICON_GAP / 16)
+        pm = QPixmap(px + gap, px)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.drawPixmap((px - src.width()) // 2, (px - src.height()) // 2, src)
+        p.end()
+        out.addPixmap(pm)
+    return out
+
+
+def even_button_rows(root: QWidget) -> None:
+    """XChat's button boxes: every button in a row of buttons gets the same width, at least 85 px.
+    Rows mixing buttons with fields (Browse... beside a box) and small fixed buttons stay as they are."""
+    from PySide6.QtWidgets import QPushButton
+    for lay in [root.layout()] + root.findChildren(QHBoxLayout):
+        if not isinstance(lay, QHBoxLayout):
+            continue
+        items = [lay.itemAt(i) for i in range(lay.count())]
+        widgets = [it.widget() for it in items if it.widget() is not None]
+        has_space = any(it.spacerItem() is not None for it in items)
+        if not widgets or not all(type(w) is QPushButton for w in widgets) or (len(widgets) < 2 and not has_space):
+            continue
+        if any(w.objectName() in COMPACT or w.minimumWidth() == w.maximumWidth() or len(w.text().replace("&", "")) < 2
+               for w in widgets):
+            continue
+        for w in widgets:
+            w.ensurePolished()
+        width = max([BUTTON_MIN_WIDTH] + [w.sizeHint().width() for w in widgets])
+        for w in widgets:
+            w.setMinimumWidth(width)
+
+
+class ButtonLook(QObject):
+    """App-wide: puts the icon gap on every icon-and-words button, and evens out button rows when a window opens."""
+
+    def eventFilter(self, obj, ev) -> bool:
+        t = ev.type()
+        if t in (QEvent.Type.Polish, QEvent.Type.Paint) and type(obj).__name__ == "QPushButton":
+            ic = obj.icon()
+            if not ic.isNull() and obj.text() and obj.property("bchat_gap") != ic.cacheKey():
+                spaced = _gap_icon(ic)
+                name = _names_by_key.get(ic.cacheKey())
+                if name:
+                    _names_by_key[spaced.cacheKey()] = name      # a theme change still finds and recolours it
+                obj.setProperty("bchat_gap", spaced.cacheKey())
+                obj.setIcon(spaced)
+                obj.setIconSize(QSize(16 + ICON_GAP, 16))
+        elif t == QEvent.Type.Show and isinstance(obj, QWidget) and obj.isWindow():
+            even_button_rows(obj)
+        return False
+
+
+_button_look: ButtonLook | None = None
+
+
+def install_button_look(app=None) -> None:
+    global _button_look
+    app = app or QApplication.instance()
+    if app is not None and _button_look is None:
+        _button_look = ButtonLook(app)
+        app.installEventFilter(_button_look)
+
+
 def _sheet(t: Theme) -> str:
     return f"""
     * {{ font-family: Tahoma, Verdana, sans-serif; font-size: 8pt; color: {t.text}; }}
@@ -126,18 +217,15 @@ def _sheet(t: Theme) -> str:
     QTreeWidget::item:disabled {{ color: {t.disabled}; }}
     QTreeWidget#switcher::item {{ height: 20px; }}
     QTreeWidget#switcher::branch {{ background: transparent; border-image: none; image: none; }}
-    QPushButton#modebtn {{ padding: 0; min-width: 0; }}
-    QPushButton#modebtn:checked {{ background: {t.selected}; color: {t.marking_fg}; }}
-    QPushButton#ulbtn {{ padding: 1px 4px; min-width: 0; }}
     QHeaderView::section {{ background: {t.bar}; border: 1px solid {t.border}; padding: 2px; }}
     QLineEdit {{ padding: 1px 4px; }}
     QTextBrowser {{ background: {t.chat_bg}; color: {t.chat_fg}; border: 1px solid {t.border}; selection-background-color: {t.selected}; selection-color: {t.marking_fg}; }}
     #count {{ background: {t.bar}; border: 1px solid {t.border}; padding: 2px; qproperty-alignment: AlignCenter; }}
     #nicklabel {{ padding: 0 6px; }}
-    QPushButton {{ background: {t.bar}; border: 1px solid {t.border}; padding: 3px 10px; min-height: 16px; }}
-    QPushButton:hover {{ background: {t.popup}; }}
-    QPushButton:pressed {{ background: {t.selected}; }}
-    QPushButton:disabled {{ color: {t.disabled}; }}
+{_buttons(t)}    QPushButton#modebtn {{ padding: 0; min-width: 0; min-height: 16px; border-radius: 3px; }}
+    QPushButton#modebtn:checked {{ background: {t.selected}; color: {t.marking_fg}; }}
+    QPushButton#ulbtn {{ padding: 1px 4px; min-width: 0; min-height: 16px; border-radius: 3px; }}
+    QPushButton#compact {{ padding: 3px 10px; min-height: 16px; border-radius: 3px; }}
     QToolButton:disabled {{ color: {t.disabled}; }}
     QRadioButton {{ spacing: 7px; }}
     QRadioButton::indicator {{ width: 12px; height: 12px; border: 1px solid {t.disabled}; border-radius: 7px; background: {t.panel}; }}

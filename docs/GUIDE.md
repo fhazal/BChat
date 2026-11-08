@@ -138,6 +138,12 @@ If a certificate you trusted ever changes, BChat warns you again, because that's
 ### Why did BChat ask before opening a link?
 BChat asks first only for **risky links**: links that download a program (like `.exe`), look-alike web addresses, bare IP addresses, and similar tricks. It shows who posted the link and where it leads. **Cancel** is the default. Normal links open with one click.
 
+### What happens when I click an irc:// link?
+BChat asks first and never joins on its own. The question shows the channel, the network and whether the connection is encrypted (green shield) or not (orange shield). On a network you're already on, Join opens the channel in a new tab. On a new network, BChat adds it to your Network List, opens its own server tab, connects with your nick and then joins. The installer can also make your browser open irc:// and ircs:// links in BChat.
+
+### Can I see what was said before I joined?
+Yes, on networks that keep channel history (IRCv3 chathistory, for example UnrealIRCd channels with mode +H). When you join, BChat shows the last messages above your join line, under a grey line that says so. After a reconnect it only fetches what you missed. Old lines never make a sound or pop up a card.
+
 ### Does BChat track me or show ads?
 No. BChat has no ads, no accounts and no tracking. It connects only to the IRC networks you choose, and to GitHub once a day to look for updates (you can turn that off). Like any IRC client, the networks you join can see your IP address.
 

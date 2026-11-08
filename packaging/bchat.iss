@@ -30,6 +30,7 @@ ChangesAssociations=yes
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
+Name: "irclinks"; Description: "Open irc:// and ircs:// links with BChat (it always asks before joining)"
 
 [InstallDelete]
 ; program files only (settings and logs live in AppData): clears icons and libraries an older build left behind
@@ -41,6 +42,17 @@ Source: "..\dist\BChat\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 [Icons]
 Name: "{group}\BChat"; Filename: "{app}\BChat.exe"; IconFilename: "{app}\BChat.exe"
 Name: "{autodesktop}\BChat"; Filename: "{app}\BChat.exe"; IconFilename: "{app}\BChat.exe"; Tasks: desktopicon
+
+[Registry]
+; irc:// and ircs:// links from the browser, for this Windows user only; removed again on uninstall
+Root: HKCU; Subkey: "Software\Classes\irc"; ValueType: string; ValueName: ""; ValueData: "URL:IRC Protocol"; Flags: uninsdeletekey; Tasks: irclinks
+Root: HKCU; Subkey: "Software\Classes\irc"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Tasks: irclinks
+Root: HKCU; Subkey: "Software\Classes\irc\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\BChat.exe"",0"; Tasks: irclinks
+Root: HKCU; Subkey: "Software\Classes\irc\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\BChat.exe"" ""%1"""; Tasks: irclinks
+Root: HKCU; Subkey: "Software\Classes\ircs"; ValueType: string; ValueName: ""; ValueData: "URL:IRC Protocol (SSL)"; Flags: uninsdeletekey; Tasks: irclinks
+Root: HKCU; Subkey: "Software\Classes\ircs"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Tasks: irclinks
+Root: HKCU; Subkey: "Software\Classes\ircs\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\BChat.exe"",0"; Tasks: irclinks
+Root: HKCU; Subkey: "Software\Classes\ircs\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\BChat.exe"" ""%1"""; Tasks: irclinks
 
 [Run]
 Filename: "{app}\BChat.exe"; Description: "Start BChat"; Flags: nowait postinstall skipifsilent

@@ -58,6 +58,7 @@ class Buffer:
         self.joined = kind != CHANNEL
         self.activity = 0  # 0 none, 1 data, 2 message, 3 highlight
         self.marker: int | None = None
+        self.history_since = 0.0      # chathistory: lines after this were asked for (0 = the latest)
         self.mode_args: dict[str, str] = {}
 
     def mode_text(self) -> str:
@@ -107,12 +108,14 @@ class Session(QObject):
     cert_question = Signal(object)    # a certificate BChat can't verify: the window asks the user
     pins_changed = Signal()
     notify = Signal(object, str)  # buffer, event: chan priv hilight join part kick notice invite connect disconnect
+    lines_inserted = Signal(object)  # history went in above existing lines: the tab is drawn again
 
     MAX_LINES = 5000
     LAG_WARN_MS = 5000
     WANTED_CAPS = {"multi-prefix", "away-notify", "userhost-in-names", "server-time", "znc.in/server-time-iso",
                    "znc.in/self-message", "chghost", "cap-notify", "account-notify", "account-tag", "extended-join",
-                   "invite-notify", "message-tags", "setname", "batch"}
+                   "invite-notify", "message-tags", "setname", "batch", "draft/chathistory", "chathistory"}
+    HISTORY_LINES = 50     # asked for on join when the server keeps channel history (IRCv3 chathistory)
 
     def __init__(self, net: NetworkConfig, cfg: Config, parent=None):
         super().__init__(parent)
@@ -153,6 +156,9 @@ class Session(QObject):
         self.typed_by_hand = False
         self.statusmsg = ""
         self.whox = False
+        self.chathistory_max = -1          # ISUPPORT CHATHISTORY=: -1 not offered, 0 no limit
+        self.join_once: list[tuple[str, str]] = []   # (channel, key) from an irc:// link: joined after login, not saved
+        self._history: dict[str, tuple[str, list]] = {}   # open history batch id -> (target, lines)
         self._sasl_state = ""
         self._cap_more: set[str] = set()
         self._cap_offered: dict[str, str] = {}
@@ -316,6 +322,8 @@ class Session(QObject):
         self.away = False
         self.whox = False
         self.statusmsg = ""
+        self.chathistory_max = -1
+        self._history = {}
         self.prefix_modes, self.prefix_chars = "ohv", "@%+"
         self.modes_list, self.modes_key, self.modes_on_set, self.max_modes = "beI", "k", "fjl", 3
         self._sasl_state = ""
@@ -762,6 +770,10 @@ class Session(QObject):
         return time.time()
 
     def _handle(self, m: Message) -> None:
+        bid = m.tags.get("batch")
+        if bid and bid in self._history and m.command in ("PRIVMSG", "NOTICE"):
+            self._history[bid][1].append(m)      # history: kept until the batch ends, then put above the join
+            return
         handler = getattr(self, "_irc_" + m.command.lower(), None) if m.command.isalpha() else None
         if handler:
             handler(m)
@@ -865,7 +877,63 @@ class Session(QObject):
             self.send_raw("CAP END")
 
     def _irc_batch(self, m: Message) -> None:
-        pass  # lines inside a batch carry their own tags and show normally
+        """Other batches: their lines carry their own tags and show normally. Chathistory batches are collected."""
+        ref = m.param(0)
+        if ref.startswith("+") and m.param(1).lower() in ("chathistory", "draft/chathistory") and len(m.params) >= 3:
+            self._history[ref[1:]] = (m.param(2), [])
+        elif ref.startswith("-") and ref[1:] in self._history:
+            target, msgs = self._history.pop(ref[1:])
+            self._history_done(target, msgs)
+
+    # --- channel history (IRCv3 chathistory) ------------------------------------------------
+
+    def history_on(self) -> bool:
+        return bool(self._cap_active & {"draft/chathistory", "chathistory"}) and self.chathistory_max >= 0
+
+    def _ask_history(self, b: Buffer, since: float) -> None:
+        """On join: the last lines said, or (rejoin / reconnect) only what came after the last line we have."""
+        n = self.HISTORY_LINES if self.chathistory_max <= 0 else min(self.HISTORY_LINES, self.chathistory_max)
+        if since:
+            stamp = datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+            self.send_raw(f"CHATHISTORY AFTER {b.name} timestamp={stamp} {n}", quiet=True)
+        else:
+            self.send_raw(f"CHATHISTORY LATEST {b.name} * {n}", quiet=True)
+        b.history_since = since
+
+    def _history_done(self, target: str, msgs: list) -> None:
+        b = self.buffer(target, False)
+        if b is None:
+            return
+        since = b.history_since
+        lines = []
+        for m in msgs:
+            ts = self._ts(m)
+            if ts <= since or self.ignored(m.prefix, "C" if m.command == "PRIVMSG" else "N"):
+                continue
+            text, nick = m.param(-1), m.nick
+            me = lower(nick) == lower(self.nick)
+            if m.command == "NOTICE":
+                if text.startswith(""):
+                    continue
+                lines.append(Line(NOTICE, f"-{nick}-", text, ts))
+            elif text.startswith("ACTION"):
+                lines.append(Line(ACTION, "*", f"{nick} {text.strip(chr(1))[7:]}", ts))
+            elif text.startswith(""):
+                continue                               # old CTCP requests are never answered
+            elif me:
+                lines.append(Line(SELF, nick, text, ts))
+            else:
+                lines.append(Line(HILITE if self._is_hilite(text, nick) else MSG, nick, text, ts))
+        if not lines:
+            return
+        word = "messages you missed" if since else "earlier messages, sent before you joined"
+        lines.append(Line(INFO, "", f"14────────  above: {word}  ────────", lines[-1].ts))
+        at = next((i for i in range(len(b.lines) - 1, -1, -1) if b.lines[i].kind == NOW_TALKING), len(b.lines))
+        b.lines[at:at] = lines
+        cap = max(100, self.cfg.max_lines or self.MAX_LINES)
+        if len(b.lines) > cap:
+            del b.lines[: len(b.lines) - cap]
+        self.lines_inserted.emit(b)
 
     def _irc_tagmsg(self, m: Message) -> None:
         pass
@@ -1065,6 +1133,7 @@ class Session(QObject):
         chan = m.param(0)
         b = self.buffer(chan)
         if lower(m.nick) == lower(self.nick):
+            since = next((ln.ts for ln in reversed(b.lines) if ln.kind in (MSG, SELF, HILITE, ACTION, NOTICE)), 0.0)
             b.joined = True
             b.users.clear()
             b.modes, b.mode_args = "", {}
@@ -1072,6 +1141,8 @@ class Session(QObject):
             self.add(b, NOW_TALKING, "➤", f"Now talking on {b.name}")
             self.send("MODE", b.name)
             self.fetch_who(b.name)
+            if self.history_on():
+                self._ask_history(b, since)
             self.buffer_changed.emit(b)
         elif not self.cfg.hide_joinpart:
             self.te("Join", b, JOIN, (m.nick, b.name, m.userhost), self._ts(m))
@@ -1397,6 +1468,8 @@ class Session(QObject):
                 self.statusmsg = v
             elif k == "WHOX":
                 self.whox = True
+            elif k == "CHATHISTORY":
+                self.chathistory_max = int(v) if v.isdigit() else 0
             elif k == "CHANMODES" and v.count(",") >= 2:
                 self.modes_list, self.modes_key, self.modes_on_set = v.split(",")[:3]
             elif k == "MODES" and v.isdigit() and int(v) > 0:
@@ -1428,6 +1501,11 @@ class Session(QObject):
         for name in rejoin:
             if not self.net.autojoin or lower(name) not in lower(self.net.autojoin):
                 self.send("JOIN", name)
+        for name, key in self.join_once:
+            if lower(name) not in {lower(n) for n in rejoin}:
+                self.focus_next = lower(name)
+                self.send("JOIN", name, *([key] if key else []))
+        self.join_once = []
 
     def own_rank(self, b: Buffer) -> str:
         """The prefix char for our own nick in this channel, for the light next to the nick box."""

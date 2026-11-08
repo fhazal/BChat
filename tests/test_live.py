@@ -3804,3 +3804,48 @@ def test_hop_alone_rejoins_and_hop_nick_still_gives_half_op(live):
     # the fourth PART/JOIN pair in a row: BChat's flood queue spaces it out, so allow it a few seconds
     assert wait(app, lambda: any(x.startswith("JOIN #skinhead") for x in srv.received), 12000), srv.received
     b.mode_args.pop("k", None)
+
+
+def test_channel_history_shows_above_the_join_without_alerts(app, tmp_path):
+    now = time.time()
+    hist = [("nova!n@h", "PRIVMSG", "anyone tried the new themes?", now - 3600),
+            ("Belon!b@h", "PRIVMSG", "\x01ACTION waves\x01", now - 3500),
+            ("kes!k@h", "PRIVMSG", "\x01VERSION\x01", now - 3400),               # old CTCP: never answered
+            ("nova!n@h", "PRIVMSG", "Badaboom: ping me when you're back", now - 3300)]
+    srv, win, net, s = live_with(app, tmp_path, caps="batch message-tags draft/chathistory", history=hist)
+    alerts = []
+    s.notify.connect(lambda b, ev: ev != "connect" and alerts.append(ev))
+    assert wait(app, lambda: any("CHATHISTORY LATEST #skinhead * 50" in x for x in srv.received))
+    b = s.buffers["#skinhead"]
+    assert wait(app, lambda: any("ping me" in l.text for l in b.lines))
+    texts = [l.text for l in b.lines]
+    talk = next(i for i, l in enumerate(b.lines) if l.kind == "now")
+    first = texts.index("anyone tried the new themes?")
+    assert first < talk and "earlier messages, sent before you joined" in texts[talk - 1]
+    assert b.lines[first].ts == pytest.approx(now - 3600, abs=0.01)
+    assert any(l.kind == "action" and l.text == "Belon waves" for l in b.lines)
+    assert not any("VERSION" in l.text for l in b.lines)
+    assert next(l for l in b.lines if "ping me" in l.text).kind == "hilite"       # coloured, but nothing pops up
+    win.select_buffer(b)
+    shown = win.chat.document().toPlainText()
+    assert shown.index("anyone tried the new themes?") < shown.index("above: earlier messages") < shown.index("Now talking on #skinhead")
+    wait(app, lambda: False, 300)
+    assert alerts == [] and not any(x.startswith("NOTICE kes") for x in srv.received)
+    # back again (/hop): only what came after the last line we already have
+    srv.history.append(("nova!n@h", "PRIVMSG", "said while you were out", time.time() + 1))
+    s.send_raw("PART #skinhead"); srv.send(":Badaboom!u@h PART #skinhead")
+    wait(app, lambda: not b.joined, 1000)
+    s.send_raw("JOIN #skinhead")
+    assert wait(app, lambda: any("said while you were out" in l.text for l in b.lines))
+    assert any(x.startswith("CHATHISTORY AFTER #skinhead timestamp=") for x in srv.received)
+    assert sum(l.text == "anyone tried the new themes?" for l in b.lines) == 1
+    assert any("messages you missed" in l.text for l in b.lines)
+    win.close(); srv.stop()
+
+
+def test_no_history_asked_when_the_server_keeps_none(app, tmp_path):
+    srv, win, net, s = live_with(app, tmp_path, caps="batch message-tags")
+    assert wait(app, lambda: "#skinhead" in s.buffers and s.buffers["#skinhead"].joined)
+    wait(app, lambda: False, 300)
+    assert not any(x.startswith("CHATHISTORY") for x in srv.received)
+    win.close(); srv.stop()

@@ -11,7 +11,8 @@ AWAY = {"J|wang", "Psycho", "BeerAddict", "Combat90", "Corumn26"}
 
 
 class FakeIrcd:
-    def __init__(self, certfile: str | None = None, keyfile: str | None = None, taken_nicks=(), caps="", sasl_ok=True, whox=False, refuse=False):
+    def __init__(self, certfile: str | None = None, keyfile: str | None = None, taken_nicks=(), caps="", sasl_ok=True, whox=False, refuse=False, history=None):
+        self.history = history     # [(prefix, command, text, unix time)]: a channel that keeps history (+H)
         self.refuse = refuse
         self.extra_caps = caps
         self.sasl_ok = sasl_ok
@@ -134,6 +135,18 @@ class FakeIrcd:
             self.send(f":srv 312 {n} {t} irc.bajubesi.org :SkinIRC")
             self.send(f":srv 317 {n} {t} 252 {int(time.time()) - 3600} :seconds idle, signon")
             self.send(f":srv 318 {n} {t} :End of /WHOIS list.")
+        elif cmd == "CHATHISTORY" and self.history is not None:
+            from datetime import datetime, timezone
+            iso = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+            sub, ch, ref, lim = word[1].upper(), word[2], word[3], int(word[4])
+            rows = self.history
+            if sub == "AFTER":
+                after = datetime.fromisoformat(ref.split("=", 1)[1].replace("Z", "+00:00")).timestamp()
+                rows = [r for r in rows if r[3] > after]
+            self.send(f":srv BATCH +h1 chathistory {ch}")
+            for pre, verb, text, t in rows[-lim:]:
+                self.send(f"@batch=h1;time={iso(t)} :{pre} {verb} {ch} :{text}")
+            self.send(":srv BATCH -h1")
         elif cmd == "PING":
             self.send(f":srv PONG srv :{word[-1].lstrip(':')}")
         elif cmd == "QUIT":
@@ -147,7 +160,7 @@ class FakeIrcd:
     def _welcome(self):
         n = self.nick
         self.send(f":irc.fake.org 001 {n} :Welcome to the fake network {n}")
-        self.send(f":srv 005 {n} PREFIX=(ohv)@%+ CHANTYPES=# CHANMODES=beI,k,l,imnpst NETWORK=Fake {'WHOX ' if self.whox else ''}:are supported")
+        self.send(f":srv 005 {n} PREFIX=(ohv)@%+ CHANTYPES=# CHANMODES=beI,k,l,imnpst NETWORK=Fake {'WHOX ' if self.whox else ''}{'CHATHISTORY=100 ' if self.history is not None else ''}:are supported")
         self.send(f":srv 422 {n} :MOTD File is missing")
 
     def stop(self):

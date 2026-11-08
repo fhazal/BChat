@@ -20,7 +20,7 @@ from .protocol import URL_RE, lower, strip_format
 from .session import CHANNEL, INFO, QUERY, SERVER, Buffer, Line, Session, User
 from .countries import country_of
 from .userlist import UserList, icon_name, light_pixmap
-from .widgets import ASSETS, FramedDialog, FramelessWindow, icon, set_icon_theme, set_light_palette, stylesheet
+from .widgets import ASSETS, FramedDialog, FramelessWindow, icon, install_button_look, set_icon_theme, set_light_palette, stylesheet
 from . import xchat_import
 from .topicbar import TopicBar, emoji_popup
 from .editors import rows_for
@@ -292,6 +292,7 @@ class MainWindow(FramelessWindow):
         self.setWindowIcon(QIcon(str(ASSETS / "bchat.ico")))
         set_icon_theme(cfg.theme)        # before any button is made: a light theme tints the white icons
         set_light_palette(cfg.theme)
+        install_button_look()
         self.setStyleSheet(stylesheet(cfg.theme))
         self.resize(cfg.win_width, cfg.win_height)
         if cfg.win_x >= 0 and QGuiApplication.screenAt(QPoint(cfg.win_x + 50, cfg.win_y + 10)) is not None:
@@ -596,6 +597,7 @@ class MainWindow(FramelessWindow):
             s.buffer_changed.connect(self._buffer_changed)
             s.users_changed.connect(self._users_changed)
             s.line_added.connect(self.chat.add_line)
+            s.lines_inserted.connect(self.chat.reload)
             s.line_added.connect(self._log_line)
             s.line_added.connect(self._grab_urls)
             s.friends_changed.connect(self._friends_changed)
@@ -1436,6 +1438,75 @@ class MainWindow(FramelessWindow):
         else:
             s.focus_next = lower(name)
         s.send("JOIN", name)
+
+    # --- irc:// links ------------------------------------------------------------------
+
+    def _network_for_host(self, host: str):
+        """(network, session) already known for this server name: open sessions first, then the Network List."""
+        host = host.lower()
+        for s in self.sessions.values():
+            names = {sv.host.lower() for sv in s.net.servers} | {s.server_name.lower()}
+            if host in names:
+                return s.net, s
+        for n in self.cfg.networks:
+            if host in {sv.host.lower() for sv in n.servers}:
+                return n, self.sessions.get(n.name)
+        return None, None
+
+    def open_irc_link(self, url: str):
+        """An irc:// or ircs:// link (from chat or the browser): always asks first, never joins on its own."""
+        from .irclink import IrcLinkDialog, parse_irc_url
+        link = parse_irc_url(url)
+        if link is None:
+            return None
+        net, s = self._network_for_host(link.host)
+        chan = link.channels[0] if link.channels else ""
+        if s is not None and s.state == "connected" and chan:
+            b = s.buffers.get(lower(chan))
+            if b is not None and b.joined:          # already there: just show it
+                self.select_buffer(b)
+                self.bring_to_front()
+                return None
+        nick = (net.nick if net is not None and not net.use_global and net.nick else "") or self.cfg.nick
+        if net is None:
+            name, line = link.host, f"New network: opens its own server tab, connects as {nick}, then joins." if chan else                 f"New network: opens its own server tab and connects as {nick}."
+        elif s is not None and s.state == "connected":
+            name, line = net.name, f"You're connected here: {chan} opens in a new tab." if chan else "You're already connected here."
+        else:
+            name, line = net.name, "In your Network List: connects, then joins." if chan else "In your Network List: connects."
+        d = IrcLinkDialog(self, link, name, line)
+        self.irc_link_dialog = d
+        d.finished.connect(lambda _r: self._irc_link_go(link, net) if d.choice == "join" else None)
+        self.bring_to_front()
+        d.open()
+        return d
+
+    def _irc_link_go(self, link, net) -> None:
+        chan = link.channels[0] if link.channels else ""
+        if net is None:                              # new network: into the Network List, its own server tab
+            name = link.host
+            net = NetworkConfig(name, [Server(link.host, link.port, link.tls)])
+            self.cfg.networks.append(net)
+            config.save(self.cfg, self.cfg_dir)
+        s = self.session_for(net)
+        if s.state == "connected":
+            if chan:
+                s.focus_next = lower(chan)
+                s.send("JOIN", chan, *([link.key] if link.key else []))
+            else:
+                self.select_buffer(s.server_buffer)
+            return
+        if chan:
+            s.join_once.append((chan, link.key))
+        self.connect_network(net)
+
+    def bring_to_front(self) -> None:
+        """For a link from the browser: BChat comes forward, out of the tray or the taskbar if need be."""
+        if self.isMinimized() or not self.isVisible():
+            self._restore_from_tray()
+        else:
+            self.raise_()
+            self.activateWindow()
 
     def url_menu(self, url: str) -> QMenu:
         menu = QMenu(self)

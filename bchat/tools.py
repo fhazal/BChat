@@ -815,7 +815,7 @@ class CharChartWindow(ToolWindow):
             if 127 <= code < 160:      # control codes: nothing to show or send
                 continue
             ch = chr(code)
-            b = QPushButton(ch)
+            b = QPushButton(ch, objectName="compact")
             b.setAutoDefault(False)
             b.setFixedSize(30, 26)
             b.setToolTip(f"{code} (0x{code:02X})")

@@ -208,7 +208,7 @@ def strip_format(text: str) -> str:
     return "".join(s.text for s in parse_format(text))
 
 
-URL_RE = re.compile(r"\b(?:https?://|ftp://|www\.)[^\s<>\"'\x00-\x1f]+", re.I)
+URL_RE = re.compile(r"\b(?:https?://|ftp://|ircs?://|www\.)[^\s<>\"'\x00-\x1f]+", re.I)
 
 
 def split_urls(text: str) -> list[tuple[str, bool]]:
