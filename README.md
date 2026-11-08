@@ -28,6 +28,21 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 
 ---
 
+## 🆕 What's new in 0.2.0
+
+- 🌍 **Popular Networks** in the Network List: 21 well-known networks, each checked for encryption, one click to connect. Your **Favourite Networks** get their own group on top.
+- 📜 **Channel history**: on networks that keep it, you see what was said before you joined, or while you were away.
+- 🔗 **irc:// links** from your browser open in BChat (it asks first).
+- ⭐ **Favourite channels** with *Join on Connect*, and **highlight rules** like mIRC's: words, wildcards, from which nicks or channels, with their own colour and sound.
+- ✍️ **Multi-line input** with `Shift+Enter`, and a paste window that shows what a long paste will send, and how long it takes.
+- 🎵 **/np** shares the song you're playing (off until you turn it on; music only, never videos), and can announce each new song in the channels you pick. **/sysinfo** shares your PC's specs in one line.
+- 👋 An **invite bar** instead of pop-ups, a **Friends** window with `/notify`, rejoin after a kick (optional), and WhoIs when someone opens a private chat.
+- 🖱️ The nick menu gains **Ignore**, **Kick with Reason**, **CTCP** (Ping, Time, Version) and **Slap!**, with a random line from your own list.
+- 🏠 *Settings → Preferences → Network → Local*: how BChat finds your own address, like mIRC.
+- 🎨 Calmer buttons, sharper menu ticks and a lag meter you can actually read.
+
+---
+
 ## 🎨 Seventeen themes
 
 <p align="center">
@@ -220,6 +235,7 @@ The installer is built with [PyInstaller](https://pyinstaller.org) and [Inno Set
 
 ## 🗺️ Roadmap
 
+- 🐞 One-click problem reports: BChat fills in the details, you only press Send
 - 🧭 More of what veterans expect from the big clients, kept out of the newcomer's way
 - 🏷️ Nick list rank icons
 - ✍️ A code-signed installer, so Windows and antivirus programs trust it straight away
