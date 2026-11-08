@@ -110,6 +110,7 @@ def test_about_shows_the_update_status(app, win):
     put(u, up.UPTODATE)
     assert "Up to date" in d.update_status.text()
     put(u, up.AVAILABLE, ENTRY)
+    assert not d.update_icon.isHidden() and not d.update_icon.pixmap().isNull()
     assert "0.1.1 is here" in d.update_status.text() and "Update" in d.update_status.text()
     put(u, up.READY, ENTRY)
     assert "0.1.1 is ready" in d.update_status.text()
@@ -118,6 +119,25 @@ def test_about_shows_the_update_status(app, win):
     d2 = win._about_box()
     d2.update_status.linkActivated.emit("bchat:update")
     assert opened == [1]
+    d.close()
+
+
+def test_about_tick_is_sharp_and_beside_the_words(app, win):
+    """User (TEST25): the About tick looked off. It was a rich-text <img>: a 28 px picture shrunk to 21 px at 150 %
+    without smoothing, sitting on the text's baseline. Now its own label, drawn at the screen's real pixel size."""
+    u = win.updater
+    u.cfg.update_last_check = time.time()
+    put(u, up.UPTODATE)
+    d = win._about_box()
+    assert "<img" not in d.update_status.text()
+    pm = d.update_icon.pixmap()
+    dpr = d.devicePixelRatioF()
+    assert pm.devicePixelRatio() == dpr
+    assert (pm.width(), pm.height()) == (round(14 * dpr), round(14 * dpr))   # drawn 1:1, never rescaled
+    from bchat.updatepage import icon_pixmap
+    for scale in (1.0, 1.25, 1.5, 2.0):
+        p = icon_pixmap("done", "#a6e3a1", 14, scale)
+        assert p.width() == round(14 * scale) and abs(p.deviceIndependentSize().width() - 14) <= 0.5
     d.close()
 
 

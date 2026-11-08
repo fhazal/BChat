@@ -97,12 +97,15 @@ class AboutDialog(FramedDialog):
             grid.addWidget(a, i, 0)
             if i == 0:
                 # right after the version: up to date / new version here / ready, from the same updater as everything else
+                self.update_icon = QLabel()            # own label: sharp at any scale, centred with the words
+                self.update_icon.setContentsMargins(8, 0, 4, 0)
                 self.update_status = QLabel()
                 self.update_status.setTextFormat(Qt.TextFormat.RichText)
                 cell = QHBoxLayout()
                 cell.setSpacing(0)
                 cell.addWidget(b)
-                cell.addWidget(self.update_status)
+                cell.addWidget(self.update_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+                cell.addWidget(self.update_status, 0, Qt.AlignmentFlag.AlignVCenter)
                 cell.addStretch(1)
                 grid.addLayout(cell, i, 1)
             else:
@@ -110,12 +113,13 @@ class AboutDialog(FramedDialog):
             self.values[k] = b
         self.updater = updater
         if updater is not None:
-            from .updatepage import about_status
-            sync = lambda: self.update_status.setText(about_status(updater, theme))
+            sync = lambda: self._show_update(updater, theme)
             updater.changed.connect(sync)
             self.destroyed.connect(lambda *_: _quiet_disconnect(updater.changed, sync))
             sync()
         self.update_status.setVisible(updater is not None)
+        if updater is None:
+            self.update_icon.hide()
         grid.setColumnStretch(1, 1)
         self.body.addLayout(grid)
         self.body.addSpacing(16)
@@ -166,6 +170,16 @@ class AboutDialog(FramedDialog):
         row.addWidget(self.close_btn)
         self.body.addLayout(row)
         self.setFixedWidth(380)
+
+    def _show_update(self, updater, theme) -> None:
+        from .updatepage import about_parts, icon_pixmap
+        parts = about_parts(updater, theme)
+        self.update_status.setText(parts[2] if parts else "")
+        if parts:
+            self.update_icon.setPixmap(icon_pixmap(parts[0], parts[1], 14, self.devicePixelRatioF()))
+        else:
+            self.update_icon.clear()
+        self.update_icon.setVisible(bool(parts))
 
     def text(self) -> str:
         """Everything the window says, for tests and a quick copy."""

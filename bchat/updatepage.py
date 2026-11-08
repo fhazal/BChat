@@ -248,8 +248,10 @@ def updates_page(prefs, lay) -> None:
     lay.addStretch(1)
 
 
-def about_status(u: up.Updater, t) -> str:
-    """The few words after the version in About (rich text, with a small icon)."""
+def about_parts(u: up.Updater, t) -> tuple[str, str, str] | None:
+    """The few words after the version in About: (icon name, colour, rich text), or None when there is nothing to say.
+    The icon is shown by its own label (see AboutDialog), so it is drawn sharp at the screen's scale and centred
+    with the words; a rich-text <img> was shrunk without smoothing and sat on the text's baseline."""
     s = u.state
     v = (u.entry or {}).get("version", "")
     colour = state_colour(t, s)
@@ -266,25 +268,22 @@ def about_status(u: up.Updater, t) -> str:
     elif getattr(u.cfg, "update_last_check", 0):
         words, ico, link = "Up to date", "done", ""
     else:
-        return ""
-    img = _icon_file(ico, colour)
+        return None
     more = f' · <a style="color:{t.check};" href="bchat:update">{link}</a>' if link else ""
-    return f'&nbsp;&nbsp;<img src="{img}" width="14" height="14">&nbsp;<span style="color:{colour};">{words}</span>{more}'
+    return ico, colour, f'<span style="color:{colour};">{words}</span>{more}'
 
 
-_icon_cache: dict = {}
+def about_status(u: up.Updater, t) -> str:
+    """Just the words of about_parts (rich text), "" when there is nothing to say."""
+    parts = about_parts(u, t)
+    return parts[2] if parts else ""
 
 
-def _icon_file(name: str, colour: str) -> str:
-    """A small PNG of the icon in a temp file, for rich text <img> (QLabel can't take a pixmap inline)."""
-    key = (name, colour)
-    if key not in _icon_cache:
-        import tempfile
-        from pathlib import Path
-        path = Path(tempfile.gettempdir()) / f"bchat-icon-{name}-{colour.strip('#')}.png"
-        QPixmap.fromImage(lucide.image(name, colour, 28)).save(str(path))
-        _icon_cache[key] = path.as_posix()
-    return _icon_cache[key]
+def icon_pixmap(name: str, colour: str, size: int, dpr: float) -> QPixmap:
+    """A Lucide icon drawn at the screen's real pixel size, so it stays sharp at 125 and 150 %."""
+    pm = QPixmap.fromImage(lucide.image(name, colour, max(1, round(size * dpr))))
+    pm.setDevicePixelRatio(dpr)
+    return pm
 
 
 def _esc(text: str) -> str:

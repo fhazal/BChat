@@ -1,4 +1,4 @@
-"""The nick list: 19 px rows, XChat's 7x7 status lights near the top of the row, away nicks grey."""
+"""The nick list: 19 px rows, XChat's status lights centred in the row (GTK's cell centring), away nicks grey."""
 from __future__ import annotations
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, QRect, QSize, Qt
@@ -73,6 +73,8 @@ class UserModel(QAbstractListModel):
 class UserDelegate(QStyledItemDelegate):
     ROW = 19
     ICON = 7
+    LEFT = 3   # light's left edge
+    TEXT = 15  # nick's left edge, as XChat
 
     def __init__(self, theme: Theme, parent=None, cfg=None):
         super().__init__(parent)
@@ -95,12 +97,14 @@ class UserDelegate(QStyledItemDelegate):
         dpr = p.device().devicePixelRatioF()
         pm = light_pixmap(icon_name(order, u.prefixes), dpr)
         if pm is not None:
-            # lined up with real screen pixels, or the shine would smear at 125 and 150 %
-            x, y = round((r.x() + 3) * dpr) / dpr, round((r.y() + 3) * dpr) / dpr
+            # XChat 2.8.9 measured at 100 %: GTK centres its 8 px light image in the row, 3 px in from the list edge
+            # (in a 19 px row: 5 down, its top level with the nick's capitals). Lined up with real screen pixels,
+            # or the shine would smear at 125 and 150 %.
+            x, y = round((r.x() + self.LEFT) * dpr) / dpr, round((r.y() + (r.height() - 8) // 2) * dpr) / dpr
             p.drawPixmap(QPointF(x, y), pm)
         col = self.theme.marking_fg if selected else (self.theme.away if u.away else self.theme.text)
         p.setPen(QColor(col))
-        tr = QRect(r.x() + 3 + self.ICON + 7, r.y(), r.width() - 3 - self.ICON - 7, r.height())
+        tr = QRect(r.x() + self.TEXT, r.y(), r.width() - self.TEXT, r.height())
         p.drawText(tr, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, u.nick)
         if self.cfg is not None and self.cfg.ul_hosts and u.host:
             x = p.fontMetrics().horizontalAdvance(u.nick) + 10

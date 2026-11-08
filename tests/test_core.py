@@ -160,6 +160,57 @@ def test_owner_and_admin_count_as_op_for_the_strip():
         assert (order.index(rank) <= order.index("@")) is expect
 
 
+def _nicklist_row(dpr: float, prefixes: str):
+    """One 19 px nick-list row painted at a display scale: (light's top/left, nick's left), in logical px."""
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QColor, QFont, QImage, QPainter
+    from PySide6.QtWidgets import QStyleOptionViewItem
+    from bchat.config import Theme
+    from bchat.session import User
+    from bchat.userlist import UserDelegate, UserModel
+
+    class Buf:
+        class session:
+            prefix_order = "@%+"
+
+        def sorted_users(self):
+            return [User("Belon", prefixes, "")]
+
+    t = Theme()
+    m = UserModel()
+    m.set_buffer(Buf())
+    img = QImage(round(120 * dpr), round(19 * dpr), QImage.Format.Format_RGB32)
+    img.setDevicePixelRatio(dpr)
+    img.fill(QColor("#000000"))
+    p = QPainter(img)
+    p.setFont(QFont("Tahoma", 8))
+    o = QStyleOptionViewItem()
+    o.rect = QRect(0, 0, 120, 19)
+    o.fontMetrics = p.fontMetrics()
+    UserDelegate(t, None).paint(p, o, m.index(0))
+    p.end()
+    lit = lambda x, y: QColor(img.pixel(x, y)).saturation() > 90           # the coloured light, not the grey text
+    ink = lambda x, y: QColor(img.pixel(x, y)).lightness() > 60
+    W, H = img.width(), img.height()
+    light = [(x, y) for y in range(H) for x in range(round(13 * dpr)) if lit(x, y)]
+    text = [x for x in range(round(13 * dpr), W) for y in range(H) if ink(x, y)]
+    top = min(y for _, y in light) / dpr if light else None
+    left = min(x for x, _ in light) / dpr if light else None
+    return top, left, min(text) / dpr
+
+
+def test_nicklist_light_and_nick_sit_where_xchat_puts_them(app):
+    """Measured on the user's live XChat 2.8.9 at 100 % (11-08): in a 19 px row the light's 8 px image is centred
+    (top 5 px down, level with the nick's capitals), 3 px in from the list edge; the nick starts 15 px in.
+    BChat had the light 2 px higher (3 down) and the nick 2 px further right (17)."""
+    top, left, nick = _nicklist_row(1.0, "@")
+    assert 5 <= top <= 6, top                      # the light's soft top row is 5 or its first solid row is 6
+    assert 3 <= left <= 4, left
+    assert 15 <= nick <= 16, nick                  # Tahoma's B has a 1 px side bearing at most
+    t15, l15, n15 = _nicklist_row(1.5, "+")        # the same spot on the user's 150 % screen
+    assert abs(t15 - top) <= 1 and abs(n15 - nick) <= 1
+
+
 def test_every_light_has_the_glass_shading(app):
     from PySide6.QtGui import QColor, QImage
     from bchat.userlist import LIGHT_SIZES
