@@ -12,6 +12,7 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab?logo=python&logoColor=white)
 ![Qt 6](https://img.shields.io/badge/Qt-6%20(PySide6)-41cd52?logo=qt&logoColor=white)
 [![Latest release](https://img.shields.io/github/v/release/fhazal/BChat?label=release&color=f5c2e7)](https://github.com/fhazal/BChat/releases/latest)
+[![VirusTotal: 0/69 for 0.1.0](https://img.shields.io/badge/VirusTotal-0%2F69%20clean-a6e3a1?logo=virustotal&logoColor=white)](https://www.virustotal.com/gui/file/41ed2213a17245b51c6bb0566734ce9766db03c9daa4ff6a53df495e5e50d7f4)
 
 [![Website](https://img.shields.io/badge/Website-bajubesi.org-8b5cf6?style=for-the-badge)](https://bajubesi.org)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20us-ff5e5b?logo=ko-fi&logoColor=white&style=for-the-badge)](https://ko-fi.com/bajubesi)
@@ -44,13 +45,13 @@ Catppuccin **Mocha** (the default), **Macchiato**, **Frappé** and **Latte**, **
 <td width="50%" valign="top">
 
 ### 💬 The XChat you remember
-A network tree with folders and dotted lines, a topic bar, inline chat and a nick list with glass status lights. Detach any tab into its own window, search the text, and keep a marker line where you left off. XChat 2 and XChat-SE users can bring their networks and nick across on first start.
+A network tree with folders and dotted lines, a topic bar, inline chat and a nick list with glass status lights. Detach any tab into its own window, search the text, keep a marker line where you left off, and pick emoji for your messages and topics. XChat 2 and XChat-SE users can bring their networks and nick across on first start.
 
 </td>
 <td width="50%" valign="top">
 
 ### 🌐 Networks and servers
-A Network List with auto-connect and auto-join, SSL/TLS, SASL, NickServ, ZNC bouncers and proxies. Open a quick `/server` tab and save it as a network later; the tree updates straight away.
+A Network List with auto-connect and auto-join, SSL/TLS, SASL, NickServ, ZNC bouncers and proxies. Open a quick `/server` tab and save it as a network later; the tree updates straight away. New to IRC? The welcome screen on first start has you pick a nickname and a network, and you're talking.
 
 </td>
 </tr>
@@ -154,7 +155,7 @@ All of them can be changed in *Settings → Advanced → Keyboard Shortcuts*.
 
 ### Antivirus
 
-Because the installer isn't code-signed yet, some antivirus programs may stop it or the self-update. Either run the installer yourself, or add BChat's install folder as an exception in your antivirus.
+The 0.1.0 installer was checked by [VirusTotal](https://www.virustotal.com/gui/file/41ed2213a17245b51c6bb0566734ce9766db03c9daa4ff6a53df495e5e50d7f4): none of its 69 antivirus engines flagged it. Because the installer isn't code-signed yet, some antivirus programs may still stop it or the self-update. Either run the installer yourself, or add BChat's install folder as an exception in your antivirus.
 
 ---
 
@@ -214,10 +215,9 @@ The installer is built with [PyInstaller](https://pyinstaller.org) and [Inno Set
 
 ## 🗺️ Roadmap
 
-- 🐝 A welcome screen for first-timers: pick a nick, pick a network, start talking
 - 🧭 More of what veterans expect from the big clients, kept out of the newcomer's way
-- 😀 An emoji picker and nick list rank icons
-- ✍️ A code-signed installer
+- 🏷️ Nick list rank icons
+- ✍️ A code-signed installer, so Windows and antivirus programs trust it straight away
 
 ---
 
