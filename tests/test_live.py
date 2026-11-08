@@ -3931,3 +3931,17 @@ def test_slaps_editor_has_one_column_and_saves(live):
     d.new_row(); d.view.currentItem().setText(0, "tickles $nick")
     d.accept()
     assert win.cfg.slaps[-1] == ["tickles $nick"] and len(win.cfg.slaps) == 18
+
+
+def test_problem_report_while_connected_hides_live_names(live):
+    """A report made while connected: every network, channel and nick BChat sees is hidden (found by the button check:
+    win.sessions is a dict, and the first version only worked while disconnected)."""
+    app, srv, win, s = live
+    from bchat import reports
+    b = s.buffers["#skinhead"]
+    win.select_buffer(b)
+    reports.STEPS.add("Network List > Connect")
+    r = reports.build(win, "Crashed", "Oracle kicked me from #skinhead", "Error near Oracle", "")
+    flat = json.dumps(r) if "json" in globals() else __import__("json").dumps(r)
+    assert "Oracle" not in flat and "#skinhead" not in flat and s.net.name not in flat
+    assert "#<chan" in r["open"] and "channel" in r["open"]

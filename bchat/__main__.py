@@ -87,7 +87,18 @@ def main(argv: list[str] | None = None) -> int:
         if sources:
             xchat_import.import_into(cfg, sources)
             config.save(cfg, args.config_dir)
+    # problem reports (0.3.0): crash file, errors inside clicks, freezes, last clicked buttons
+    from . import reports
+    report_dir = args.config_dir / "reports"
+    crash = reports.CrashFile(report_dir)
+    steps = reports.StepWatcher(app)
+    app.installEventFilter(steps)
     win = MainWindow(cfg, args.config_dir)
+    catcher = reports.ErrorCatcher(win)
+    catcher.caught.connect(lambda text, sig: win.offer_report("BChat hit a problem just now.", "Something else", text, sig))
+    watchdog = reports.Watchdog(report_dir, win)
+    watchdog.recovered.connect(lambda secs, stack: win.offer_report(
+        f"BChat stopped responding for {round(secs)} seconds.", "Slow", stack, reports.fingerprint(stack), secs))
     # the window can be hidden in the tray while a tool window closes, and that must not end the program
     app.setQuitOnLastWindowClosed(False)
     win.quit_requested.connect(app.quit)
@@ -115,9 +126,19 @@ def main(argv: list[str] | None = None) -> int:
             win.open_network_list()
         if link:
             win.open_irc_link(link)
+        stuck = reports.leftover_freeze(report_dir)
+        if crash.previous:
+            win.offer_report("BChat closed unexpectedly last time.", "Crashed", crash.previous, reports.fingerprint(crash.previous))
+        elif stuck:
+            win.offer_report("BChat stopped responding last time and was closed.", "Slow", stuck[1], reports.fingerprint(stuck[1]), stuck[0])
+        reports.Sender(win).send_pending()
 
     QTimer.singleShot(0, start)
-    return app.exec()
+    code = app.exec()
+    watchdog.stop()
+    catcher.close()
+    crash.close()
+    return code
 
 
 if __name__ == "__main__":

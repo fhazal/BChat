@@ -93,6 +93,9 @@ class UpdateDialog(FramedDialog):
         self.news.setOpenExternalLinks(True)
         self.news.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         self.news.setStyleSheet(f"background: {win.cfg.theme.bar}; border: 1px solid {win.cfg.theme.border}; padding: 8px;")
+        self.fixed = QLabel()          # 0.3.0: "Fixes your report BR-42" when this update fixes the user's own report
+        self.fixed.setWordWrap(True)
+        self.fixed.setTextFormat(Qt.TextFormat.RichText)
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
         self.bar.setTextVisible(False)
@@ -105,7 +108,7 @@ class UpdateDialog(FramedDialog):
         self.auto = QCheckBox("Download updates by themselves")
         self.auto.setChecked(win.cfg.update_auto_download)
         self.auto.toggled.connect(self._auto_toggled)
-        for w in (self.head, self.info, self.news, self.bar, self.note, self.auto):
+        for w in (self.head, self.info, self.news, self.fixed, self.bar, self.note, self.auto):
             self.body.addWidget(w)
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
@@ -179,6 +182,13 @@ class UpdateDialog(FramedDialog):
             more = f'<br><a style="color: {self.win.cfg.theme.check};" href="{_esc(link)}">Full release notes</a>' if link else ""
             self.news.setText(f"<b>What's new</b>{items}{more}")
         self.news.setVisible(bool(notes or link) and s in (up.AVAILABLE, up.DOWNLOADING, up.READY))
+        from .reports import fixed_for_me
+        mine = fixed_for_me(e, self.win.cfg.my_reports)
+        if mine:
+            ids = ", ".join(_esc(x) for x in mine)
+            self.fixed.setText(f"<span style='color:{self.win.cfg.theme.join}'>✔ <b>Fixes your report{'s' if len(mine) > 1 else ''} {ids}.</b> "
+                               "Thank you for sending it!</span>")
+        self.fixed.setVisible(bool(mine) and s in (up.AVAILABLE, up.DOWNLOADING, up.READY))
         self.bar.setValue(u.progress)
         self.bar.setVisible(s == up.DOWNLOADING)
         self.note.setText("Install Now closes BChat, updates it and opens it again. "

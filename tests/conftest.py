@@ -4,6 +4,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["BCHAT_VAULT"] = "memory"     # tests never touch the real Windows Credential Manager
+os.environ["BCHAT_REPORT_URL"] = "http://127.0.0.1:9/never"   # tests never send a problem report to the real server
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 

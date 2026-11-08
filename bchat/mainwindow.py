@@ -655,6 +655,9 @@ class MainWindow(FramelessWindow):
         from .invitebar import InviteBar
         self.invite_bar = InviteBar(self, body)
         lay.addWidget(self.invite_bar)
+        from .reportwindow import ProblemBar
+        self.report_bar = ProblemBar(self, body)       # after a crash, an error or a freeze (0.3.0)
+        lay.addWidget(self.report_bar)
         lay.addLayout(bottom)
         self.outer.addWidget(body, 1)
 
@@ -750,6 +753,7 @@ class MainWindow(FramelessWindow):
 
         h = m.addMenu("&Help")
         self._act(h, "&Contents", self.open_help, "F1", "help")
+        self._act(h, "Report a &Problem...", lambda: self.report_problem(), "", "report")
         self._act(h, "Check for &Updates...", self.check_updates, "", "refresh")
         self._act(h, "&Support BChat on Ko-fi...", self.open_support, "", "support")
         self._act(h, "&About", self._about, "", "about")
@@ -1365,6 +1369,8 @@ class MainWindow(FramelessWindow):
         if not text:
             return
         self.input.remember(text)
+        from .reports import command_step
+        command_step(text)                    # the command's name only, for a problem report's last steps
         if self.buf is None:
             word = text.split()
             if word[0].lower() in ("/server", "/newserver"):
@@ -2429,6 +2435,14 @@ class MainWindow(FramelessWindow):
         self._sync_tray()
 
     # --- tool windows ---------------------------------------------------------------
+
+    def report_problem(self, kind: str = "", error: str = "", sig: str = "", freeze: float = 0.0) -> None:
+        from .reportwindow import ReportDialog
+        self.report_dialog = ReportDialog(self, kind, error, sig, freeze)
+        self.report_dialog.exec()
+
+    def offer_report(self, headline: str, kind: str = "Crashed", error: str = "", sig: str = "", freeze: float = 0.0) -> None:
+        self.report_bar.show_offer(headline, kind, error, sig, freeze)
 
     def run_command(self, s: Session, text: str) -> None:
         commands.run(self, s, self.buf if self.buf is not None and self.buf.session is s else s.server_buffer, text)

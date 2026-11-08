@@ -398,6 +398,8 @@ class Config:
     ul_buttons: list | None = None
     ul_popup: list | None = None
     slaps: list | None = None       # Slap! lines ([text] rows); None = the built-in list
+    report_offer: bool = True       # offer a problem report after a crash, an error or a freeze
+    my_reports: list = field(default_factory=list)   # reports this PC sent: {id, sig, kind, date}
     text_events: dict = field(default_factory=dict)     # event -> format, only where it differs from the default
     keys: dict = field(default_factory=dict)            # menu command -> key, only where it differs
     key_commands: list = field(default_factory=list)    # [key, command]

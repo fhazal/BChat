@@ -530,6 +530,8 @@ class PreferencesDialog(FramedDialog):
         self.start_win = self._check(lay, "Start with Windows", c.start_with_windows, "Only for the installed BChat")
         self.start_min = self._check(lay, "Start minimized", c.start_minimized)
         self.ask_quit = self._check(lay, "Ask before quitting while connected", c.ask_on_quit)
+        self.report_offer = self._check(lay, "Offer to send a problem report after a crash or freeze", c.report_offer,
+                                        "A bar above the input box asks first; nothing is ever sent by itself. Help > Report a Problem... works any time.")
         self.min_tray = self._check(lay, "Minimize button sends BChat to the tray", c.minimize_to_tray)
         self.close_tray = self._check(lay, "Close button sends BChat to the tray", c.close_to_tray, "To really quit: right-click the tray icon > Quit, or BChat > Quit (Ctrl+Q)")
         lay.addWidget(QLabel("Either tray option shows the tray icon by itself."))
@@ -1107,6 +1109,7 @@ class PreferencesDialog(FramedDialog):
             self.win.set_autostart(self.start_win.isChecked())
         c.start_with_windows, c.start_minimized, c.close_to_tray = self.start_win.isChecked(), self.start_min.isChecked(), self.close_tray.isChecked()
         c.minimize_to_tray, c.ask_on_quit = self.min_tray.isChecked(), self.ask_quit.isChecked()
+        c.report_offer = self.report_offer.isChecked()
         c.update_check, c.update_auto_download, c.update_test_versions = self.upd_check.isChecked(), self.upd_auto.isChecked(), self.upd_test.isChecked()
         if not c.update_check:
             self.win.updater.timer.stop()
