@@ -112,6 +112,10 @@ def test_crash_file_only_counts_real_crashes(tmp_path):
     again = reports.CrashFile(tmp_path)
     assert "Segmentation fault" in again.previous
     again.close()
+    survived = reports.CrashFile(tmp_path)                     # Windows: a caught error still gets written...
+    survived._f.write("Windows fatal exception: access violation" + chr(10)); survived._f.flush()
+    survived.close()                                           # ...but a normal close means it wasn't fatal
+    assert reports.CrashFile(tmp_path).previous == ""
 
 
 def test_error_in_a_click_offers_a_report_once(app, win):

@@ -219,7 +219,8 @@ class ErrorCatcher(QObject):
 
 
 class CrashFile:
-    """faulthandler writes here only on a fatal crash. Read at start: something in it = last run crashed."""
+    """faulthandler writes here on a crash. Read at start: something in it = last run crashed. A normal close
+    empties it (close()), because on Windows faulthandler also logs errors that were caught and survived."""
 
     def __init__(self, folder: Path) -> None:
         self.path = folder / "crash.log"
@@ -244,6 +245,13 @@ class CrashFile:
             except Exception:
                 pass
             self._f = None
+        # BChat closed normally, so nothing in the file was fatal. (On Windows faulthandler also writes errors that
+        # were caught and survived, e.g. an access violation turned into an OSError by ctypes: found by the frozen
+        # check 11-09. Emptying it here means only a run that never closed normally can leave a crash behind.)
+        try:
+            self.path.write_text("", encoding="utf-8")
+        except OSError:
+            pass
 
 
 class Watchdog(QObject):
