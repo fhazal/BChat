@@ -122,7 +122,8 @@ def test_nick_menu_matches_xchat_and_info_panel_fills(live):
     u = b.users[lower("Oracle")]
     menu = win.build_nick_menu(b, [u])
     labels = [a.text() for a in menu.actions() if not a.isSeparator()]
-    assert labels == ["Oracle", "Open Dialog Window", "Send a File", "User Info (WhoIs)", "Add to Friends List", "Operator Actions"]
+    assert labels == ["Oracle", "Open Dialog Window", "Send a File", "User Info (WhoIs)", "Add to Friends List", "Ignore",
+                      "Operator Actions", "CTCP", "Slap!"]          # XChat + mIRC's Ignore, CTCP, Slap!
     before = sum(1 for l in b.lines if l.kind == WHOIS)
     u.server = ""
     menu.actions()[0].menu().aboutToShow.emit()
@@ -505,9 +506,8 @@ def test_network_list_buttons(app, tmp_path, monkeypatch):
     d.list.setCurrentRow(0)
     click("Favor")
     assert win.cfg.networks[0].favorite
-    d.fav.setChecked(True)
-    assert d.list.count() == 1
-    d.fav.setChecked(False)
+    fav = d.list.group("fav")
+    assert fav is not None and fav.childCount() == 1 and fav.child(0).text() == "Aaa"   # its own group on top
 
     # Edit saves what is typed, and the password never shows in the field's text mode
     edits = []
@@ -3869,3 +3869,65 @@ def test_no_history_asked_when_the_server_keeps_none(app, tmp_path):
     wait(app, lambda: False, 300)
     assert not any(x.startswith("CHATHISTORY") for x in srv.received)
     win.close(); srv.stop()
+
+
+def test_nick_menu_ignore_kick_reason_ctcp_and_slap(live, monkeypatch):
+    app, srv, win, s = live
+    from PySide6.QtWidgets import QInputDialog
+    from bchat import slaps
+    b = s.buffers["#skinhead"]
+    win.select_buffer(b)
+    u = b.users[lower("Oracle")]
+    u.host = "oracle@bot.bajubesi.org"
+    act = lambda m, name: next(a for a in m.actions() if a.text() == name)
+    menu = win.build_nick_menu(b, [u])
+    ign = act(menu, "Ignore")
+    assert ign.isCheckable() and not ign.isChecked()
+    ign.trigger()                                                       # tick: ignore by host, every kind
+    assert "*!*@bot.bajubesi.org" in win.cfg.ignores and s.ignored("Oracle!oracle@bot.bajubesi.org", "C")
+    assert act(win.build_nick_menu(b, [u]), "Ignore").isChecked()       # shows ticked next time
+    act(win.build_nick_menu(b, [u]), "Ignore").trigger()                # untick: every mask that hid them goes
+    assert win.cfg.ignores == [] and not s.ignored("Oracle!oracle@bot.bajubesi.org")
+    # Kick with Reason asks XChat's question, empty reason falls back to the part reason
+    asked = []
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda parent, title, label: (asked.append(label), ("go away", True))[1]))
+    act(act(menu, "Operator Actions").menu(), "Kick with Reason...").trigger()
+    assert asked == ["Enter reason to kick Oracle:"] and wait(app, lambda: "KICK #skinhead Oracle :go away" in srv.received)
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a: ("", False)))
+    n = len(srv.received)
+    act(act(menu, "Operator Actions").menu(), "Kick with Reason...").trigger()   # Cancel: nothing sent
+    wait(app, lambda: False, 100)
+    assert not any(l.startswith("KICK") for l in srv.received[n:])
+    # CTCP submenu
+    ctcp = act(menu, "CTCP").menu()
+    assert [a.text() for a in ctcp.actions()] == ["Ping", "Time", "Version"]
+    act(ctcp, "Version").trigger(); act(ctcp, "Time").trigger(); act(ctcp, "Ping").trigger()
+    assert wait(app, lambda: "PRIVMSG Oracle VERSION" in srv.received and "PRIVMSG Oracle TIME" in srv.received
+                and any(l.startswith("PRIVMSG Oracle :PING ") for l in srv.received)), srv.received[-5:]
+    # Slap!: one line from the list, $nick filled in, sent as an action
+    win.cfg.slaps = [["slaps $nick with a %C4red%C trout."]]
+    act(menu, "Slap!").trigger()
+    assert wait(app, lambda: "PRIVMSG #skinhead :ACTION slaps Oracle with a 4red trout." in srv.received), srv.received[-3:]
+    menu.deleteLater()
+    # two nicks: no Slap! (never a slap storm)
+    two = [u, next(x for x in b.users.values() if x is not u)]
+    assert "Slap!" not in [a.text() for a in win.build_nick_menu(b, two).actions()]
+
+
+def test_slap_lines_render_and_default_list():
+    from bchat import slaps
+    assert len(slaps.DEFAULT_SLAPS) == 17 and all("$nick" in l for l in slaps.DEFAULT_SLAPS)
+    trout = slaps.render(slaps.DEFAULT_SLAPS[0], "Belon")
+    assert trout == "slaps Belon with a large, smelly, 4r7a8i9n11b6o13w trout."
+    assert slaps.render("/me pokes $nick", "X") == "pokes X"              # a pasted /me is not sent twice
+    assert slaps.lines_of([["  "], ["a $nick"]]) == ["a $nick"] and slaps.pick([], "X") == ""
+
+
+def test_slaps_editor_has_one_column_and_saves(live):
+    app, srv, win, s = live
+    from bchat.editors import EditListDialog
+    d = EditListDialog(win, "slaps")
+    assert d.view.columnCount() == 1 and d.view.topLevelItemCount() == 17
+    d.new_row(); d.view.currentItem().setText(0, "tickles $nick")
+    d.accept()
+    assert win.cfg.slaps[-1] == ["tickles $nick"] and len(win.cfg.slaps) == 18

@@ -324,6 +324,7 @@ class Config:
     local_lookup: str = "server"   # normal (this PC) | server (USERIP/USERHOST) | website
     local_site: str = "icanhazip.com"
     local_host: str = ""           # typed host name, used to find the IP
+    netlist_open: dict = field(default_factory=dict)   # Network List groups folded open: "mine", "popular"
     # General
     announce_away: bool = False
     away_once: bool = True
@@ -396,6 +397,7 @@ class Config:
     dlg_buttons: list | None = None
     ul_buttons: list | None = None
     ul_popup: list | None = None
+    slaps: list | None = None       # Slap! lines ([text] rows); None = the built-in list
     text_events: dict = field(default_factory=dict)     # event -> format, only where it differs from the default
     keys: dict = field(default_factory=dict)            # menu command -> key, only where it differs
     key_commands: list = field(default_factory=list)    # [key, command]

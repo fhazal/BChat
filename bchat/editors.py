@@ -26,7 +26,13 @@ def rows_for(cfg, field: str) -> list[list[str]]:
     if value is not None:
         return value
     return {"user_commands": default_commands, "dlg_buttons": lambda: DIALOG_BUTTONS, "ul_buttons": lambda: USERLIST_BUTTONS,
-            "ctcp_replies": lambda: CTCP_REPLIES, "auto_replace": lambda: AUTO_REPLACE}.get(field, list)()
+            "ctcp_replies": lambda: CTCP_REPLIES, "auto_replace": lambda: AUTO_REPLACE,
+            "slaps": _default_slaps}.get(field, list)()
+
+
+def _default_slaps() -> list[list[str]]:
+    from .slaps import DEFAULT_SLAPS
+    return [[line] for line in DEFAULT_SLAPS]
 
 
 NICK_HELP = ("%a all selected nicks\n%s the selected nick\n%c current channel\n%n your nick\n%e network\n"
@@ -49,6 +55,10 @@ EDITORS = {
     "popup": ("Userlist Popup", "ul_popup", ("Name", "Command"),
               "Extra items at the bottom of the nick right-click menu.\n" + NICK_HELP +
               "\n\nName SEP makes a separator. Name SUB with the title as its command starts a submenu, ENDSUB ends it."),
+    "slaps": ("Slaps", "slaps", ("Slap",),
+              "Right-click a nick > Slap! sends one of these at random, as an action (/me) in the channel.\n"
+              "$nick the person you slap\n%B bold, %U underline, %O reset\n%C colour: %C4 red, %C7 orange, %C8 yellow, "
+              "%C9 green, %C11 cyan, %C6 purple, %C13 pink; %C alone ends the colour"),
 }
 
 
@@ -70,10 +80,12 @@ class EditListDialog(FramedDialog):
         self.view = QTreeWidget()
         self.view.setHeaderLabels(list(columns))
         self.view.setRootIsDecorated(False)
-        self.view.setColumnWidth(0, 170)
+        self.cols = len(columns)
+        if self.cols > 1:
+            self.view.setColumnWidth(0, 170)
         self.body.addWidget(self.view, 1)
-        for name, cmd in rows_for(win.cfg, self.field):
-            self._add_row(name, cmd)
+        for row_ in rows_for(win.cfg, self.field):
+            self._add_row(*row_[:self.cols])
         row = QHBoxLayout()
         self.up_btn = button("Up", lambda: self.move(-1))
         self.down_btn = button("Down", lambda: self.move(1))
@@ -89,14 +101,14 @@ class EditListDialog(FramedDialog):
         row.addWidget(self.save_btn)
         self.body.addLayout(row)
 
-    def _add_row(self, name: str, cmd: str) -> QTreeWidgetItem:
-        it = QTreeWidgetItem([name, cmd])
+    def _add_row(self, name: str, cmd: str = "") -> QTreeWidgetItem:
+        it = QTreeWidgetItem([name, cmd][:self.cols])
         it.setFlags(it.flags() | Qt.ItemFlag.ItemIsEditable)
         self.view.addTopLevelItem(it)
         return it
 
     def new_row(self) -> None:
-        it = self._add_row("NEW", "EDIT ME")
+        it = self._add_row("EDIT ME") if self.cols == 1 else self._add_row("NEW", "EDIT ME")
         self.view.setCurrentItem(it)
         self.view.editItem(it, 0)
 
@@ -124,7 +136,7 @@ class EditListDialog(FramedDialog):
         for i in range(self.view.topLevelItemCount()):
             it = self.view.topLevelItem(i)
             if it.text(0).strip():
-                out.append([it.text(0).strip(), it.text(1).strip()])
+                out.append([it.text(c).strip() for c in range(self.cols)])
         return out
 
     def accept(self) -> None:

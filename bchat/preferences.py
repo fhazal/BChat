@@ -720,7 +720,8 @@ class PreferencesDialog(FramedDialog):
         g.setVerticalSpacing(8)
         d.net = QComboBox()
         names = ["Every network"]
-        for n in [s.net.name for s in getattr(self.win, "sessions", {}).values()] + [n.name for n in self.cfg.networks]:
+        live = [s.net.name for s in getattr(self.win, "sessions", {}).values() if s.state == "connected"]
+        for n in live or [n.name for n in self.cfg.networks if n.servers]:   # connected ones; saved ones only if none
             if n and n not in names:
                 names.append(n)
         d.net.addItems(names)

@@ -1,9 +1,10 @@
 """XChat's Network List dialog and its Edit window."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-                               QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout)
+                               QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout)
 
 from . import config
 from .config import NetworkConfig, Server
@@ -117,12 +118,55 @@ class NetworkEditDialog(FramedDialog):
         super().accept()
 
 
+class NetItem(QTreeWidgetItem):
+    """A row of the Network List; text() without a column, like the old list's items."""
+    def text(self, column: int = 0) -> str:
+        return super().text(column)
+
+    def setText(self, *args) -> None:
+        super().setText(*(args if len(args) == 2 else (0, args[0])))
+
+
+class NetTree(QTreeWidget):
+    """Favourite Networks, Popular Networks and My Networks in one box. count/item/setCurrentRow look only at
+    your own networks (favourites + the rest) in cfg.networks order, as the old flat list did, so row numbers
+    still match cfg.networks."""
+    order: list = []
+
+    def group(self, key: str):
+        for i in range(self.topLevelItemCount()):
+            g = self.topLevelItem(i)
+            if g.data(0, Qt.ItemDataRole.UserRole + 1) == key:
+                return g
+        return None
+
+    def mine(self) -> list[NetItem]:
+        rows = [g.child(i) for g in (self.group("fav"), self.group("mine")) if g is not None for i in range(g.childCount())]
+        ids = {id(n): i for i, n in enumerate(self.order)}
+        return sorted(rows, key=lambda it: ids.get(id(it.data(0, Qt.ItemDataRole.UserRole)), len(ids)))
+
+    def count(self) -> int:
+        return len(self.mine())
+
+    def item(self, row: int):
+        m = self.mine()
+        return m[row] if 0 <= row < len(m) else None
+
+    def setCurrentRow(self, row: int) -> None:
+        it = self.item(row)
+        if it is not None:
+            self.setCurrentItem(it)
+
+    def editItem(self, item, column: int = 0) -> None:
+        super().editItem(item, column)
+
+
 class NetworkListDialog(FramedDialog):
     def __init__(self, win):
         super().__init__("BChat: Network List", win)
         self.win = win
         self.cfg = win.cfg
-        self.resize(340, 470)
+        self.resize(470, 620)       # room for the popular networks and their notes
         self.body.addWidget(self._heading("User Information"))
         form = QFormLayout()
         form.setContentsMargins(8, 0, 0, 0)
@@ -137,30 +181,39 @@ class NetworkListDialog(FramedDialog):
         self.body.addLayout(form)
         self.body.addWidget(self._heading("Networks"))
         mid = QHBoxLayout()
-        self.list = QListWidget(self)
-        self.list.itemDoubleClicked.connect(lambda _: self._connect())
+        self.list = NetTree(self)
+        self.list.setHeaderHidden(True)
+        self.list.setColumnCount(2)
+        self.list.setIconSize(QSize(16, 16))
+        self.list.setIndentation(14)
+        self.list.header().setStretchLastSection(True)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.list.itemDoubleClicked.connect(lambda it, _c=0: self._connect() if it.parent() is not None else None)
+        self.list.currentItemChanged.connect(lambda *_: self._buttons())
+        self.list.itemExpanded.connect(lambda it: self._group_open(it, True))
+        self.list.itemCollapsed.connect(lambda it: self._group_open(it, False))
         # XChat: click the selected name (or F2) to rename it
         self.list.setEditTriggers(QAbstractItemView.EditTrigger.SelectedClicked | QAbstractItemView.EditTrigger.EditKeyPressed)
         self.list.itemChanged.connect(self._renamed)
         mid.addWidget(self.list, 1)
         buttons = QVBoxLayout()
         buttons.setSpacing(5)
+        self.btn: dict[str, QPushButton] = {}
         for text, ico, slot in (("&Add", "add", self._add), ("&Remove", "remove", self._remove), ("&Edit...", "", self._edit),
                                 ("&Sort", "", self._sort), ("&Favor", "", self._favor)):
             b = QPushButton(icon(ico), text, self) if ico else QPushButton(text, self)
             b.setAutoDefault(False)
             b.clicked.connect(slot)
             buttons.addWidget(b)
+            self.btn[text.replace("&", "")] = b
         buttons.addStretch(1)
         mid.addLayout(buttons)
         self.body.addLayout(mid, 1)
         opts = QHBoxLayout()
         self.skip = QCheckBox("Skip network list on startup", self)
         self.skip.setChecked(self.cfg.skip_network_list)
-        self.fav = QCheckBox("Show favorites only", self)
-        self.fav.toggled.connect(self._fill)
-        opts.addWidget(self.skip)
-        opts.addWidget(self.fav)
+        opts.addWidget(self.skip)          # no "Show favorites only": Favourite Networks is its own group now (fold the rest)
         self.body.addLayout(opts)
         line = QFrame(self)
         line.setFrameShape(QFrame.Shape.HLine)
@@ -183,37 +236,118 @@ class NetworkListDialog(FramedDialog):
         lab = QLabel(f"<b>{text}</b>")
         return lab
 
+    def _shield(self, kind: str) -> QIcon:
+        from . import lucide
+        t = self.cfg.theme
+        name, col = {"ok": ("shield-check", t.join), "ask": ("shield-alert", t.palette[7])}.get(kind, ("shield-alert", t.muted))
+        pm = QPixmap.fromImage(lucide.image(name, col, 32))
+        pm.setDevicePixelRatio(2.0)
+        return QIcon(pm)
+
+    def _star(self) -> QIcon:
+        """Favourite networks: Lucide's star in the theme's yellow (the same star as Favourite Channels)."""
+        from . import lucide
+        pm = QPixmap.fromImage(lucide.image("star", self.cfg.theme.palette[8], 32))
+        pm.setDevicePixelRatio(2.0)
+        return QIcon(pm)
+
+    @staticmethod
+    def _blank() -> QIcon:
+        pm = QPixmap(32, 32)
+        pm.fill(QColor(0, 0, 0, 0))
+        pm.setDevicePixelRatio(2.0)
+        return QIcon(pm)
+
+    def _group(self, text: str, key: str) -> QTreeWidgetItem:
+        g = QTreeWidgetItem([text])
+        f = QFont(self.list.font())
+        f.setBold(True)
+        g.setFont(0, f)
+        g.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        g.setData(0, Qt.ItemDataRole.UserRole + 1, key)
+        self.list.addTopLevelItem(g)
+        g.setExpanded(self.cfg.netlist_open.get(key, True))
+        return g
+
+    def _group_open(self, it, on: bool) -> None:
+        key = it.data(0, Qt.ItemDataRole.UserRole + 1)
+        if key and not getattr(self, "_filling", False):
+            self.cfg.netlist_open[key] = on
+
     def _fill(self, *_):
+        from .popular import POPULAR, TLS_TIP, find_saved
         cur = self._current()
+        cur_pop = self._popular()
+        self._filling = True
+        self.list.blockSignals(True)
         self.list.clear()
+        muted = QColor(self.cfg.theme.muted)
+        self.list.order = list(self.cfg.networks)
+        # Favourite Networks on top (only when there is one), then Popular Networks, then My Networks
+        favs = self._group("Favourite Networks", "fav") if any(n.favorite for n in self.cfg.networks) else None
+        pop = self._group("Popular Networks", "popular")
+        mine = self._group("My Networks", "mine")
         for n in self.cfg.networks:
-            if self.fav.isChecked() and not n.favorite:
+            parent = favs if n.favorite else mine
+            if parent is None:
                 continue
-            it = QListWidgetItem(("* " if n.favorite else "") + n.name)
-            it.setData(Qt.ItemDataRole.UserRole, n)
+            it = NetItem([n.name, n.servers[0].host if n.servers else ""])
+            it.setIcon(0, self._star() if n.favorite else self._blank())
+            if n.favorite:
+                it.setToolTip(0, "Favourite: Favor moves it back to My Networks")
+            it.setData(0, Qt.ItemDataRole.UserRole, n)
+            it.setForeground(1, muted)
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsEditable)
-            self.list.addItem(it)
+            parent.addChild(it)
             if n is cur:
                 self.list.setCurrentItem(it)
+        if pop is not None:
+            for p in POPULAR:
+                it = NetItem([p.name, p.about])
+                it.setIcon(0, self._shield(p.tls))
+                it.setForeground(1, muted)
+                it.setData(0, Qt.ItemDataRole.UserRole + 2, p)
+                saved = find_saved(self.cfg, p)
+                it.setToolTip(0, f"{p.host}:{p.port} · {TLS_TIP[p.tls]}" + (f" · in My Networks as {saved.name}" if saved else ""))
+                it.setToolTip(1, it.toolTip(0))
+                it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                pop.addChild(it)
+                if p == cur_pop:
+                    self.list.setCurrentItem(it)
+        self.list.resizeColumnToContents(0)
+        self.list.blockSignals(False)
+        self._filling = False
         if self.list.currentItem() is None and self.list.count():
             self.list.setCurrentRow(0)
+        self._buttons()
 
-    def _renamed(self, it: QListWidgetItem) -> None:
-        n = it.data(Qt.ItemDataRole.UserRole)
-        if n is None:
+    def _popular(self):
+        lst = getattr(self, "list", None)
+        it = lst.currentItem() if lst is not None else None
+        return it.data(0, Qt.ItemDataRole.UserRole + 2) if it is not None else None
+
+    def _buttons(self) -> None:
+        mine = self._current() is not None
+        for name in ("Remove", "Edit...", "Favor"):
+            if name in self.btn:
+                self.btn[name].setEnabled(mine)
+
+    def _renamed(self, it, _col: int = 0) -> None:
+        n = it.data(0, Qt.ItemDataRole.UserRole)
+        if n is None or getattr(self, "_filling", False):
             return
         text = it.text()
         if n.favorite and text.startswith("* "):
             text = text[2:]
         self.win.rename_network(n, text)
         self.list.blockSignals(True)
-        it.setText(("* " if n.favorite else "") + n.name)   # taken or empty names snap back
+        it.setText(0, n.name)   # taken or empty names snap back
         self.list.blockSignals(False)
 
     def _current(self) -> NetworkConfig | None:
         lst = getattr(self, "list", None)
         it = lst.currentItem() if lst is not None else None
-        return it.data(Qt.ItemDataRole.UserRole) if it else None
+        return it.data(0, Qt.ItemDataRole.UserRole) if it is not None else None
 
     def _store(self) -> None:
         c = self.cfg
@@ -259,6 +393,10 @@ class NetworkListDialog(FramedDialog):
 
     def _connect(self) -> None:
         n = self._current()
+        p = self._popular()
+        if n is None and p is not None:               # a popular network: copied into My Networks, then connect
+            from .popular import add
+            n = add(self.cfg, p)
         if n is None:
             return
         self._store()

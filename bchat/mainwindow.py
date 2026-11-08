@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import fnmatch
 import json
 import re
 import time
@@ -727,7 +728,7 @@ class MainWindow(FramelessWindow):
         self._act(st, "&Preferences", self.open_preferences, "", "preferences")
         adv = st.addMenu(icon("justify"), "Advanced")
         for name, key in (("Auto Replace...", "replace"), ("CTCP Replies...", "ctcp"), ("Dialog Buttons...", "dialog"),
-                          ("Keyboard Shortcuts...", "keys"), ("Text Events...", "events"), ("URL Handlers...", "url"),
+                          ("Keyboard Shortcuts...", "keys"), ("Slaps...", "slaps"), ("Text Events...", "events"), ("URL Handlers...", "url"),
                           ("User Commands...", "commands"), ("Userlist Buttons...", "ulbuttons"), ("Userlist Popup...", "popup")):
             self._act(adv, name, lambda _=False, k=key: self.open_editor(k))
 
@@ -1453,6 +1454,11 @@ class MainWindow(FramelessWindow):
         menu.addAction(icon("save"), "Send a File", lambda: self.send_file_dialog(s, nicks))
         menu.addAction(icon("info"), "User Info (WhoIs)", lambda: [s.whois(n) for n in nicks])
         menu.addAction(icon("add"), "Add to Friends List", lambda: self.ask_friend(nicks[0] if len(nicks) == 1 else " ".join(nicks)))
+        ign = menu.addAction("Ignore")                 # mIRC's Control > Ignore / Unignore as one tick
+        ign.setCheckable(True)
+        ign.setChecked(all(self._is_ignored(s, u) for u in users))
+        ign.toggled.connect(lambda on: self.ignore_users(s, users, on))
+        menu.addSeparator()
         ops = menu.addMenu("Operator Actions")
         ops.addAction("Give Ops", lambda: s.set_mode_for(b, "+o", nicks))
         ops.addAction("Take Ops", lambda: s.set_mode_for(b, "-o", nicks))
@@ -1460,6 +1466,8 @@ class MainWindow(FramelessWindow):
         ops.addAction("Give Voice", lambda: s.set_mode_for(b, "+v", nicks))
         ops.addAction("Take Voice", lambda: s.set_mode_for(b, "-v", nicks))
         ops.addSeparator()
+        ops.addAction("Kick", lambda: self._kick(b, nicks))
+        ops.addAction("Kick with Reason...", lambda: self.kick_with_reason(b, nicks))
         kb = ops.addMenu("Kick/Ban")
         kb.addAction("Kick", lambda: self._kick(b, nicks))
         kb.addAction("Ban", lambda: [s.ban(b, n, 0) for n in nicks])
@@ -1470,8 +1478,47 @@ class MainWindow(FramelessWindow):
         kb.addSeparator()
         for i, mask in enumerate(masks):
             kb.addAction(f"KickBan {mask}", lambda i=i: [s.ban(b, n, i, kick=True) for n in nicks])
+        ctcp = menu.addMenu("CTCP")                     # mIRC's CTCP menu; the answers show in the current tab
+        ctcp.addAction("Ping", lambda: [self._run_with(f"ping {n}") for n in nicks])
+        ctcp.addAction("Time", lambda: [self._run_with(f"ctcp {n} TIME") for n in nicks])
+        ctcp.addAction("Version", lambda: [self._run_with(f"ctcp {n} VERSION") for n in nicks])
+        if len(users) == 1 and b.kind == CHANNEL:      # one nick only: never ten slaps at once
+            menu.addSeparator()
+            menu.addAction("Slap!", lambda: self.slap(b, one.nick))
         self._add_popup_items(menu, nicks)
         return menu
+
+    @staticmethod
+    def _prefix(u: User) -> str:
+        return f"{u.nick}!{u.host}" if "@" in u.host else f"{u.nick}!*@*"
+
+    def _is_ignored(self, s: Session, u: User) -> bool:
+        return s.ignored(self._prefix(u))
+
+    def ignore_users(self, s: Session, users: list[User], on: bool) -> None:
+        """Ignore tick: on = /ignore *!*@host ALL (nick!*@* while the host is unknown); off = /unignore every mask that hides them."""
+        for u in users:
+            if on:
+                host = u.host.partition("@")[2]
+                self._run_with(f"ignore {'*!*@' + host if host else u.nick + '!*@*'} ALL")
+            else:
+                pre = lower(self._prefix(u))
+                for mask in [m for m in s.cfg.ignores if fnmatch.fnmatchcase(pre, lower(m)) and "U" not in s.cfg.ignore_kinds.get(m, "")]:
+                    self._run_with(f"unignore {mask}")
+        config.save(self.cfg, self.cfg_dir)
+
+    def kick_with_reason(self, b: Buffer, nicks: list[str]) -> None:
+        who = nicks[0] if len(nicks) == 1 else f"{len(nicks)} nicks"
+        reason, ok = QInputDialog.getText(self, "Kick", f"Enter reason to kick {who}:")   # XChat's own question
+        if ok:
+            for n in nicks:
+                b.session.send("KICK", b.name, n, reason.strip() or self.cfg.part_reason)
+
+    def slap(self, b: Buffer, nick: str) -> None:
+        from . import slaps
+        line = slaps.pick(slaps.lines_of(rows_for(self.cfg, "slaps")), nick)
+        if line:
+            b.session.action(b.name, line)
 
     def _info_panel(self, head: QMenu, s: Session, b: Buffer, u: User) -> None:
         """XChat's nick submenu: click a row to copy it. Text comes from the network, so it is always shown as plain text."""

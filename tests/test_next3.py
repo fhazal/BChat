@@ -249,6 +249,7 @@ def test_favourites_window_add_tick_join(app, tmp_path):
 def test_now_playing_add_picks_network_and_channel(app, tmp_path):
     from bchat.preferences import PreferencesDialog
     srv, win, s, b = live(app, tmp_path, autojoin="#skinhead,#chat", np_enabled=True)
+    win.cfg.networks.append(NetworkConfig("SavedOnly", [Server("irc.example.org", 6697, True)]))   # saved, not connected
     d = PreferencesDialog(win, "Now Playing")
     d.np_ann_add.click()
     a = d.np_add_dialog
@@ -360,3 +361,73 @@ def test_local_page_moves_the_fields_and_warns_on_home_addresses(app, tmp_path):
     d = PreferencesDialog(win, "File transfers")
     assert not hasattr(d, "dcc_from_server")
     win.close()
+
+
+# --- Network List: popular networks ------------------------------------------------------------
+
+def test_popular_networks_list_is_checked_and_bajubesi_first():
+    from bchat.popular import POPULAR
+    assert POPULAR[0].name == "BajuBesi Community" and POPULAR[0].autojoin == "#BChat,#chat"
+    assert all(p.tls in ("ok", "ask", "none") for p in POPULAR)
+    assert all((p.port == 6697) == p.ssl for p in POPULAR)                    # no encryption -> plain 6667
+    assert "freenode" not in {p.name.lower() for p in POPULAR}
+    assert len({p.name for p in POPULAR}) == len(POPULAR)
+
+
+def test_network_list_shows_popular_under_mine_and_connect_copies_once(app, tmp_path, monkeypatch):
+    from bchat.networklist import NetworkListDialog
+    win = MainWindow(Config(nick="T", networks=[NetworkConfig("Mine", [Server("irc.mine.org", 6697, True)]),
+                                                NetworkConfig("MyLibera", [Server("irc.libera.chat", 6697, True)])],
+                            skip_network_list=True, welcome_done=True), tmp_path)
+    win.skip_quit_prompt = True
+    connected = []
+    monkeypatch.setattr(win, "connect_network", lambda n: connected.append(n))    # never the real networks
+    d = NetworkListDialog(win)
+    d.show()
+    groups = [d.list.topLevelItem(i).text(0) for i in range(d.list.topLevelItemCount())]
+    assert groups == ["Popular Networks", "My Networks"]          # no favourite yet: no empty group
+    assert d.list.count() == 2 and d.list.item(0).text() == "Mine"            # rows still count only yours
+    pop = d.list.group("popular")
+    first = pop.child(0)
+    assert first.text(0) == "BajuBesi Community" and "irc.bajubesi.org:6697" in first.toolTip(0)
+    d.list.setCurrentItem(first)
+    assert not d.btn["Remove"].isEnabled() and not d.btn["Edit..."].isEnabled()  # yours only
+    d._connect()
+    n = win.cfg.networks[-1]
+    assert connected == [n] and (n.name, n.servers[0].host, n.servers[0].port, n.servers[0].ssl, n.autojoin) == (
+        "BajuBesi Community", "irc.bajubesi.org", 6697, True, "#BChat,#chat")
+    d = NetworkListDialog(win); d.show()
+    pop = d.list.group("popular")
+    libera = next(pop.child(i) for i in range(pop.childCount()) if pop.child(i).text(0) == "Libera.Chat")
+    assert "in My Networks as MyLibera" in libera.toolTip(0)
+    d.list.setCurrentItem(libera)
+    d._connect()
+    assert connected[-1].name == "MyLibera" and len(win.cfg.networks) == 3     # your own copy, not a second one
+    d = NetworkListDialog(win); d.show()
+    assert not hasattr(d, "fav")                                              # "Show favorites only" is gone (zen)
+    d.list.group("popular").setExpanded(False)
+    assert win.cfg.netlist_open == {"popular": False}
+    d.reject()
+    d = NetworkListDialog(win)
+    assert not d.list.group("popular").isExpanded()                            # folding is remembered
+    d.reject(); win.close()
+
+
+def test_network_list_favourites_get_their_own_group_on_top(app, tmp_path, monkeypatch):
+    from bchat.networklist import NetworkListDialog
+    nets = [NetworkConfig(n, [Server("irc.%s.org" % n.lower(), 6697, True)]) for n in ("Alpha", "Beta", "Gamma")]
+    win = MainWindow(Config(nick="T", networks=nets, skip_network_list=True, welcome_done=True), tmp_path)
+    win.skip_quit_prompt = True
+    monkeypatch.setattr(win, "connect_network", lambda n: None)
+    d = NetworkListDialog(win); d.show()
+    names = lambda key: [d.list.group(key).child(i).text(0) for i in range(d.list.group(key).childCount())] if d.list.group(key) else None
+    tops = lambda: [d.list.topLevelItem(i).text(0) for i in range(d.list.topLevelItemCount())]
+    assert d.list.group("fav") is None
+    d.list.setCurrentRow(2); d._favor()                                          # Gamma moves up
+    assert tops() == ["Favourite Networks", "Popular Networks", "My Networks"]
+    assert names("fav") == ["Gamma"] and names("mine") == ["Alpha", "Beta"]      # listed once, not twice
+    assert d._current() is nets[2]                                              # still selected after the move
+    assert [d.list.item(i).text() for i in range(d.list.count())] == ["Alpha", "Beta", "Gamma"]   # rows = cfg.networks
+    d.list.setCurrentRow(2); d._favor()                                          # and back down; empty group goes away
+    assert d.list.group("fav") is None and names("mine") == ["Alpha", "Beta", "Gamma"]
+    d.reject(); win.close()
