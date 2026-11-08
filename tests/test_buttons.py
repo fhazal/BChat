@@ -64,3 +64,35 @@ def test_button_look_is_round_and_soft_in_dark_and_light():
         fill = t.popup if name.endswith("Mocha") else t.panel
         assert f"QPushButton {{ background: {fill};" in sheet
         assert "QPushButton#modebtn" in sheet and "QPushButton#ulbtn" in sheet and "QPushButton#compact" in sheet
+
+
+def test_menu_lines_show_in_every_theme():
+    from PySide6.QtGui import QColor
+    from bchat.config import THEME_NAMES
+    for name in THEME_NAMES:
+        t = make_theme(name)
+        assert QColor(t.thumb_hover) != QColor(t.popup), name                # the line differs from the menu
+        assert f"QMenu::separator {{ height: 0px; border-top: 1px solid {t.thumb_hover};" in stylesheet(t)
+
+
+def test_tab_menu_has_an_xchat_title_that_closes_the_menu(app, tmp_path):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QLabel, QWidgetAction
+    from bchat.config import NetworkConfig, Server
+    from bchat.session import CHANNEL
+    net = NetworkConfig("SkinIRC", [Server("127.0.0.1", 1, False)])
+    win = MainWindow(Config(nick="T", networks=[net], skip_network_list=True, welcome_done=True), tmp_path)
+    win.skip_quit_prompt = True
+    b = win.session_for(net).buffer("#skinhead"); b.kind = CHANNEL
+    menu = win._switcher_menu(b)
+    first = menu.actions()[0]
+    assert isinstance(first, QWidgetAction) and first.text() == "#skinhead"
+    lab = first.defaultWidget()
+    assert isinstance(lab, QLabel) and lab.objectName() == "menutitle" and lab.text() == "#skinhead"
+    menu.popup(QPoint(-2500, 100)); spin(app, 0.2)
+    assert menu.isVisible()
+    QTest.mouseClick(lab, Qt.MouseButton.LeftButton)
+    spin(app, 0.1)
+    assert not menu.isVisible()                                               # like XChat: closes, does nothing else
+    win.close()

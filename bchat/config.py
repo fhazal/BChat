@@ -318,6 +318,8 @@ class Config:
     announce_away: bool = False
     away_once: bool = True
     auto_unaway: bool = False
+    rejoin_on_kick: bool = False       # once, after 3 seconds
+    whois_on_query: bool = True        # who someone is, at the top of a private chat they open
     # Logging
     text_replay: bool = False      # show the last session's scrollback when a tab opens
     log_all: bool = False
@@ -393,6 +395,15 @@ class Config:
     ignore_kinds: dict = field(default_factory=dict)   # mask -> letters of C P N T D I U; missing means C P N T D I
     friends: list[str] = field(default_factory=list)
     friend_nets: dict = field(default_factory=dict)    # nick -> "net1,net2", empty for all
+    sysinfo_line: str = ""             # /sysinfo template; empty = sysinfo.DEFAULT_LINE
+    np_enabled: bool = False           # /np shares nothing until the user turns it on
+    np_music_only: bool = True         # skip videos and anything Windows doesn't call music
+    np_ask: bool = True                # show the line before it's sent
+    np_line: str = ""                  # /np template; empty = nowplaying.DEFAULT_LINE
+    np_players: dict = field(default_factory=dict)     # player id -> allowed (browsers start False)
+    np_names: dict = field(default_factory=dict)       # player id -> name shown in Preferences
+    np_announce: bool = False          # post each new song on its own, only in np_announce_in
+    np_announce_in: str = ""           # "#chat, #skinhead": the only channels announce posts to
     whois_on_notify: bool = False
     notify_timeout: int = 120
     url_grabber: bool = True

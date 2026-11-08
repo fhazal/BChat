@@ -6,7 +6,7 @@ import time
 
 from .protocol import lower, strip_format
 from .config import NetworkConfig, Server
-from .session import CHANNEL, ERROR, INFO, Buffer, Session
+from .session import CHANNEL, ERROR, INFO, QUERY, Buffer, Session
 
 
 # XChat's default user commands (src/common/xchat.c). &2 = the rest from word 2, %2 = word 2, %c channel, %n own nick
@@ -24,8 +24,8 @@ COMMAND_NAMES = sorted(set(ALIASES) | {
     "allchan", "allserv", "away", "back", "ban", "clear", "close", "ctcp", "cycle", "dehop", "deop", "devoice", "discon",
     "chat", "dcc", "load", "reload", "send", "unload", "disconnect", "echo", "exec", "flushq", "ghost", "help", "hop", "id", "ignore", "invite", "j", "join", "kick", "kickban",
     "lastlog", "leave", "list", "mdeop", "me", "mkick", "mode", "mop", "msg", "names", "nctcp", "newserver", "nick",
-    "notice", "op", "part", "ping", "query", "quit", "quote", "raw", "reconnect", "say", "server", "topic", "unban",
-    "unignore", "url", "voice", "wallchan", "wallchop", "whois", "wi",
+    "notice", "notify", "np", "op", "part", "ping", "query", "quit", "quote", "raw", "reconnect", "say", "server", "topic", "unban",
+    "sysinfo", "unignore", "url", "voice", "wallchan", "wallchop", "whois", "wi",
 })
 
 
@@ -53,6 +53,9 @@ HELP = {
     "ghost": "GHOST <nick> <password>: frees your nick through NickServ",
     "help": "HELP [<command>]: this help",
     "id": "ID <password>: identifies to NickServ",
+    "np": "NP [-e]: shares the song playing now (turn it on in Preferences > Advanced). -e shows it only to you",
+    "sysinfo": "SYSINFO [-e]: shares one line about your PC (OS, CPU, RAM, disks, GPU, uptime). -e shows it only to you",
+    "notify": "NOTIFY [<nick> [<networks>]]: adds a friend, or takes them off if already there. Alone: opens the Friends List",
     "ignore": "IGNORE <mask> [CHAN PRIV NOTI CTCP DCC INVI ALL UNIGNORE]: hides someone. See Window > Ignore List",
     "invite": "INVITE <nick> [<channel>]: invites someone",
     "join": "JOIN <channel> [<key>]: joins a channel",
@@ -402,6 +405,25 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
             lag = s.current_lag_ms()
             s._tick()
             s.add(b, INFO, "*", f"Lag to server: {lag} ms" if lag is not None else "Checking the server, see the strip's tooltip.")
+    elif cmd == "sysinfo":
+        from . import full_version, sysinfo
+        line = sysinfo.render(s.cfg.sysinfo_line or sysinfo.DEFAULT_LINE, sysinfo.collect(full_version()))
+        if args and args[0].lower() == "-e" or b.kind not in (CHANNEL, QUERY):
+            s.add(b, INFO, "*", line)
+            if b.kind not in (CHANNEL, QUERY) and not (args and args[0].lower() == "-e"):
+                s.add(b, INFO, "*", "Shown only to you: /sysinfo sends to a channel or a private chat.")
+        else:
+            s.say(b.name, line)
+    elif cmd == "np":
+        ui.now_playing(s, b, only_me=bool(args and args[0].lower() == "-e"))
+    elif cmd == "notify":
+        if not args:
+            ui.open_tool("friends") if hasattr(ui, "open_tool") else None
+        elif lower(args[0]) in [lower(n) for n in s.cfg.friends]:
+            ui.remove_friend(args[0])
+            s.add(b, INFO, "*", f"{args[0]} taken off your Friends List.")
+        else:
+            ui.add_friend(args[0], " ".join(args[1:]), say=True)
     elif cmd == "ignore":
         if not args:
             s.add(b, INFO, "*", "Ignore list: " + (", ".join(s.cfg.ignores) or "empty"))

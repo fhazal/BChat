@@ -102,6 +102,62 @@ def stylesheet(t: Theme) -> str:
     return _sheet(t) + (_light_extra(t) if is_light(t) else "")
 
 
+def _svg_file(kind: str, colour: str) -> str:
+    """A tick or a dot as an SVG in this colour. Stylesheets draw SVG at the screen's real pixels, so it stays sharp
+    at 125 % and 150 % (Qt's own menu tick and a PNG are stretched and look smeared)."""
+    import tempfile
+    folder = Path(tempfile.gettempdir()) / "bchat-ui"
+    folder.mkdir(exist_ok=True)
+    path = folder / f"{kind}-{colour.lstrip('#').lower()}.svg"
+    if kind == "tick":
+        svg = (ASSETS / "lucide" / "check.svg").read_text(encoding="utf-8")
+        svg = svg.replace("currentColor", colour).replace('stroke-width="2"', 'stroke-width="2.6"')
+    else:
+        svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5" fill="{colour}"/></svg>'
+    try:
+        if not path.exists() or path.read_text(encoding="utf-8") != svg:
+            path.write_text(svg, encoding="utf-8")
+    except OSError:
+        pass
+    return path.as_posix()
+
+
+class _MenuTitle(QLabel):
+    """XChat's menu title: not a command, a click just closes the menu."""
+
+    def mousePressEvent(self, ev) -> None:
+        from PySide6.QtWidgets import QMenu
+        w = self.parentWidget()
+        while w is not None and not isinstance(w, QMenu):
+            w = w.parentWidget()
+        if w is not None:
+            w.close()
+
+
+def add_menu_title(menu, text: str):
+    """A bold, centred title bar at the top of a menu, in the theme's colours (XChat's tab and nick menus)."""
+    from PySide6.QtWidgets import QWidgetAction
+    lab = _MenuTitle(text)
+    lab.setObjectName("menutitle")
+    lab.setTextFormat(Qt.TextFormat.PlainText)
+    lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    act = QWidgetAction(menu)
+    act.setDefaultWidget(lab)
+    act.setText(text)
+    menu.addAction(act)
+    return act
+
+
+def _ticks(t: Theme) -> str:
+    on, sel = t.text, t.marking_fg
+    return f"""    QMenu::indicator {{ width: 14px; height: 14px; padding-left: 5px; }}
+    QMenu::indicator:non-exclusive:checked {{ image: url({_svg_file("tick", on)}); }}
+    QMenu::indicator:non-exclusive:checked:selected {{ image: url({_svg_file("tick", sel)}); }}
+    QMenu::indicator:exclusive:checked {{ image: url({_svg_file("dot", on)}); }}
+    QMenu::indicator:exclusive:checked:selected {{ image: url({_svg_file("dot", sel)}); }}
+"""
+
+
 def _buttons(t: Theme) -> str:
     """XChat 2's buttons (GTK on Windows 11): soft fill, thin border, round corners, 27 px tall."""
     if is_light(t):
@@ -208,8 +264,10 @@ def _sheet(t: Theme) -> str:
     QMenu::icon {{ padding-left: 5px; }}
     QMenu::item:selected {{ background: {t.selected}; color: #fff; }}
     QMenu::item:disabled {{ color: {t.disabled}; }}
-    QMenu::separator {{ height: 1px; background: {t.border}; margin: 3px 2px; }}
-    QTreeWidget, QListView, QListWidget, QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QTableWidget {{
+    QMenu::separator {{ height: 0px; border-top: 1px solid {t.thumb_hover}; background: transparent; margin: 4px 6px; }}   /* a border, not a 1 px fill: same thickness everywhere at 125 % and 150 % */
+    QLabel#menutitle {{ background: {t.panel}; color: {t.check}; font-weight: bold; border: 1px solid {t.thumb};
+                        border-radius: 3px; padding: 4px 18px; margin: 2px 3px 3px 3px; }}
+{_ticks(t)}    QTreeWidget, QListView, QListWidget, QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QTableWidget {{
         background: {t.panel}; border: 1px solid {t.border}; selection-background-color: {t.selected};
         selection-color: {t.marking_fg}; outline: 0; }}
     QTreeWidget::item {{ height: 17px; }}
@@ -226,6 +284,7 @@ def _sheet(t: Theme) -> str:
     QPushButton#modebtn:checked {{ background: {t.selected}; color: {t.marking_fg}; }}
     QPushButton#ulbtn {{ padding: 1px 4px; min-width: 0; min-height: 16px; border-radius: 3px; }}
     QPushButton#compact {{ padding: 3px 10px; min-height: 16px; border-radius: 3px; }}
+    #invitebar {{ background: {t.panel}; border: 1px solid {t.border}; border-left: 3px solid {t.check}; border-radius: 4px; }}
     QToolButton:disabled {{ color: {t.disabled}; }}
     QRadioButton {{ spacing: 7px; }}
     QRadioButton::indicator {{ width: 12px; height: 12px; border: 1px solid {t.disabled}; border-radius: 7px; background: {t.panel}; }}
@@ -233,7 +292,7 @@ def _sheet(t: Theme) -> str:
     QRadioButton::indicator:checked {{ border: 1px solid {t.check}; background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5, stop:0 #11111b, stop:0.42 #11111b, stop:0.52 {t.check}, stop:1 {t.check}); }}
     QCheckBox::indicator {{ width: 12px; height: 12px; border: 1px solid {t.border}; border-radius: 2px; background: {t.panel}; }}
     QCheckBox::indicator:hover {{ border: 1px solid {t.check}; }}
-    QCheckBox::indicator:checked {{ background: {t.check}; border: 1px solid {t.check}; image: url({(ASSETS / "tick.png").as_posix()}); }}
+    QCheckBox::indicator:checked {{ background: {t.check}; border: 1px solid {t.check}; image: url({_svg_file("tick", "#11111b")}); }}
     QCheckBox::indicator:checked:disabled {{ background: {t.disabled}; border: 1px solid {t.disabled}; }}
     QScrollBar:vertical {{ background: {t.bar}; width: 13px; margin: 0; }}
     QScrollBar::handle:vertical {{ background: {t.thumb}; min-height: 24px; }}
@@ -245,6 +304,12 @@ def _sheet(t: Theme) -> str:
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
     QSplitter::handle {{ background: {t.window}; }}
     QToolTip {{ background: {t.popup}; color: {t.text}; border: 1px solid {t.border}; }}
+    /* dialog lines: one soft 1 px line in every theme (Fusion's sunken line drew a bright white edge) */
+    QFrame[frameShape="HLine"], QFrame[frameShape="VLine"] {{ color: {t.thumb_hover}; }}
+    QFrame[frameShape="HLine"] {{ border: none; border-top: 1px solid {t.thumb_hover}; background: transparent;
+        min-height: 1px; max-height: 1px; }}
+    QFrame[frameShape="VLine"] {{ border: none; border-left: 1px solid {t.thumb_hover}; background: transparent;
+        min-width: 1px; max-width: 1px; }}
     """
 
 
@@ -257,7 +322,6 @@ def _light_extra(t: Theme) -> str:
         selection-color: {t.marking_fg}; }}
     QAbstractSpinBox:disabled {{ color: {t.disabled}; }}
     QPushButton:disabled {{ color: {t.away}; }}
-    QFrame[frameShape="4"], QFrame[frameShape="5"] {{ color: {t.thumb_hover}; }}
     """
 
 

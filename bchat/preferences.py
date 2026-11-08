@@ -398,6 +398,11 @@ class PreferencesDialog(FramedDialog):
         self.announce = self._check(lay, "Announce away messages", c.announce_away, "Tell every channel you're in when you go away and come back")
         self.away_once = self._check(lay, "Show away once", c.away_once, "Show identical away messages only once")
         self.auto_unaway = self._check(lay, "Automatically unmark away", c.auto_unaway, "Unmark yourself as away before sending messages")
+        lay.addWidget(_heading("Channels and Private Chats"))
+        self.rejoin_kick = self._check(lay, "Rejoin a channel when I'm kicked", c.rejoin_on_kick,
+                                       "Waits 3 seconds and tries once, so a kick loop can't flood the channel")
+        self.whois_query = self._check(lay, "Show who someone is when they start a private chat with me", c.whois_on_query,
+                                       "A short WHOIS at the top of the new tab: their host, channels and idle time")
         lay.addWidget(_heading("Starting and Closing"))
         self.start_win = self._check(lay, "Start with Windows", c.start_with_windows, "Only for the installed BChat")
         self.start_min = self._check(lay, "Start minimized", c.start_minimized)
@@ -487,6 +492,51 @@ class PreferencesDialog(FramedDialog):
         self.opacity = self._number(g, 1, "Window opacity:", c.opacity, 30, 100, " %")
         g.setColumnStretch(2, 1)
         lay.addLayout(g)
+        from . import nowplaying, sysinfo
+        lay.addWidget(_heading("System Info (/sysinfo)"))
+        g = QGridLayout()
+        self.sys_line = self._entry(g, 0, "Line:", c.sysinfo_line or sysinfo.DEFAULT_LINE)
+        self.sys_line.setToolTip("Words you can use: " + " ".join("{%s}" % w for w in sysinfo.WORDS)
+                                 + ". Delete any you don't want to share. Your IP address, PC name and user name are never included.")
+        lay.addLayout(g)
+        lay.addWidget(_heading("Now Playing (/np)"))
+        self.np_on = self._check(lay, "Let /np share what I'm listening to", c.np_enabled,
+                                 "Off when BChat is new. Nothing is ever shared on its own: only when you type /np")
+        self.np_music = self._check(lay, "Only music: skip videos and anything not marked as music", c.np_music_only)
+        self.np_boxes = {}
+        if c.np_players:
+            row = QHBoxLayout()
+            row.addWidget(QLabel("Players /np may read:"))
+            for pid in sorted(c.np_players, key=lambda p: c.np_names.get(p, p).lower()):
+                box = QCheckBox(c.np_names.get(pid, nowplaying.player_name(pid)))
+                box.setChecked(bool(c.np_players[pid]))
+                box.setToolTip(pid)
+                self.np_boxes[pid] = box
+                row.addWidget(box)
+            row.addStretch(1)
+            lay.addLayout(row)
+        else:
+            lay.addWidget(QLabel("Players show up here once /np has seen them play. Browsers start unticked."))
+        self.np_ask = self._check(lay, "Show me the line before it's sent", c.np_ask)
+        g = QGridLayout()
+        self.np_line = self._entry(g, 0, "Line:", c.np_line or nowplaying.DEFAULT_LINE)
+        self.np_line.setToolTip("Words you can use: {artist} {title} {album} {player} {time}")
+        lay.addLayout(g)
+        lay.addWidget(_heading("Announce each new song"))
+        self.np_ann = self._check(lay, "Post every new song on its own", c.np_announce,
+                                  "Off when BChat is new. Only in the channels below; right click in a channel > Share also adds or removes it")
+        g = QGridLayout()
+        g.setContentsMargins(20, 0, 0, 0)
+        self.np_ann_in = self._entry(g, 0, "In:", c.np_announce_in)
+        self.np_ann_in.setPlaceholderText("#chat, #skinhead")
+        lay.addLayout(g)
+        self.np_ann_note = QLabel(f"Only these channels, once a song has played {int(nowplaying.ANNOUNCE_AFTER)} seconds.")
+        self.np_ann_note.setToolTip("Each song is posted once. Paused or skipped songs are never sent.")
+        self.np_ann_note.setStyleSheet(f"color: {c.theme.muted}; margin-left: 20px;")
+        lay.addWidget(self.np_ann_note)
+        for w in (self.np_music, self.np_ask, self.np_line, self.np_ann, self.np_ann_in, self.np_ann_note, *self.np_boxes.values()):
+            w.setEnabled(c.np_enabled)
+            self.np_on.toggled.connect(w.setEnabled)
         lay.addStretch(1)
         return page
 
@@ -726,6 +776,7 @@ class PreferencesDialog(FramedDialog):
         c.part_reason = self.part_msg.text() or "Leaving"
         c.away_reason = self.away_msg.text() or "I'm busy"
         c.announce_away, c.away_once, c.auto_unaway = self.announce.isChecked(), self.away_once.isChecked(), self.auto_unaway.isChecked()
+        c.rejoin_on_kick, c.whois_on_query = self.rejoin_kick.isChecked(), self.whois_query.isChecked()
         c.text_replay, c.log_all = self.replay.isChecked(), self.log_all.isChecked()
         c.log_mask = self.log_mask.text().strip() or "%n-%c.log"
         c.log_stamps, c.log_stamp_format = self.log_stamps.isChecked(), self.log_fmt.text()
@@ -753,6 +804,16 @@ class PreferencesDialog(FramedDialog):
         elif not self.win.updater.timer.isActive():
             self.win.updater.start()
         c.whois_on_notify, c.url_grabber = self.notify_whois.isChecked(), self.url_grab.isChecked()
+        from . import nowplaying, sysinfo
+        line = self.sys_line.text().strip()
+        c.sysinfo_line = "" if line == sysinfo.DEFAULT_LINE else line
+        c.np_enabled, c.np_music_only, c.np_ask = self.np_on.isChecked(), self.np_music.isChecked(), self.np_ask.isChecked()
+        line = self.np_line.text().strip()
+        c.np_line = "" if line == nowplaying.DEFAULT_LINE else line
+        for pid, box in self.np_boxes.items():
+            c.np_players[pid] = box.isChecked()
+        c.np_announce = self.np_ann.isChecked()
+        c.np_announce_in = ", ".join(nowplaying.announce_channels(self.np_ann_in.text()))
         c.url_limit, c.opacity = self.url_limit.value(), self.opacity.value()
         c.raw_modes, c.hide_joinpart = self.raw_modes.isChecked(), self.hide_jp.isChecked()
         c.bind_host, c.proxy_host = self.bind.text().strip(), self.proxy_host.text().strip()

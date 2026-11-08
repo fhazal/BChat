@@ -283,7 +283,7 @@ def test_ticked_checkbox_has_a_real_tick():
     t = Theme()
     css = stylesheet(t)
     assert (ASSETS / "tick.png").exists()
-    assert f"QCheckBox::indicator:checked {{ background: {t.check};" in css and "tick.png" in css
+    assert f"QCheckBox::indicator:checked {{ background: {t.check};" in css and "tick-11111b.svg" in css     # sharp at any scale
 
 
 def test_popup_opens_above_when_no_room_below():

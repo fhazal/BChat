@@ -486,12 +486,8 @@ class FriendsWindow(ToolWindow):
                 self.view.setCurrentItem(it)
 
     def ask_add(self) -> None:
-        nick, ok = QInputDialog.getText(self, "Friends List", "Enter nickname to add:")
-        if not ok:
-            return
-        nets, ok = QInputDialog.getText(self, "Friends List", "Notify on these networks (comma separated, empty for all):")
-        if ok:
-            self.add(nick, nets)
+        d = self.win.ask_friend()
+        d.finished.connect(lambda _c: self.fill())
 
     def add(self, nick: str, nets: str = "") -> None:
         self.win.add_friend(nick, nets)

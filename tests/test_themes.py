@@ -181,7 +181,8 @@ def test_light_fixes_only_touch_light_themes(app):
         t = make_theme(name)
         sheet = widgets.stylesheet(t)
         light = name in config.LIGHT_THEMES
-        assert ("QAbstractSpinBox" in sheet) == light and ('frameShape="4"' in sheet) == light
+        assert ("QAbstractSpinBox" in sheet) == light
+        assert 'QFrame[frameShape="HLine"]' in widgets._sheet(t)        # soft dialog lines: every theme (0.2.0)
         assert sheet.startswith(widgets._sheet(t))
         widgets.set_light_palette(t)
         base = app.palette().color(QPalette.ColorRole.Base).name()

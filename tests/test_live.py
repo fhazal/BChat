@@ -1073,7 +1073,8 @@ def test_chat_right_click_offers_nick_link_and_channel(live):
     labels = [a.text() for a in win._chat_menu(QPoint(1, 1)).actions()]
     assert labels[0] == "Open Link in Browser" and "Copy Link" in labels and "Clear Text" in labels
     win.chat.anchorAt = lambda pos: ""
-    assert win._chat_menu(QPoint(1, 1)).actions()[0].text() == "Copy Selection"
+    plain = [a.text() for a in win._chat_menu(QPoint(1, 1)).actions() if not a.isSeparator()]
+    assert plain[:2] == ["Share", "Copy Selection"]                     # a channel: Share first, like AdiIRC
     win._join_clicked("#clicked")
     assert wait(app, lambda: "JOIN #clicked" in srv.received)
 
@@ -1713,6 +1714,10 @@ def test_friends_with_ison_and_window(live):
     b = s.buffers["#skinhead"]
     menu = win.build_nick_menu(b, [b.users["oracle"]])
     [a for a in menu.actions() if a.text() == "Add to Friends List"][0].trigger()
+    assert win.cfg.friends == []                                     # asks first, like XChat
+    d = win.friend_dialog
+    assert d.isVisible() and d.nick.text() == "Oracle" and d.nets.text() == "ALL"
+    d.ok_btn.click()
     assert win.cfg.friends == ["Oracle"]
 
 
@@ -2236,6 +2241,12 @@ def test_meters_help_opacity_close_to_tray(live, monkeypatch):
     win._refresh_status()
     assert win.queue_bar.value() == len(s._queue) * 10 >= 30 and f"{len(s._queue)}q" in win.meter_text.text() and win.lag_bar.value() > 0
     s._queue.clear()
+    s.lag_ms, s._ping_sent = 25, 0.0                      # a normal home lag: visible, like XChat's bar (full at 1 s)
+    win._refresh_status()
+    assert 4 <= win.lag_bar.value() < 10 and "Lag 25 ms" in win.lag_bar.toolTip() and "0 lines waiting" in win.lag_bar.toolTip()
+    s.lag_ms = 600
+    win._refresh_status()
+    assert win.lag_bar.value() == 60
     acts["Network Meters: Graph"].trigger()
     assert win.lag_bar.isVisible() and not win.meter_text.isVisible()
     acts["Network Meters: Text"].trigger()
@@ -3273,6 +3284,8 @@ def test_about_window_like_xchat_with_bee_line_and_site_link(live):
     assert "Copyright © 2026 BajuBesi Labs." in box.text() and "Icons: Lucide (ISC)." in box.text() and "XChat" not in box.text()
     assert "Flaticon" not in box.text() and "classic XChat 2 style" not in box.text()
     assert f'href="{SITE}"' in box.link.text() and SITE == "https://bajubesi.org"
+    assert box.link.text().startswith("News, forum and downloads at ")              # the globe line, like the Ko-fi one
+    assert not box.globe.pixmap().isNull() and box.globe.size() == box.heart.size()
     assert box.link.openExternalLinks() and box.link.textInteractionFlags() & Qt.TextInteractionFlag.LinksAccessibleByMouse
     assert not box.logo.pixmap().isNull() and box.logo.width() == 120 and 90 < box.logo.height() < 120   # the bee mascot
     box.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)

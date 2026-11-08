@@ -20,7 +20,7 @@ from .protocol import URL_RE, lower, strip_format
 from .session import CHANNEL, INFO, QUERY, SERVER, Buffer, Line, Session, User
 from .countries import country_of
 from .userlist import UserList, icon_name, light_pixmap
-from .widgets import ASSETS, FramedDialog, FramelessWindow, icon, install_button_look, set_icon_theme, set_light_palette, stylesheet
+from .widgets import ASSETS, FramedDialog, FramelessWindow, add_menu_title, icon, install_button_look, set_icon_theme, set_light_palette, stylesheet
 from . import xchat_import
 from .topicbar import TopicBar, emoji_popup
 from .editors import rows_for
@@ -282,6 +282,9 @@ class MainWindow(FramelessWindow):
         self.cfg = cfg
         self.cfg_dir = cfg_dir
         self.sessions: dict[str, Session] = {}
+        from .nowplaying import Announcer
+        self.announcer = Announcer(cfg, self._announce, self)     # off unless /np and announcing are both on
+        self.announcer.refresh()
         self.buf: Buffer | None = None
         self.items: dict[int, QTreeWidgetItem] = {}
         self.folders: dict[tuple[int, str], QTreeWidgetItem] = {}
@@ -467,6 +470,9 @@ class MainWindow(FramelessWindow):
         self._status_timer = QTimer(self, interval=1000, timeout=self._refresh_status)
         self._status_timer.start()
         self._blink_timer = QTimer(self, interval=500, timeout=self._blink_tray)
+        from .invitebar import InviteBar
+        self.invite_bar = InviteBar(self, body)
+        lay.addWidget(self.invite_bar)
         lay.addLayout(bottom)
         self.outer.addWidget(body, 1)
 
@@ -598,6 +604,7 @@ class MainWindow(FramelessWindow):
             s.users_changed.connect(self._users_changed)
             s.line_added.connect(self.chat.add_line)
             s.lines_inserted.connect(self.chat.reload)
+            s.invited.connect(lambda sess, chan, nick: self.invite_bar.add(sess, chan, nick))
             s.line_added.connect(self._log_line)
             s.line_added.connect(self._grab_urls)
             s.friends_changed.connect(self._friends_changed)
@@ -939,12 +946,19 @@ class MainWindow(FramelessWindow):
         if not mode:
             return
         s = self.session
-        lag = (s.current_lag_ms() or 0) if s is not None else 0
+        measured = s.current_lag_ms() if s is not None and s.state == "connected" else None
+        lag = measured or 0
         waiting = len(s._queue) if s is not None else 0
-        warn = s.LAG_WARN_MS if s is not None else 1000
-        self.lag_bar.setValue(min(100, lag * 100 // max(1, warn)))
+        full = s.LAG_FULL_MS if s is not None else 1000
+        value = min(100, lag * 100 // max(1, full))
+        if measured is not None:
+            value = max(value, 4)          # a thin sliver: measured and small, not dead
+        self.lag_bar.setValue(value)
         self.queue_bar.setValue(min(100, waiting * 10))
         self.meter_text.setText(f"{lag} ms  {waiting}q")
+        tip = (f"Lag {lag} ms" if measured is not None else "Lag: not measured yet") +               f" · {waiting} line{'s' if waiting != 1 else ''} waiting to be sent"
+        for w in (self.lag_bar, self.queue_bar, self.meter_text):
+            w.setToolTip(tip)
 
     # --- detach -------------------------------------------------------------------------
 
@@ -1251,13 +1265,12 @@ class MainWindow(FramelessWindow):
             head = menu.addMenu(one.nick)
             self._info_panel(head, s, b, one)
         else:
-            head = menu.addAction(f"{len(users)} nicks selected.")
-            head.setEnabled(False)
+            head = add_menu_title(menu, f"{len(users)} nicks selected")
         menu.addSeparator()
         menu.addAction(icon("dialog"), "Open Dialog Window", lambda: [self.select_buffer(s.buffer(n)) for n in nicks])
         menu.addAction(icon("save"), "Send a File", lambda: self.send_file_dialog(s, nicks))
         menu.addAction(icon("info"), "User Info (WhoIs)", lambda: [s.whois(n) for n in nicks])
-        menu.addAction(icon("add"), "Add to Friends List", lambda: [self.add_friend(n) for n in nicks])
+        menu.addAction(icon("add"), "Add to Friends List", lambda: self.ask_friend(nicks[0] if len(nicks) == 1 else " ".join(nicks)))
         ops = menu.addMenu("Operator Actions")
         ops.addAction("Give Ops", lambda: s.set_mode_for(b, "+o", nicks))
         ops.addAction("Take Ops", lambda: s.set_mode_for(b, "-o", nicks))
@@ -1347,8 +1360,7 @@ class MainWindow(FramelessWindow):
     def _switcher_menu(self, b: Buffer) -> QMenu:
         s = b.session
         menu = QMenu(self)
-        title = menu.addAction(b.name)
-        title.setEnabled(False)
+        add_menu_title(menu, b.name)
         menu.addSeparator()
         if b.kind == CHANNEL:
             menu.addAction("Leave Channel", lambda: s.send("PART", b.name, self.cfg.part_reason))
@@ -1662,6 +1674,9 @@ class MainWindow(FramelessWindow):
         elif s is not None and word and s.is_channel(word):
             menu.addAction(f"Join {word}", lambda: self._join_clicked(word))
             menu.addSeparator()
+        if b is not None and s is not None and b.kind in (CHANNEL, QUERY) and not href:
+            self._share_menu(menu, s, b)
+            menu.addSeparator()
         copy = menu.addAction(icon("copy"), "Copy Selection", self.chat.copy)
         copy.setEnabled(self.chat.textCursor().hasSelection())
         menu.addAction("Select All", self.chat.selectAll)
@@ -1669,6 +1684,25 @@ class MainWindow(FramelessWindow):
         menu.addAction(icon("clear"), "Clear Text", self._clear_current)
         menu.addAction(icon("find"), "Search Text...", self._search)
         return menu
+
+    def _share_menu(self, menu: QMenu, s, b) -> QMenu:
+        """AdiIRC's System Info and Now Playing, under Share. Announce only for channels, and only once /np is on."""
+        from . import commands
+        from .nowplaying import announce_channels
+        share = menu.addMenu("Share")
+        share.setToolTipsVisible(True)
+        share.addAction("System Info", lambda: commands.run(self, s, b, "/sysinfo"))
+        share.addAction("Now Playing", lambda: self.now_playing(s, b))
+        if b.kind == CHANNEL:
+            share.addSeparator()
+            ann = share.addAction("Announce Songs Here")
+            ann.setCheckable(True)
+            ann.setChecked(self.cfg.np_announce and lower(b.name) in {lower(n) for n in announce_channels(self.cfg.np_announce_in)})
+            ann.setEnabled(self.cfg.np_enabled)
+            if not self.cfg.np_enabled:
+                ann.setToolTip("Turn on Now Playing in Preferences > Advanced first")
+            ann.toggled.connect(lambda on: self.announce_here(b, on))
+        return share
 
     def eventFilter(self, obj, ev):
         if obj is getattr(self, "nick_label", None) and ev.type() == QEvent.Type.MouseButtonPress:
@@ -1905,11 +1939,20 @@ class MainWindow(FramelessWindow):
             b.session.add(b, "error", "*", "No channel joined. Try /join #channel")
             return
         if len(lines) > 5 and not getattr(self, "skip_quit_prompt", False):
-            r = QMessageBox.question(self, "Paste", f"Send {len(lines)} lines to {b.name}?")
-            if r != QMessageBox.StandardButton.Yes:
-                return
-        for line in lines:
-            b.session.say(b.name, line)
+            from .pastedialog import PasteDialog
+            d = PasteDialog(self, b.name, lines)
+            self.paste_dialog = d
+            d.finished.connect(lambda _r: self._send_paste(b, lines, d.choice))
+            d.open()
+            return
+        self._send_paste(b, lines, "lines")
+
+    def _send_paste(self, b, lines: list[str], choice: str) -> None:
+        if choice == "one":
+            b.session.say(b.name, " ".join(l.strip() for l in lines))
+        elif choice == "lines":
+            for line in lines:
+                b.session.say(b.name, line)
 
     def _toggle_menu(self, on: bool) -> None:
         self.cfg.show_menu = on
@@ -2112,6 +2155,7 @@ class MainWindow(FramelessWindow):
         set_light_palette(self.cfg.theme)
         for b in [b for s in self.sessions.values() for b in s.all_buffers()]:
             self._buffer_changed(b)
+        self.announcer.refresh()
         config.save(self.cfg, self.cfg_dir)
 
     def _apply_widget_prefs(self) -> None:
@@ -2212,18 +2256,116 @@ class MainWindow(FramelessWindow):
         if path:
             self.plugins.load(path)
 
-    def add_friend(self, nick: str, nets: str = "") -> None:
+    def ask_friend(self, nick: str = "", nets: str = ""):
+        """XChat's notify window: the nick filled in, ALL networks, then OK adds and says so where you are."""
+        from .frienddialog import FriendDialog
+        d = FriendDialog(self, nick, nets)
+        self.friend_dialog = d
+
+        def done(code: int) -> None:
+            if code:
+                name, where = d.result_values()
+                for n in name.split():
+                    self.add_friend(n, where, say=True)
+        d.finished.connect(done)
+        d.open()
+        return d
+
+    def add_friend(self, nick: str, nets: str = "", say: bool = False) -> bool:
+        from .frienddialog import nets_from_text
         nick = nick.strip()
-        if not nick or lower(nick) in [lower(n) for n in self.cfg.friends]:
-            return
+        nets = nets_from_text(nets)
+        if not nick:
+            return False
+        if lower(nick) in [lower(n) for n in self.cfg.friends]:
+            if say:
+                self._say_here(f"{nick} is already in your Friends List.")
+            return False
         self.cfg.friends.append(nick)
-        if nets.strip():
-            self.cfg.friend_nets[nick] = nets.strip()
+        if nets:
+            self.cfg.friend_nets[nick] = nets
         self._restart_friends()
+        if say:
+            self._say_here(f"{nick} added to your Friends List ({nets or 'all networks'}). "
+                           "You'll see when they come online; Window > Friends List shows them all.")
+        return True
+
+    # --- /np ------------------------------------------------------------------------------
+
+    np_reader = None          # tests put a stand-in here
+
+    def now_playing(self, s, b, only_me: bool = False) -> None:
+        if not self.cfg.np_enabled:
+            s.add(b, INFO, "*", "Now playing is off. Turn it on in Preferences > Advanced > Now playing.")
+            return
+        from .nowplaying import NowPlaying
+        np = NowPlaying(self.cfg, self, reader=self.np_reader)
+        self._np = np
+        np.found.connect(lambda t, why: self._np_found(s, b, t, why, only_me))
+        np.ask()
+
+    def _np_found(self, s, b, t, why: str, only_me: bool) -> None:
+        from .nowplaying import DEFAULT_LINE, ask_dialog, render
+        self.save_config()                         # players seen go into Preferences
+        if t is None:
+            s.add(b, INFO, "*", why)
+            return
+        line = render(self.cfg.np_line or DEFAULT_LINE, t)
+        if only_me or b.kind not in (CHANNEL, QUERY):
+            s.add(b, INFO, "*", f"{s.nick} {line}")
+            if not only_me:
+                s.add(b, INFO, "*", "Shown only to you: /np sends to a channel or a private chat.")
+            return
+        if not self.cfg.np_ask:
+            s.action(b.name, line)
+            return
+        d = ask_dialog(self, b.name, t, self.cfg.np_line)
+        self.np_dialog = d
+
+        def done(_code: int) -> None:
+            d.clock.stop()
+            if d.choice == "send":
+                if d.again.isChecked():
+                    self.cfg.np_ask = False
+                    self.save_config()
+                s.action(b.name, d.current_line())      # the time as it is when Send is pressed
+        d.finished.connect(done)
+        d.open()
+
+    def _announce(self, t) -> None:
+        """A new song (announcer rules already met): one /me line in each listed channel that is open and joined."""
+        from .nowplaying import DEFAULT_LINE, announce_channels, render
+        line = render(self.cfg.np_line or DEFAULT_LINE, t)
+        wanted = {lower(n) for n in announce_channels(self.cfg.np_announce_in)}
+        for s in list(self.sessions.values()):
+            if s.state != "connected":
+                continue
+            for b in list(s.buffers.values()):
+                if b.kind == CHANNEL and b.joined and lower(b.name) in wanted:
+                    s.action(b.name, line)
+        self.save_config()                         # players seen go into Preferences
+
+    def announce_here(self, b, on: bool) -> None:
+        """Right click > Share > Announce Songs Here: adds or takes this channel off the announce list."""
+        from .nowplaying import announce_channels
+        names = [n for n in announce_channels(self.cfg.np_announce_in) if lower(n) != lower(b.name)]
+        if on:
+            names.append(b.name)
+            self.cfg.np_announce = True
+        self.cfg.np_announce_in = ", ".join(names)
+        self.save_config()
+        self.announcer.refresh()
+        b.session.add(b, INFO, "*", f"Announcing new songs in {b.name}." if on else f"Stopped announcing songs in {b.name}.")
+
+    def _say_here(self, text: str) -> None:
+        b = self.buf
+        if b is not None:
+            b.session.add(b, INFO, "*", text)
 
     def remove_friend(self, nick: str) -> None:
-        self.cfg.friends = [n for n in self.cfg.friends if n != nick]
-        self.cfg.friend_nets.pop(nick, None)
+        name = next((n for n in self.cfg.friends if lower(n) == lower(nick)), nick)
+        self.cfg.friends = [n for n in self.cfg.friends if n != name]
+        self.cfg.friend_nets.pop(name, None)
         self._restart_friends()
 
     def _restart_friends(self) -> None:

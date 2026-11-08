@@ -59,6 +59,7 @@ class Buffer:
         self.activity = 0  # 0 none, 1 data, 2 message, 3 highlight
         self.marker: int | None = None
         self.history_since = 0.0      # chathistory: lines after this were asked for (0 = the latest)
+        self.rejoined_at = 0.0        # last rejoin after a kick
         self.mode_args: dict[str, str] = {}
 
     def mode_text(self) -> str:
@@ -109,9 +110,11 @@ class Session(QObject):
     pins_changed = Signal()
     notify = Signal(object, str)  # buffer, event: chan priv hilight join part kick notice invite connect disconnect
     lines_inserted = Signal(object)  # history went in above existing lines: the tab is drawn again
+    invited = Signal(object, str, str)   # session, channel, who: the window offers Join / Ignore (never joins by itself)
 
     MAX_LINES = 5000
     LAG_WARN_MS = 5000
+    LAG_FULL_MS = 1000     # the lag bar is full at 1 second, like XChat's (fe_set_lag)
     WANTED_CAPS = {"multi-prefix", "away-notify", "userhost-in-names", "server-time", "znc.in/server-time-iso",
                    "znc.in/self-message", "chghost", "cap-notify", "account-notify", "account-tag", "extended-join",
                    "invite-notify", "message-tags", "setname", "batch", "draft/chathistory", "chathistory"}
@@ -722,9 +725,9 @@ class Session(QObject):
         else:
             self.send("WHO", channel)
 
-    def whois(self, nick: str) -> None:
+    def whois(self, nick: str, target: Buffer | None = None) -> None:
         # asking twice with the same nick gets the idle time from the user's own server
-        self._whois_target = self._front()
+        self._whois_target = target or self._front()
         self._whois_nick = lower(nick)
         self.send("WHOIS", nick, nick)
 
@@ -993,7 +996,10 @@ class Session(QObject):
             body = text.strip("\x01")
             verb, _, rest = body.partition(" ")
             if verb.upper() == "ACTION":
+                new = lower(dest) not in self.buffers
                 b = self.buffer(dest)
+                if new and not from_me:
+                    self._whois_new_query(b, m.nick)
                 hit = self._is_hilite(rest, m.nick)
                 self.add(b, ACTION if not hit else HILITE, "*", f"{m.nick} {rest}", ts)
                 self._bump(b, 3 if hit else 2)
@@ -1002,7 +1008,10 @@ class Session(QObject):
             else:
                 self._ctcp_request(m.nick, verb.upper(), rest)
             return
+        new = lower(dest) not in self.buffers
         b = self.buffer(dest)
+        if new and not from_me:
+            self._whois_new_query(b, m.nick)
         u = b.users.get(lower(m.nick))
         if u:
             u.last_msg = ts
@@ -1202,10 +1211,25 @@ class Session(QObject):
             b.users.clear()
             self.te("You Kicked", b, PART, (b.name, m.nick, reason))
             self.buffer_changed.emit(b)
+            now = time.time()
+            if self.cfg.rejoin_on_kick and now - b.rejoined_at > 30:       # once: a kick loop can't flood the channel
+                b.rejoined_at = now
+                key = b.mode_args.get("k", "")
+                QTimer.singleShot(3000, lambda name=b.name, key=key: self._rejoin_after_kick(name, key))
         else:
             self.te("Kick", b, PART, (m.nick, victim, b.name, reason))
         self.notify.emit(b, "kick")
         self.users_changed.emit(b)
+
+    def _rejoin_after_kick(self, name: str, key: str) -> None:
+        b = self.buffers.get(lower(name))
+        if self.state == "connected" and b is not None and not b.joined:
+            self.send("JOIN", name, *([key] if key else []))
+
+    def _whois_new_query(self, b: Buffer, nick: str) -> None:
+        """Someone opened a private chat with us: who they are goes at the top of the new tab."""
+        if self.cfg.whois_on_query and self.state == "connected" and b.kind == QUERY:
+            self.whois(nick, b)
 
     def _irc_nick(self, m: Message) -> None:
         old, new = m.nick, m.param(0)
@@ -1328,6 +1352,9 @@ class Session(QObject):
             return
         self.te("Invited", self._front(), INFO, (m.param(1), m.nick, m.userhost))
         self.notify.emit(self._front(), "invite")
+        b = self.buffers.get(lower(m.param(1)))
+        if self.is_channel(m.param(1)) and not (b is not None and b.joined):
+            self.invited.emit(self, m.param(1), m.nick)
 
     # numerics --------------------------------------------------------------------
 
@@ -1486,6 +1513,7 @@ class Session(QObject):
                 return
 
     def _after_welcome(self) -> None:
+        self._tick()            # first lag reading now, not after the 15 s keepalive
         self.start_friends()
         if self.cfg.dcc_ip_from_server:     # the address others can reach us on, for DCC offers
             self._userhost_waiting += 1

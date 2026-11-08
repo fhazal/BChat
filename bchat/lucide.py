@@ -16,7 +16,7 @@ NAMES = {
     "connect": "plug", "disconnect": "unplug", "quit": "log-out", "dialog": "app-window", "justify": "list",
     "jump": "hash", "find": "search", "add": "plus", "remove": "minus", "revert": "puzzle", "open": "folder-open",
     "new": "square-plus", "preferences": "settings", "copy": "copy", "about": "info", "book": "server",
-    "info": "info", "file": "file-text", "no": "ban", "support": "heart",
+    "info": "info", "file": "file-text", "no": "ban", "support": "heart", "web": "globe",
     # updates (11-08): check again, done, get it, new, problem, install, ready
     "refresh": "refresh-cw", "done": "check", "download": "download", "new-version": "sparkles", "problem": "circle-alert",
     "install": "rotate-cw", "ready": "package-check",
