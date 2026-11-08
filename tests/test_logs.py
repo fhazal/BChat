@@ -170,3 +170,79 @@ def test_prefs_split_keep_and_mask(app, tmp_path):
     _write(old)
     assert win.clean_old_logs() == 1 and not old.exists()
     win.close(); srv.stop()
+
+
+def _answer(app, win, pick=None):
+    """Answers the logging question when it shows: pick = 'Keep logs for' index, None = Cancel."""
+    from PySide6.QtCore import QTimer
+    seen = []
+
+    def go():
+        d = getattr(win, "log_question", None)
+        if d is None:
+            QTimer.singleShot(20, go)
+            return
+        seen.append(d.text.text())
+        if pick is None:
+            d.reject()
+        else:
+            d.keep.setCurrentIndex(pick)
+            d.accept()
+    QTimer.singleShot(20, go)
+    return seen
+
+
+def test_first_log_to_disk_asks_once(app, tmp_path):
+    srv = FakeIrcd()
+    win, net = make_win(tmp_path, srv.port)
+    s = win.connect_network(net)
+    assert wait(app, lambda: "#skinhead" in s.buffers)
+    b = s.buffers["#skinhead"]
+    assert win.needs_log_question()
+    seen = _answer(app, win, None)                       # Cancel: nothing saved
+    win._log_to_disk(b, True)
+    assert "#skinhead" in seen[0] and "never sent anywhere" in seen[0]
+    assert win.cfg.log_tabs == [] and not win.cfg.log_asked
+    seen = _answer(app, win, 2)                          # 1 year
+    win._log_to_disk(b, True)
+    assert seen and win.cfg.log_keep_days == 366 and win.cfg.log_asked and len(win.cfg.log_tabs) == 1
+    win._log_to_disk(b, False)
+    win.log_question = None
+    win._log_to_disk(b, True)                            # asked already: no question this time
+    assert win.log_question is None and len(win.cfg.log_tabs) == 1
+    from bchat import config
+    assert config.load(tmp_path).log_asked
+    win.close(); srv.stop()
+
+
+def test_people_already_logging_are_not_asked(app, tmp_path):
+    from bchat.config import Config
+    from bchat.mainwindow import MainWindow
+    for cfg in (Config(nick="a", log_all=True), Config(nick="a", log_tabs=["net/#x"])):
+        w = MainWindow(cfg, tmp_path)
+        w.skip_quit_prompt = True
+        assert not w.needs_log_question()
+        w.close()
+
+
+def test_prefs_logging_tick_asks_and_counts_only_on_ok(app, tmp_path):
+    srv = FakeIrcd()
+    win, net = make_win(tmp_path, srv.port)
+    from bchat.preferences import PreferencesDialog
+    d = PreferencesDialog(win, "Logging")
+    _answer(app, win, None)
+    d.log_all.setChecked(True)
+    assert not d.log_all.isChecked()                     # Cancel puts the tick back
+    seen = _answer(app, win, 0)                          # 1 month
+    d.log_all.setChecked(True)
+    assert "your chats" in seen[0] and d.log_all.isChecked() and d.log_keep.currentIndex() == 1
+    assert not win.cfg.log_asked                         # only once Preferences is saved
+    d.accept(); d.deleteLater()
+    assert win.cfg.log_all and win.cfg.log_asked and win.cfg.log_keep_days == 31
+    d = PreferencesDialog(win, "Logging")                # Cancel in Preferences after answering: asked again next time
+    win.cfg.log_all, win.cfg.log_asked = False, False
+    _answer(app, win, 1)
+    d.log_all.setChecked(True)
+    d.reject(); d.deleteLater()
+    assert not win.cfg.log_asked and not win.cfg.log_all
+    win.close(); srv.stop()

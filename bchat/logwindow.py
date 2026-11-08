@@ -13,7 +13,7 @@ from .chatview import ChatView
 from .protocol import lower
 from .session import ACTION, INFO, JOIN, MSG, NOTICE, PART, SELF, Buffer, Line
 from .tools import ToolWindow, button
-from .widgets import icon
+from .widgets import FramedDialog, icon
 
 MAX_LINES = 50000          # a huge one-file log shows its last lines
 
@@ -346,3 +346,55 @@ class LogsWindow(ToolWindow):
             self.win.open_logs_folder()
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(d)))
+
+
+class LogQuestion(FramedDialog):
+    """Asked once, the first time logging is turned on: says plainly that chats are saved on this PC (and never sent
+    anywhere), and how long to keep them."""
+    CHOICES = (("1 month", 31), ("6 months", 183), ("1 year", 366), ("Forever", 0))
+
+    def __init__(self, parent, where: str, theme):
+        super().__init__("BChat: Turn On Logging", parent)
+        from PySide6.QtGui import QPixmap
+        from . import lucide
+        row = QHBoxLayout()
+        pic = QLabel()
+        pm = QPixmap.fromImage(lucide.image("file-text", theme.palette[12], 64))
+        pm.setDevicePixelRatio(2.0)
+        pic.setPixmap(pm)
+        pic.setAlignment(Qt.AlignmentFlag.AlignTop)
+        row.addWidget(pic)
+        safe = where.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        self.text = QLabel(f"<b>BChat will save {safe} to this PC.</b><br>"
+                           "The logs stay on your PC and are never sent anywhere.<br>"
+                           "You can read them in Window &gt; Logs...")
+        self.text.setTextFormat(Qt.TextFormat.RichText)
+        row.addWidget(self.text, 1)
+        self.body.addLayout(row)
+        keep = QHBoxLayout()
+        keep.addSpacing(40)
+        keep.addWidget(QLabel("Keep logs for:"))
+        self.keep = QComboBox()
+        self.keep.addItems([name for name, _ in self.CHOICES])
+        self.keep.setCurrentIndex(1)
+        keep.addWidget(self.keep)
+        keep.addStretch(1)
+        self.body.addLayout(keep)
+        hint = QLabel("Older days are deleted on their own. Change it any time in Preferences > Logging.")
+        hint.setStyleSheet(f"color: {theme.muted}; margin-left: 40px;")
+        self.body.addWidget(hint)
+        self.body.addSpacing(6)
+        bl = QHBoxLayout()
+        bl.addStretch(1)
+        cancel = QPushButton(icon("close-light"), "&Cancel")
+        cancel.setAutoDefault(False)
+        cancel.clicked.connect(self.reject)
+        ok = QPushButton(icon("save"), "&Turn On Logging")
+        ok.setDefault(True)
+        ok.clicked.connect(self.accept)
+        bl.addWidget(cancel)
+        bl.addWidget(ok)
+        self.body.addLayout(bl)
+
+    def keep_days(self) -> int:
+        return self.CHOICES[self.keep.currentIndex()][1]

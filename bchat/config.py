@@ -337,6 +337,7 @@ class Config:
     log_mask: str = "%n-%c.log"
     log_split: str = "day"            # 0.3.0: "day", "month" or "none" (one file from log_mask)
     log_keep_days: int = 0            # delete dated logs older than this (0 = never)
+    log_asked: bool = False           # the one-time "BChat will save your chats" question was answered
     log_stamps: bool = True
     log_stamp_format: str = "%b %d %H:%M:%S "
     # Sound: event -> .wav file

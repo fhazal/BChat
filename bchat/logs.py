@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SPLITS = ("day", "month", "none")           # Preferences order: Every day, Every month, Never (one file)
-KEEP_DAYS = (0, 31, 183, 366)               # Delete logs older than: Never, 1 month, 6 months, 1 year
+KEEP_DAYS = (0, 31, 183, 366)               # Delete logs older than: Never, 1 month, 6 months, 1 year (LogQuestion uses the same days)
 DATED = re.compile(r"^(\d{4})-(\d{2})(?:-(\d{2}))?\.log$")
 _TIME = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?")
 OLDER = "Older logs"

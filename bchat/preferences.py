@@ -585,6 +585,8 @@ class PreferencesDialog(FramedDialog):
         row.addStretch(1)
         lay.addLayout(row)
         self.log_split.currentIndexChanged.connect(lambda _i: self._log_split_changed())
+        self._log_answered = False
+        self.log_all.toggled.connect(self._log_all_toggled)
         self.log_mask.textChanged.connect(lambda _t: self._log_split_changed())
         self._log_split_changed()
         lay.addWidget(_heading("Time Stamps"))
@@ -595,6 +597,20 @@ class PreferencesDialog(FramedDialog):
         lay.addWidget(QLabel("%H hour, %M minute, %S second, %d day, %b month name."))
         lay.addStretch(1)
         return page
+
+    def _log_all_toggled(self, on: bool) -> None:
+        """First time logging goes on: the one-time question. Its answer counts only when Preferences is saved."""
+        from . import logs
+        if not on or self._log_answered or not hasattr(self.win, "needs_log_question") or not self.win.needs_log_question():
+            return
+        keep = self.win.ask_logging("your chats", self)
+        if keep is None:
+            self.log_all.blockSignals(True)
+            self.log_all.setChecked(False)
+            self.log_all.blockSignals(False)
+            return
+        self._log_answered = True
+        self.log_keep.setCurrentIndex(logs.KEEP_DAYS.index(keep))
 
     def _view_logs(self) -> None:
         """Preferences is modal, so it saves and closes first; then the Logs window can be used."""
@@ -1140,6 +1156,8 @@ class PreferencesDialog(FramedDialog):
         from . import logs
         c.log_split = logs.SPLITS[self.log_split.currentIndex()]
         c.log_keep_days = logs.KEEP_DAYS[self.log_keep.currentIndex()]
+        if self._log_answered:
+            c.log_asked = True
         c.log_stamps, c.log_stamp_format = self.log_stamps.isChecked(), self.log_fmt.text()
         c.sounds = {k: e.text().strip() for k, e in self.sound_edits.items() if e.text().strip()}
         c.reconnect_delay = self.reconnect.value()

@@ -1390,6 +1390,7 @@ def test_prefs_logging_all_mask_stamps_and_replay(app, tmp_path):
     s = win.connect_network(net)
     assert wait(app, lambda: "#skinhead" in s.buffers)
     b = s.buffers["#skinhead"]
+    win.cfg.log_asked = True      # the one-time logging question has its own test
     prefs(win, lambda d: (d.log_all.setChecked(True), d.log_split.setCurrentIndex(2), d.log_mask.setText("%n/%c-log.txt"), d.log_fmt.setText("<%H> "), d.replay.setChecked(True)))
     srv.send(":Belon!b@h PRIVMSG #skinhead :first logged line")
     path = win.log_path(b)

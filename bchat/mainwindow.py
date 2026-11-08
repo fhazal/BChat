@@ -1629,7 +1629,7 @@ class MainWindow(FramelessWindow):
         log = menu.addAction("Log to Disk")
         log.setCheckable(True)
         log.setChecked(self._log_key(b) in self.cfg.log_tabs)
-        log.toggled.connect(lambda on: self._set_logging(b, on))
+        log.toggled.connect(lambda on: self._log_to_disk(b, on))
         if self.logs_of(b):          # only once there is something to read
             menu.addAction(icon("find"), "View Log", lambda: self.open_logs(b))
         menu.addSeparator()
@@ -2105,6 +2105,31 @@ class MainWindow(FramelessWindow):
     @staticmethod
     def _log_key(b: Buffer) -> str:
         return f"{lower(b.session.net.name)}/{lower(b.name)}"
+
+    def needs_log_question(self) -> bool:
+        """The first time logging is turned on, BChat says what it does. People already logging chose it before."""
+        c = self.cfg
+        return not (c.log_asked or c.log_all or c.log_tabs)
+
+    def ask_logging(self, where: str, parent=None) -> int | None:
+        """'BChat will save <where> to this PC' + Keep logs for. The days to keep, or None for Cancel."""
+        from .logwindow import LogQuestion
+        d = LogQuestion(parent or self, where, self.cfg.theme)
+        self.log_question = d                    # tests and the button check answer it
+        try:
+            return d.keep_days() if d.exec() else None
+        finally:
+            self.log_question = None
+            d.deleteLater()
+
+    def _log_to_disk(self, b: Buffer, on: bool) -> None:
+        """The tab menu's Log to Disk tick."""
+        if on and self.needs_log_question():
+            keep = self.ask_logging(b.name)
+            if keep is None:
+                return                           # Cancel: nothing saved, the tick is off next time the menu opens
+            self.cfg.log_keep_days, self.cfg.log_asked = keep, True
+        self._set_logging(b, on)
 
     def _set_logging(self, b: Buffer, on: bool) -> None:
         key = self._log_key(b)
