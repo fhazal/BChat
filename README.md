@@ -11,7 +11,7 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 [![Licence: GPL-2.0-or-later](https://img.shields.io/badge/licence-GPL--2.0--or--later-a6e3a1)](LICENSE)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab?logo=python&logoColor=white)
 ![Qt 6](https://img.shields.io/badge/Qt-6%20(PySide6)-41cd52?logo=qt&logoColor=white)
-![First release: coming soon](https://img.shields.io/badge/first%20release-coming%20soon-f5c2e7)
+[![Latest release](https://img.shields.io/github/v/release/fhazal/BChat?label=release&color=f5c2e7)](https://github.com/fhazal/BChat/releases/latest)
 
 [![Website](https://img.shields.io/badge/Website-bajubesi.org-8b5cf6?style=for-the-badge)](https://bajubesi.org)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20us-ff5e5b?logo=ko-fi&logoColor=white&style=for-the-badge)](https://ko-fi.com/bajubesi)
@@ -145,9 +145,6 @@ All of them can be changed in *Settings → Advanced → Keyboard Shortcuts*.
 ---
 
 ## 🚀 Install
-
-> [!IMPORTANT]
-> The first installer is on its way. Until then you can [build BChat from source](#️-building).
 
 1. Download the latest installer (`BChat-…-setup.exe`) from **[Releases](https://github.com/fhazal/BChat/releases/latest)** and run it. It isn't code-signed yet, so Windows SmartScreen may warn you: choose **More info → Run anyway**.
 2. Start BChat, pick a network from the Network List (or add your own), choose a nick, and say hello.
