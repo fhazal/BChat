@@ -10,10 +10,11 @@ from PySide6.QtGui import QColor, QFont, QKeyEvent, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit, QToolButton, QWidget)
 
 from .config import Theme
-from .protocol import parse_format
+from .protocol import EXTENDED, colour_of, parse_format, readable
 
 FG_INDEX = QTextCharFormat.Property.UserProperty + 1   # mIRC colour number kept on the text
 BG_INDEX = QTextCharFormat.Property.UserProperty + 2
+MONO = QTextCharFormat.Property.UserProperty + 3      # monospace (code 0x11) kept on the text
 EMOJI = ("\U0001F600 \U0001F602 \U0001F60A \U0001F60D \U0001F60E \U0001F914 \U0001F622 \U0001F621 \U0001F44D "
          "\U0001F44E \U0001F44F \U0001F64F \U0001F525 \U0001F389 ❤️ ⭐ \U0001F3B5 \U0001F37A ☕ "
          "\U0001F918").split()   # no flags: Windows' emoji font has none, they show as two letters
@@ -90,6 +91,7 @@ class TopicEdit(QTextEdit):
     def __init__(self, theme: Theme, parent=None):
         super().__init__(parent)
         self.theme = theme
+        self.exact = False      # Preferences: show colours exactly as sent (no readability guard)
         self.raw = ""
         self.setAcceptRichText(False)
         self.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
@@ -119,21 +121,31 @@ class TopicEdit(QTextEdit):
             f.setFontItalic(True)
         if sp.underline:
             f.setFontUnderline(True)
+        if sp.strike:
+            f.setFontStrikeOut(True)
+        if sp.mono:
+            f.setFontFamilies(["Consolas", "Courier New", "monospace"])
+            f.setProperty(MONO, True)
         fg, bg = sp.fg, sp.bg
         if sp.reverse:
             fg, bg = bg if bg is not None else 1, fg if fg is not None else 0
-        if fg is not None and fg < 99:
-            f.setForeground(QColor(self.theme.palette[fg % 16]))
-            f.setProperty(FG_INDEX, fg % 16)
-        if bg is not None and bg < 99:
-            f.setBackground(QColor(self.theme.palette[bg % 16]))
-            f.setProperty(BG_INDEX, bg % 16)
+        # the code itself (0-98 or "#rrggbb") stays on the text, so saving the topic sends it back unchanged
+        fgc, bgc = colour_of(fg, self.theme.palette), colour_of(bg, self.theme.palette)
+        if fgc and not self.exact and not (isinstance(fg, int) and fg <= 15):
+            # same readability guard as the chat; only the shade on screen changes, the saved code stays as sent
+            fgc = readable(fgc, bgc or self.palette().color(self.backgroundRole()).name())
+        if fgc:
+            f.setForeground(QColor(fgc))
+            f.setProperty(FG_INDEX, fg)
+        if bgc:
+            f.setBackground(QColor(bgc))
+            f.setProperty(BG_INDEX, bg)
         return f
 
     def to_irc(self) -> str:
         """The text with mIRC codes, as few as needed."""
         out: list[str] = []
-        state = (False, False, False, None, None)
+        state = (False, False, False, None, None, False, False)
         block = self.document().begin()
         it = block.begin()
         while not it.atEnd():
@@ -141,7 +153,8 @@ class TopicEdit(QTextEdit):
             f = frag.charFormat()
             want = (f.fontWeight() >= QFont.Weight.Bold, f.fontItalic(), f.fontUnderline(),
                     f.property(FG_INDEX) if f.hasProperty(FG_INDEX) else None,
-                    f.property(BG_INDEX) if f.hasProperty(BG_INDEX) else None)
+                    f.property(BG_INDEX) if f.hasProperty(BG_INDEX) else None,
+                    f.fontStrikeOut(), bool(f.property(MONO)) if f.hasProperty(MONO) else False)
             if want != state:
                 out.append(self._switch(state, want))
                 state = want
@@ -151,16 +164,35 @@ class TopicEdit(QTextEdit):
 
     @staticmethod
     def _switch(old, new) -> str:
-        ob, oi, ou, ofg, obg = old
-        nb, ni, nu, nfg, nbg = new
+        ob, oi, ou, ofg, obg, os_, om = old
+        nb, ni, nu, nfg, nbg, ns, nm = new
         if (ofg is not None or obg is not None) and nfg is None and nbg is None:
             # colour off: reset everything, then turn back on what stays
-            return "\x0f" + ("\x02" if nb else "") + ("\x1d" if ni else "") + ("\x1f" if nu else "")
-        s = ("\x02" if ob != nb else "") + ("\x1d" if oi != ni else "") + ("\x1f" if ou != nu else "")
+            return ("\x0f" + ("\x02" if nb else "") + ("\x1d" if ni else "") + ("\x1f" if nu else "")
+                    + ("\x1e" if ns else "") + ("\x11" if nm else ""))
+        s = (("\x02" if ob != nb else "") + ("\x1d" if oi != ni else "") + ("\x1f" if ou != nu else "")
+             + ("\x1e" if os_ != ns else "") + ("\x11" if om != nm else ""))
         if (nfg, nbg) != (ofg, obg):
-            fg = nfg if nfg is not None else 99
-            s += f"\x03{fg:02d}" + (f",{nbg:02d}" if nbg is not None else "")
+            s += TopicEdit._colour_code(nfg, nbg)
         return s
+
+    @staticmethod
+    def _colour_code(fg, bg) -> str:
+        """The code for a colour pair: \\x03NN[,NN] for colour numbers, \\x04RRGGBB[,RRGGBB] when hex is involved.
+        In a hex code, colours 16-98 are written as their fixed hex value. 0-15 are the reader's theme shades and have
+        no fixed hex, so in the rare mix of 0-15 with hex the 0-15 side is kept as a number and the other side dropped."""
+        if not isinstance(fg, str) and not isinstance(bg, str):
+            return f"\x03{fg if fg is not None else 99:02d}" + (f",{bg:02d}" if bg is not None else "")
+
+        def hexpart(c):
+            if isinstance(c, str):
+                return c[1:]
+            return EXTENDED[c - 16] if c is not None and 16 <= c <= 98 else None
+
+        f, b = hexpart(fg), hexpart(bg)
+        if f is None:                     # fg is 0-15 or default: it can't go in a hex code
+            return f"\x03{fg:02d}" if fg is not None else ""
+        return f"\x04{f}" + (f",{b}" if b is not None else "")
 
     # --- buttons ------------------------------------------------------------------------
 

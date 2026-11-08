@@ -42,7 +42,7 @@ HELP = {
     "clear": "CLEAR [ALL|HISTORY|<lines>]: clears this tab, every tab, the input history, or the last lines",
     "close": "CLOSE: closes this tab",
     "ctcp": "CTCP <nick> <message>: sends a CTCP",
-    "cycle": "CYCLE: leaves and rejoins this channel",
+    "cycle": "CYCLE [#channel]: leaves and rejoins the channel (same as /hop)",
     "dcc": "DCC SEND <nick> [<file>], DCC CHAT <nick>, DCC GET <nick>, DCC CLOSE <type> <nick> <file>, DCC LIST",
     "deop": "DEOP <nick>...: takes channel operator status",
     "devoice": "DEVOICE <nick>...: takes voice",
@@ -90,7 +90,7 @@ HELP = {
     "whois": "WHOIS <nick>: shows who someone is",
     "dehop": "DEHOP <nick>...: takes half-operator status",
     "disconnect": "DISCONNECT: disconnects from the server",
-    "hop": "HOP <nick>...: gives half-operator status",
+    "hop": "HOP [#channel]: leaves and rejoins the channel (as in mIRC). HOP <nick>...: gives half-operator status",
     "j": "J <channel> [<key>]: joins a channel",
     "leave": "LEAVE [<channel>] [<reason>]: leaves a channel",
     "raw": "RAW <text>: sends text to the server as it is",
@@ -352,6 +352,16 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
     elif cmd == "notice" and len(args) >= 2:
         s.send("NOTICE", args[0], rest.partition(" ")[2])
         s.add(b, "notice", f">{args[0]}<", rest.partition(" ")[2])
+    elif cmd == "cycle" or (cmd == "hop" and (not args or args[0][:1] in s.chantypes)):
+        # /hop alone (or /hop #channel) leaves and rejoins, as in mIRC; /hop nick still gives half-op (XChat)
+        target = args[0] if args and args[0][:1] in s.chantypes else chan
+        if not target:
+            need_channel()
+        else:
+            tb = s.buffer(target, create=False)
+            key = tb.mode_args.get("k", "") if tb is not None else ""
+            s.send("PART", target, s.cfg.part_reason)
+            s.send("JOIN", target, key) if key else s.send("JOIN", target)   # a +k channel needs its key back
     elif cmd in ("op", "deop", "voice", "devoice", "hop", "dehop"):
         if need_channel() and args:
             letter = {"op": "+o", "deop": "-o", "voice": "+v", "devoice": "-v", "hop": "+h", "dehop": "-h"}[cmd]
@@ -481,10 +491,6 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
     elif cmd == "unban":
         if need_channel() and args:
             s.send("MODE", chan, "-" + "b" * len(args), *args)
-    elif cmd == "cycle":
-        if need_channel():
-            s.send("PART", chan, s.cfg.part_reason)
-            s.send("JOIN", chan)
     elif cmd == "allchan" and rest:
         for x in list(s.buffers.values()):
             if x.kind == CHANNEL:

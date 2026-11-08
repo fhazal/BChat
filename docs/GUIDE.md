@@ -45,6 +45,7 @@ Type `/nick NewName`. To change it for good, open the Network List and change **
 ### What are the most useful commands?
 - `/join #channel`: join a channel
 - `/part`: leave the channel you're in
+- `/hop`: leave and rejoin the channel you're in (`/cycle` does the same)
 - `/msg nick text`: send a private message
 - `/query nick`: open a private tab with someone
 - `/me waves`: say what you're doing (shows as an action)
@@ -58,7 +59,7 @@ Type `/nick NewName`. To change it for good, open the Network List and change **
 Click a channel in the tree on the left, or use `Alt+1` to `Alt+9`, or `Ctrl+PageUp` / `Ctrl+PageDown`. **View → Channel Switcher** chooses between the tree and tabs.
 
 ### How do I use colours, bold and underline?
-In the input box: `Ctrl+B` bold, `Ctrl+U` underline, `Ctrl+K` colour, `Ctrl+O` back to normal. The topic bar has **B**, **U**, **I**, **Fg** and **Bg** buttons when you're allowed to change the topic.
+In the input box: `Ctrl+B` bold, `Ctrl+U` underline, `Ctrl+Shift+I` italic, `Ctrl+R` reverse, `Ctrl+E` strikethrough, `Ctrl+K` colour, `Ctrl+O` back to normal. Select some text first and `Ctrl+B`, `Ctrl+U`, `Ctrl+Shift+I`, `Ctrl+R` or `Ctrl+E` formats just that part. The topic bar has **B**, **U**, **I**, **Fg** and **Bg** buttons when you're allowed to change the topic.
 
 ### Why can't I change the topic?
 Many channels only let operators (people with **@**) change the topic. When you can't, BChat hides the topic buttons.

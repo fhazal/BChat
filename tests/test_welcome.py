@@ -165,3 +165,21 @@ def test_themes_light_and_dark(app, fresh):
         assert wait(app, d.isVisible)
         assert t.check in d.cards[0].styleSheet() and t.border in d.cards[1].styleSheet()
         d.reject()
+
+
+def test_new_user_gets_a_bee_nick_and_bee_ident(tmp_path):
+    from bchat import config
+    cfg = config.load(tmp_path)                      # no settings yet: first start
+    assert welcome.nick_problem(cfg.nick) == "" and cfg.nick.startswith("Bee") and len(cfg.nick) == 7
+    assert cfg.nick2 == cfg.nick + "_" and cfg.nick3 == cfg.nick + "__"
+    assert cfg.username == "bee" and cfg.realname == "BChat user"
+    assert config.load(tmp_path).nick != "T"
+
+
+def test_welcome_nick_change_moves_the_spare_nicks_along(app, fresh, local):
+    fresh.cfg.nick, fresh.cfg.nick2, fresh.cfg.nick3 = "Bee1234", "Bee1234_", "Bee1234__"   # first-start bee
+    d = welcome.run_welcome(fresh)
+    assert d.nick.text() == "Bee1234"
+    d.nick.setText("Kestrel")
+    d.connect_btn.click()
+    assert (fresh.cfg.nick, fresh.cfg.nick2, fresh.cfg.nick3) == ("Kestrel", "Kestrel_", "Kestrel__")

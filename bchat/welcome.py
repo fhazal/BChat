@@ -11,7 +11,7 @@ from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QPushButton,
                                QRadioButton, QVBoxLayout)
 
-from .config import NetworkConfig, Server
+from .config import NetworkConfig, Server, random_nick
 from .session import INFO
 from .widgets import FramedDialog, icon
 from . import lucide
@@ -28,10 +28,6 @@ CHOICES = [
     ("OFTC", "irc.oftc.net", 6697, "", "irc.oftc.net · pick channels after",
      "Free software projects and their people."),
 ]
-
-
-def random_nick() -> str:
-    return f"Bee{random.randint(1000, 9999)}"
 
 
 def nick_problem(nick: str) -> str:
@@ -259,11 +255,11 @@ def run_welcome(win, on_done=None) -> WelcomeDialog:
         cfg = win.cfg
         cfg.welcome_done = True
         if d.result_choice == "connect":
-            nick = d.nick.text().strip()
+            nick, was = d.nick.text().strip(), cfg.nick
             cfg.nick = nick
-            if not cfg.nick2:
+            if not cfg.nick2 or cfg.nick2 == was + "_":      # still the first-start bee choices: follow the new nick
                 cfg.nick2 = nick + "_"
-            if not cfg.nick3:
+            if not cfg.nick3 or cfg.nick3 == was + "__":
                 cfg.nick3 = nick + "__"
             net = network_for(cfg, d.chosen())
             win.lists_changed()

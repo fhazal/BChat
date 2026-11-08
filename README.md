@@ -28,13 +28,16 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 
 ---
 
-## 🎨 Six themes
+## 🎨 Seventeen themes
 
 <p align="center">
   <img src="docs/screenshots/themes.png" alt="BChat in Catppuccin Mocha, Macchiato, Frappé and Latte, One Dark Pro and Dracula" width="100%">
 </p>
 
-Catppuccin **Mocha** (the default), **Macchiato**, **Frappé** and **Latte**, **One Dark Pro** and **Dracula**. Pick one in *Settings → Preferences → Colors*, change any colour you like, and *Reset to Theme* whenever you want to start over. Icons follow the theme too.
+**Dark:** Catppuccin **Mocha** (the default), **Macchiato** and **Frappé**, **One Dark Pro**, **Dracula**, **Tokyo Night**, **Nord**, **Gruvbox Dark**, **Rosé Pine** and **Solarized Dark**.<br>
+**Light:** Catppuccin **Latte**, **Tokyo Night Light**, **Gruvbox Light**, **Rosé Pine Dawn**, **Solarized Light**, and two for old hands: **XChat Classic** and **mIRC Modern**.
+
+Pick one in *Settings → Preferences → Colors*, change any colour you like, and *Reset to Theme* whenever you want to start over. Icons follow the theme too.
 
 ---
 
@@ -109,6 +112,8 @@ When a new version is out, a quiet *Update* entry appears after *Help*. BChat do
 | Close tab | `Ctrl+W` |
 | Detach tab | `Ctrl+I` |
 | Search text | `Ctrl+F` |
+| Bold, underline, italic, reverse, strikethrough (input box; wraps selected text) | `Ctrl+B` `Ctrl+U` `Ctrl+Shift+I` `Ctrl+R` `Ctrl+E` |
+| Colour, back to normal (input box) | `Ctrl+K` `Ctrl+O` |
 | Clear text | `Ctrl+L` |
 | Reset marker line | `Ctrl+M` |
 | Marked away | `Alt+A` |
@@ -225,7 +230,7 @@ The installer is built with [PyInstaller](https://pyinstaller.org) and [Inno Set
 
 - **[XChat](http://xchat.org) 2**, the client many of us grew up with: BChat's layout and feature set follow it.
 - **[Lucide](https://lucide.dev)** (ISC licence): the icon set used throughout BChat.
-- **[Catppuccin](https://catppuccin.com)**, **[One Dark Pro](https://github.com/Binaryify/OneDark-Pro)** and **[Dracula](https://draculatheme.com)** (MIT): the colour themes.
+- **[Catppuccin](https://catppuccin.com)**, **[One Dark Pro](https://github.com/Binaryify/OneDark-Pro)**, **[Dracula](https://draculatheme.com)**, **[Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme)**, **[Nord](https://www.nordtheme.com)**, **[Gruvbox](https://github.com/morhetz/gruvbox)**, **[Rosé Pine](https://rosepinetheme.com)** and **[Solarized](https://ethanschoonover.com/solarized/)** (MIT): the colour themes. *XChat Classic* uses XChat 2's own colours (GPL); *mIRC Modern* follows mIRC's colour scheme of that name.
 - **[Qt for Python (PySide6)](https://doc.qt.io/qtforpython-6/)**: the toolkit BChat is built on.
 - The BChat logo, the bee and the nick list lights are BChat's own.
 - Released under the [GPL-2.0-or-later licence](LICENSE).

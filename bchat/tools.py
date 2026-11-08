@@ -789,7 +789,7 @@ class HelpWindow(ToolWindow):
         for name in sorted(rows):
             self.view.addTopLevelItem(QTreeWidgetItem(["/" + name, rows[name]]))
         self.body.addWidget(self.view, 1)
-        keys = QLabel("Keys: Tab completes a nick. Ctrl+B bold, Ctrl+K colour, Ctrl+U underline, Ctrl+O reset. Alt+1-9 and Ctrl+PageUp/Down switch tabs. "
+        keys = QLabel("Keys: Tab completes a nick. Ctrl+B bold, Ctrl+K colour, Ctrl+U underline, Ctrl+Shift+I italic, Ctrl+R reverse, Ctrl+E strikethrough, Ctrl+O reset. Alt+1-9 and Ctrl+PageUp/Down switch tabs. "
                       "Settings > Advanced > Keyboard Shortcuts lists the rest.")
         keys.setWordWrap(True)
         self.body.addWidget(keys)

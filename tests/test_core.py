@@ -100,7 +100,7 @@ def test_config_roundtrip(tmp_path: Path):
 
 def test_broken_config_is_kept_aside(tmp_path: Path):
     (tmp_path / "config.json").write_text("{not json")
-    assert load(tmp_path).nick == ""
+    assert load(tmp_path).nick.startswith("Bee")       # starts fresh, as on a first start
     assert (tmp_path / "config.broken.json").exists()
 
 
@@ -302,3 +302,34 @@ def test_popup_opens_above_when_no_room_below():
     small = QRect(0, 0, 400, 200)
     p = place(QRect(10, 90, 26, 24), size, small)
     assert 0 <= p.y() and p.y() + size.height() <= 200
+
+
+def test_mirc_extended_hex_strike_and_mono():
+    """mIRC study bugs 1-3 (11-07): colours 16-98 wrapped to 0-15, hex colours printed as text, \x1e \x11 dropped."""
+    from bchat.protocol import EXTENDED, colour_of
+    pal = [f"#00000{i:x}" for i in range(16)]
+    s = parse_format("\x0320,52a\x03 \x04FF8800,000000b\x04 \x1ec\x1e \x11d\x11 \x0399e")
+    got = {x.text: x for x in s if x.text.strip()}
+    assert (got["a"].fg, got["a"].bg) == (20, 52)
+    assert colour_of(20, pal) == "#004700" and colour_of(52, pal) == "#ff0000"   # fixed, not the theme's 4 and 4
+    assert colour_of(4, pal) == pal[4] and colour_of(99, pal) is None and colour_of(None, pal) is None
+    assert len(EXTENDED) == 83 and colour_of(98, pal) == "#ffffff" and colour_of(16, pal) == "#470000"
+    assert (got["b"].fg, got["b"].bg) == ("#ff8800", "#000000") and colour_of("#ff8800", pal) == "#ff8800"
+    assert got["c"].strike and not got["d"].strike and got["d"].mono and not got["e"].mono
+    assert got["e"].fg == 99 and colour_of(99, pal) is None
+    assert strip_format("\x04FF8800orange\x04 \x1estruck\x1e") == "orange struck"    # no hex digits left in the text
+    assert strip_format("\x04 x") == " x"                                            # bare \x04 just resets
+
+
+def test_readable_keeps_hue_and_leaves_good_colours_alone():
+    from bchat.config import THEME_NAMES, make_theme
+    from bchat.protocol import EXTENDED, contrast, readable
+    for name in THEME_NAMES:
+        bg = make_theme(name).chat_bg
+        for h in EXTENDED:
+            out = readable("#" + h, bg)
+            assert contrast(out, bg) >= 2.99, (name, h, out)
+            if contrast("#" + h, bg) >= 3:
+                assert out == "#" + h                                  # readable colours are never touched
+    assert readable("#ffffff", "#202040") == "#ffffff"
+    assert readable("#474700", "#1e1e2e") == "#7a7a00"                 # dark olive -> lighter olive, not grey

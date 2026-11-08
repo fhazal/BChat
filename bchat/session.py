@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from PySide6.QtCore import QObject, QTimer, Signal, QCryptographicHash
 from PySide6.QtNetwork import QAbstractSocket, QHostAddress, QHostInfo, QNetworkProxy, QSslSocket, QSslCertificate
 
-from .config import Config, NetworkConfig, Server
+from .config import Config, NetworkConfig, Server, random_nick
 from .textevents import EVENTS, render
 from .protocol import Message, build_line, lower, mask_ban, parse_line
 
@@ -120,7 +120,7 @@ class Session(QObject):
         self.cfg = cfg
         self.server_buffer = Buffer(self, net.name, SERVER)
         self.buffers: dict[str, Buffer] = {}
-        self.nick = self._identity("nick") or "BChatUser"
+        self.nick = self._identity("nick") or random_nick()
         self.state = "disconnected"
         self.server_name = ""
         self.network_token = ""   # ISUPPORT NETWORK=, the server's own name for its network
@@ -307,7 +307,7 @@ class Session(QObject):
         self._welcomed = False
         self._cap_active = set()
         self.nick_attempt = 0
-        self.nick = self._identity("nick") or "BChatUser"
+        self.nick = self._identity("nick") or random_nick()
         self._apply_network_settings()
         self._queue.clear()
         self._next_send = 0.0

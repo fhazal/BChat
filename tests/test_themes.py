@@ -33,8 +33,14 @@ def contrast(a, b):
     return (la + 0.05) / (lb + 0.05)
 
 
-def test_six_themes_in_the_users_order():
-    assert THEME_NAMES == ["Catppuccin Mocha", "Catppuccin Macchiato", "Catppuccin Frappé", "Catppuccin Latte", "One Dark Pro", "Dracula"]
+def test_themes_dark_then_light():
+    assert THEME_NAMES == ["Catppuccin Mocha", "Catppuccin Macchiato", "Catppuccin Frappé", "One Dark Pro", "Dracula",
+                           "Tokyo Night", "Nord", "Gruvbox Dark", "Rosé Pine", "Solarized Dark",
+                           "Catppuccin Latte", "Tokyo Night Light", "Gruvbox Light", "Rosé Pine Dawn", "Solarized Light",
+                           "XChat Classic", "mIRC Modern"]
+    from bchat.widgets import is_light
+    for name in THEME_NAMES:                           # BChat's light-theme fixes follow the list it is in
+        assert is_light(make_theme(name)) == (name in config.LIGHT_THEMES), name
 
 
 def test_mocha_preset_is_exactly_the_old_default():
@@ -68,6 +74,19 @@ def test_official_colours_where_they_come_from():
     assert (od["base"], od["text"], od["red"], od["green"], od["blue"]) == ("#282c34", "#abb2bf", "#e06c75", "#98c379", "#61afef")
     dr = PALETTES["Dracula"]
     assert (dr["base"], dr["text"], dr["pink"], dr["green"], dr["mauve"]) == ("#282a36", "#f8f8f2", "#ff79c6", "#50fa7b", "#bd93f9")
+    tn = PALETTES["Tokyo Night"]
+    assert (tn["base"], tn["red"], tn["blue"], tn["green"]) == ("#1a1b26", "#f7768e", "#7aa2f7", "#9ece6a")
+    assert PALETTES["Tokyo Night Light"]["base"] == "#e6e7ed" and PALETTES["Tokyo Night Light"]["blue"] == "#2959aa"
+    nd = PALETTES["Nord"]
+    assert (nd["base"], nd["surface0"], nd["red"], nd["green"], nd["sky"]) == ("#2e3440", "#3b4252", "#bf616a", "#a3be8c", "#88c0d0")
+    assert (PALETTES["Gruvbox Dark"]["base"], PALETTES["Gruvbox Dark"]["red"]) == ("#282828", "#fb4934")
+    assert (PALETTES["Gruvbox Light"]["base"], PALETTES["Gruvbox Light"]["red"]) == ("#fbf1c7", "#9d0006")
+    assert (PALETTES["Rosé Pine"]["base"], PALETTES["Rosé Pine"]["red"], PALETTES["Rosé Pine"]["mauve"]) == ("#191724", "#eb6f92", "#c4a7e7")
+    assert (PALETTES["Rosé Pine Dawn"]["base"], PALETTES["Rosé Pine Dawn"]["text"]) == ("#faf4ed", "#464261")
+    assert (PALETTES["Solarized Dark"]["base"], PALETTES["Solarized Light"]["base"], PALETTES["Solarized Dark"]["blue"]) ==         ("#002b36", "#fdf6e3", "#268bd2")
+    xc, mm = make_theme("XChat Classic"), make_theme("mIRC Modern")
+    assert xc.palette[2] == "#3535b3" and xc.chat_bg == "#f0f0f0" and xc.marker == "#cc1010"       # XChat 2.8.8 palette.c
+    assert mm.palette[:5] == ["#ffffff", "#000000", "#00007f", "#009300", "#ff0000"] and mm.topic == "#009300"
 
 
 def test_older_settings_load_as_mocha_or_custom(tmp_path):
@@ -97,14 +116,18 @@ def win(app, tmp_path):
 def test_picker_sets_everything_then_custom_then_reset(app, win):
     from bchat.preferences import PreferencesDialog
     d = PreferencesDialog(win, "Colors")
-    assert d.theme_box.currentText() == "Catppuccin Mocha" and d.theme_box.count() == 6
-    d.theme_box.setCurrentIndex(THEME_NAMES.index("Dracula"))
-    d.theme_box.activated.emit(THEME_NAMES.index("Dracula"))
+    presets = len(THEME_NAMES) + 2                     # plus the Dark and Light headings
+    assert d.theme_box.currentText() == "Catppuccin Mocha" and d.theme_box.count() == presets
+    assert d.theme_box.itemText(0) == "Dark" and d.theme_box.itemText(len(config.DARK_THEMES) + 1) == "Light"
+    assert not d.theme_box.model().item(0).isEnabled()  # headings can't be picked
+    i = d.theme_box.findData("Dracula")
+    d.theme_box.setCurrentIndex(i)
+    d.theme_box.activated.emit(i)
     assert d.swatches["chat_bg"].colour == "#282a36" and d.palette_swatches[4].colour == "#ff5555"
     d.set_colour("chat_bg", "#000000")
-    assert d.theme_box.currentText() == "Custom (based on Dracula)" and d.theme_box.count() == 7
+    assert d.theme_box.currentText() == "Custom (based on Dracula)" and d.theme_box.count() == presets + 1
     d.reset_colours()
-    assert d.theme_box.currentText() == "Dracula" and d.theme_box.count() == 6 and d.swatches["chat_bg"].colour == "#282a36"
+    assert d.theme_box.currentText() == "Dracula" and d.theme_box.count() == presets and d.swatches["chat_bg"].colour == "#282a36"
     d.set_colour("nick", "#123456")
     d.accept()
     t = win.cfg.theme
@@ -121,7 +144,7 @@ def test_light_theme_buttons_icons_and_tree(app, win):
     from bchat.widgets import icon
     menu_close = [a for a in win.findChildren(type(win.update_act)) if a.text() == "&Close"][0]
     d = PreferencesDialog(win, "Colors")
-    d.theme_box.activated.emit(THEME_NAMES.index("Catppuccin Latte"))
+    d.theme_box.activated.emit(d.theme_box.findData("Catppuccin Latte"))
     d.accept()
     wait(app, lambda: False, 100)
     t = win.cfg.theme
@@ -157,7 +180,7 @@ def test_light_fixes_only_touch_light_themes(app):
     for name in THEME_NAMES:
         t = make_theme(name)
         sheet = widgets.stylesheet(t)
-        light = name == "Catppuccin Latte"
+        light = name in config.LIGHT_THEMES
         assert ("QAbstractSpinBox" in sheet) == light and ('frameShape="4"' in sheet) == light
         assert sheet.startswith(widgets._sheet(t))
         widgets.set_light_palette(t)
@@ -203,7 +226,7 @@ def test_lucide_icons_are_all_there_and_follow_the_theme(app, win):
     cols = ink(icon("quit"))
     assert cols and all(abs(c.lightness() - QColor(win.cfg.theme.text).lightness()) < 20 for c in cols)
     d = PreferencesDialog(win, "Colors")
-    d.theme_box.activated.emit(THEME_NAMES.index("Catppuccin Latte"))
+    d.theme_box.activated.emit(d.theme_box.findData("Catppuccin Latte"))
     d.accept()
     cols = ink(quit_act.icon())
     assert cols and all(c.lightness() < 120 for c in cols)     # Latte's dark text colour, on the existing menu item

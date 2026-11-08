@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QColorDialog, QComboBox,
                                QHBoxLayout, QLabel, QLineEdit, QPushButton, QRadioButton, QScrollArea, QSpinBox, QStackedWidget,
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from .config import PALETTES, THEME_NAMES, Config, Theme, is_custom, make_theme
+from .config import DARK_THEMES, LIGHT_THEME_ORDER, PALETTES, THEME_NAMES, Config, Theme, is_custom, make_theme
 from .widgets import FramedDialog, icon
 
 CATEGORIES = {"Interface": ["Text box", "Input box", "User list", "Channel switcher", "Colors"],
@@ -216,6 +216,13 @@ class PreferencesDialog(FramedDialog):
         self.strip = QCheckBox("Strip mIRC colours from what people say", page)
         self.strip.setChecked(c.strip_colors)
         lay.addWidget(self.strip)
+        self.colors_exact = QCheckBox("Show colours exactly as sent, even when hard to read", page)
+        self.colors_exact.setToolTip("Off: BChat makes faint text colours (mIRC colours 16-98 and hex) just light or "
+                                     "dark enough to read on your theme, keeping their hue. Backgrounds never change.")
+        self.colors_exact.setChecked(c.colors_exact)
+        self.colors_exact.setEnabled(not c.strip_colors)        # nothing to show when colours are stripped
+        self.strip.toggled.connect(lambda on: self.colors_exact.setEnabled(not on))
+        lay.addWidget(self.colors_exact)
         lay.addStretch(1)
         return page
 
@@ -580,7 +587,7 @@ class PreferencesDialog(FramedDialog):
         row = QHBoxLayout()
         row.addWidget(QLabel("Theme:"))
         self.theme_box = QComboBox(page)
-        self.theme_box.addItems(THEME_NAMES)
+        self._fill_theme_box()
         self.theme_box.setMinimumWidth(240)
         self.theme_box.activated.connect(self._theme_picked)
         row.addWidget(self.theme_box)
@@ -629,21 +636,35 @@ class PreferencesDialog(FramedDialog):
         self._sync_theme_box()
         return page
 
+    def _fill_theme_box(self) -> None:
+        """The presets under two headings, Dark and Light. Each preset keeps its name as item data; headings have none."""
+        box = self.theme_box
+        model = box.model()
+        for heading, names in (("Dark", DARK_THEMES), ("Light", LIGHT_THEME_ORDER)):
+            box.addItem(heading)
+            head = model.item(box.count() - 1)
+            head.setEnabled(False)                       # a heading, not a choice
+            f = head.font(); f.setBold(True); head.setFont(f)
+            for n in names:
+                box.addItem(n, n)
+        self._preset_count = box.count()
+
     def _sync_theme_box(self) -> None:
         """Shows the preset, or "Custom (based on ...)" as an extra last entry once a colour differs from it."""
         box = self.theme_box
-        while box.count() > len(THEME_NAMES):
+        while box.count() > self._preset_count:
             box.removeItem(box.count() - 1)
         base = self.theme.name if self.theme.name in PALETTES else THEME_NAMES[0]
         if is_custom(self.theme):
             box.addItem(f"Custom (based on {base})")
             box.setCurrentIndex(box.count() - 1)
         else:
-            box.setCurrentIndex(THEME_NAMES.index(base))
+            box.setCurrentIndex(box.findData(base))
 
     def _theme_picked(self, index: int) -> None:
-        if index < len(THEME_NAMES):
-            self.load_theme(make_theme(THEME_NAMES[index]))
+        name = self.theme_box.itemData(index)
+        if name in PALETTES:
+            self.load_theme(make_theme(name))
 
     def load_theme(self, fresh: Theme) -> None:
         for f in fields(Theme):
@@ -685,6 +706,7 @@ class PreferencesDialog(FramedDialog):
         c.rank_lights = next((k for k, r in self.rank_buttons.items() if r.isChecked()), "off")
         c.color_nicks = self.color_nicks.isChecked()
         c.strip_colors = self.strip.isChecked()
+        c.colors_exact = self.colors_exact.isChecked()
         c.chat_bg_image = self.bg_image.text().strip()
         c.input_chat_font, c.auto_complete = self.input_font.isChecked(), self.auto_complete.isChecked()
         c.spell_check = self.spell.isChecked()

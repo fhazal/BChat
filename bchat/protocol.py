@@ -75,15 +75,75 @@ def lower(s: str) -> str:
 @dataclass
 class Span:
     text: str
-    fg: int | None = None
-    bg: int | None = None
+    fg: int | str | None = None     # mIRC colour number 0-98, or "#rrggbb" from a hex code (\x04)
+    bg: int | str | None = None
     bold: bool = False
     underline: bool = False
     italic: bool = False
     reverse: bool = False
+    strike: bool = False            # \x1e
+    mono: bool = False              # \x11
 
 
 _COLOR = re.compile(r"(\d{1,2})(?:,(\d{1,2}))?")
+_HEX = re.compile(r"([0-9A-Fa-f]{6})(?:,([0-9A-Fa-f]{6}))?")
+
+# Colours 16-98 are the same fixed colours in every client (modern.ircdocs.horse/formatting); only 0-15 follow the theme.
+EXTENDED = (
+    "470000 472100 474700 324700 004700 00472c 004747 002747 000047 2e0047 470047 47002a "
+    "740000 743a00 747400 517400 007400 007449 007474 004074 000074 4b0074 740074 740045 "
+    "b50000 b56300 b5b500 7db500 00b500 00b571 00b5b5 0063b5 0000b5 7500b5 b500b5 b5006b "
+    "ff0000 ff8c00 ffff00 b2ff00 00ff00 00ffa0 00ffff 008cff 0000ff a500ff ff00ff ff0098 "
+    "ff5959 ffb459 ffff71 cfff60 6fff6f 65ffc9 6dffff 59b4ff 5959ff c459ff ff66ff ff59bc "
+    "ff9c9c ffd39c ffff9c e2ff9c 9cff9c 9cffdb 9cffff 9cd3ff 9c9cff dc9cff ff9cff ff94d3 "
+    "000000 131313 282828 363636 4d4d4d 656565 818181 9f9f9f bcbcbc e2e2e2 ffffff").split()
+
+
+def _luminance(hex_colour: str) -> float:
+    h = hex_colour.lstrip("#")
+    ch = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    ch = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in ch]
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+
+
+def contrast(a: str, b: str) -> float:
+    """WCAG contrast ratio of two "#rrggbb" colours, 1 to 21."""
+    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def readable(fg: str, bg: str, need: float = 3.0) -> str:
+    """fg, or the nearest shade of the same hue that reads on bg: lighter on a dark background, darker on a light
+    one, in small steps, stopping as soon as it reaches the contrast needed. Colours that already read are returned
+    unchanged, so most messages look exactly as sent."""
+    if contrast(fg, bg) >= need:
+        return fg
+    import colorsys
+    h = fg.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    hue, light, sat = colorsys.rgb_to_hls(r, g, b)
+    up = _luminance(bg) < 0.18                       # dark background: go lighter
+    best = fg
+    for step in range(1, 41):
+        l2 = min(1.0, light + step * 0.025) if up else max(0.0, light - step * 0.025)
+        rr, gg, bb = colorsys.hls_to_rgb(hue, l2, sat)
+        best = "#%02x%02x%02x" % (round(rr * 255), round(gg * 255), round(bb * 255))
+        if contrast(best, bg) >= need:
+            return best
+    return best
+
+
+def colour_of(c: "int | str | None", palette: list) -> "str | None":
+    """The colour to draw: 0-15 from the theme's palette, 16-98 fixed, "#rrggbb" as sent, 99 or None = default."""
+    if c is None:
+        return None
+    if isinstance(c, str):
+        return c
+    if 0 <= c <= 15:
+        return palette[c]
+    if 16 <= c <= 98:
+        return "#" + EXTENDED[c - 16]
+    return None
 
 
 def parse_format(text: str) -> list[Span]:
@@ -94,7 +154,8 @@ def parse_format(text: str) -> list[Span]:
     def flush():
         nonlocal cur
         if buf:
-            spans.append(Span("".join(buf), cur.fg, cur.bg, cur.bold, cur.underline, cur.italic, cur.reverse))
+            spans.append(Span("".join(buf), cur.fg, cur.bg, cur.bold, cur.underline, cur.italic, cur.reverse,
+                              cur.strike, cur.mono))
             buf.clear()
 
     i = 0
@@ -120,7 +181,21 @@ def parse_format(text: str) -> list[Span]:
                 i = m.end() - 1
             else:
                 cur.fg = cur.bg = None
-        elif c in "\x07\x11\x1e":
+        elif c == "\x04":                     # hex colour: \x04RRGGBB[,RRGGBB]; a bare \x04 turns colours off
+            flush()
+            m = _HEX.match(text, i + 1)
+            if m:
+                cur.fg = "#" + m.group(1).lower()
+                if m.group(2) is not None:
+                    cur.bg = "#" + m.group(2).lower()
+                i = m.end() - 1
+            else:
+                cur.fg = cur.bg = None
+        elif c == "\x1e":
+            flush(); cur.strike = not cur.strike
+        elif c == "\x11":
+            flush(); cur.mono = not cur.mono
+        elif c == "\x07":
             pass
         else:
             buf.append(c)

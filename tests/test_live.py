@@ -3018,7 +3018,7 @@ def _real_process(tmp_path, probe, **settings):
     import json, os, subprocess, sys as _s, time as _t
     d = tmp_path / "cfg"
     (d / "addons").mkdir(parents=True)
-    (d / "config.json").write_text(json.dumps({"nick": "T", "imported": True, "skip_network_list": True, **settings}))
+    (d / "config.json").write_text(json.dumps({"nick": "T", "imported": True, "skip_network_list": True, "welcome_done": True, **settings}))
     (d / "addons" / "probe.py").write_text(probe)
     root = Path(__file__).resolve().parents[1]
     env = {k: v for k, v in os.environ.items() if k != "QT_QPA_PLATFORM"}     # a real window: the off-screen mode has no tray
@@ -3681,3 +3681,126 @@ def test_topic_bar_has_the_same_dark_background_as_other_boxes(live):
     assert corner == win.cfg.theme.panel.lower()
     chat = win.chat.viewport().grab().toImage()
     assert chat.pixelColor(chat.width() - 3, 3).name() == win.cfg.theme.chat_bg.lower()   # chat keeps its own
+
+
+def test_chat_draws_extended_hex_strike_and_mono(live):
+    app, srv, win, s = live
+    b = s.buffers["#skinhead"]
+    win.select_buffer(b)
+    srv.send(":nova!n@h PRIVMSG #skinhead :\x0320green20\x03 \x04ff8800orange\x04 \x1estruck\x1e \x11mono\x11")
+    assert wait(app, lambda: "green20" in win.chat.toPlainText())
+    fmts = {}
+    block = win.chat.document().begin()
+    while block.isValid():
+        it = block.begin()
+        while not it.atEnd():
+            f = it.fragment()
+            fmts[f.text().strip()] = f.charFormat()
+            it += 1
+        block = block.next()
+    from bchat.protocol import contrast
+    bg = win.cfg.theme.chat_bg
+    g20 = fmts["green20"].foreground().color().name()
+    assert g20 != win.cfg.theme.palette[4] and contrast(g20, bg) >= 3     # colour 20's green, made readable
+    assert g20[1:3] < g20[3:5] and g20[5:7] < g20[3:5]                    # still green
+    assert fmts["orange"].foreground().color().name() == "#ff8800"       # already readable: exactly as sent
+    assert fmts["struck"].fontStrikeOut()
+    assert "Consolas" in fmts["mono"].fontFamilies()
+    assert "ff8800" not in win.chat.toPlainText()
+
+
+def test_show_colours_exactly_as_sent_turns_the_guard_off(live):
+    from bchat.protocol import contrast
+    app, srv, win, s = live
+    b = s.buffers["#skinhead"]
+    win.select_buffer(b)
+    srv.send(":nova!n@h PRIVMSG #skinhead :\x0318olive18\x03 \x0301,52black-on-red\x03")
+    assert wait(app, lambda: "olive18" in win.chat.toPlainText())
+
+    def colour(word):
+        block = win.chat.document().begin()
+        while block.isValid():
+            it = block.begin()
+            while not it.atEnd():
+                if it.fragment().text().strip() == word:
+                    return it.fragment().charFormat().foreground().color().name()
+                it += 1
+            block = block.next()
+    assert contrast(colour("olive18"), win.cfg.theme.chat_bg) >= 3       # guard on by default
+    assert colour("black-on-red") == win.cfg.theme.palette[1]             # 0-15 on its own background: theme's own
+    win.cfg.colors_exact = True
+    try:
+        win.apply_preferences()
+        assert wait(app, lambda: colour("olive18") == "#474700")          # exactly as sent
+    finally:
+        win.cfg.colors_exact = False
+        win.apply_preferences()
+
+
+def test_topic_keeps_extended_hex_strike_and_mono_codes(live):
+    from bchat.protocol import parse_format
+    app, srv, win, s = live
+    raw = "\x0352,04mix \x04ff8800,112233hex\x04 \x1estrike\x1e \x11mono\x11 \x0320big"
+    win.topic.edit.set_topic(raw)
+    sig = lambda t: [(x.text, x.fg, x.bg, x.strike, x.mono) for x in parse_format(t) if x.text.strip()]
+    assert sig(win.topic.edit.to_irc()) == sig(raw)
+
+
+def test_ctrl_r_and_ctrl_e_and_wrapping_selected_text(live):
+    app, srv, win, s = live
+    win.select_buffer(s.buffers["#skinhead"])
+    i = win.input
+    i.clear()
+    QTest.keyClick(i, Qt.Key.Key_R, Qt.KeyboardModifier.ControlModifier)
+    QTest.keyClick(i, Qt.Key.Key_E, Qt.KeyboardModifier.ControlModifier)
+    assert i.text() == "\x16\x1e"
+    i.setText("say hello now")
+    i.setSelection(4, 5)                                   # "hello"
+    QTest.keyClick(i, Qt.Key.Key_B, Qt.KeyboardModifier.ControlModifier)
+    assert i.text() == "say \x02hello\x02 now"
+    i.setText("x y")
+    i.setSelection(2, 1)
+    QTest.keyClick(i, Qt.Key.Key_E, Qt.KeyboardModifier.ControlModifier)
+    assert i.text() == "x \x1ey\x1e"
+    i.clear()
+
+
+def test_ctrl_shift_i_is_italic_and_ctrl_i_still_detaches(live):
+    app, srv, win, s = live
+    win.select_buffer(s.buffers["#skinhead"])
+    i = win.input
+    i.clear()
+    QTest.keyClick(i, Qt.Key.Key_I, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+    assert i.text() == "\x1d"
+    i.setText("an important word")
+    i.setSelection(3, 9)
+    QTest.keyClick(i, Qt.Key.Key_I, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+    assert i.text() == "an \x1dimportant\x1d word"
+    i.clear()
+    detach = next(a for a in win.findChildren(type(win.menubar_.actions()[0])) if a.shortcut().toString() == "Ctrl+I")
+    assert detach is not None                             # Ctrl+I is still the Detach shortcut
+
+
+def test_hop_alone_rejoins_and_hop_nick_still_gives_half_op(live):
+    """User 11-08: /hop leaves and rejoins the channel, as in mIRC. /hop <nick> keeps XChat's half-op."""
+    app, srv, win, s = live
+    b = s.buffers["#skinhead"]
+    win.select_buffer(b)
+    srv.received.clear()
+    win.input.setText("/hop"); win.input.returnPressed.emit()
+    assert wait(app, lambda: "JOIN #skinhead" in srv.received)
+    assert any(x.startswith("PART #skinhead") for x in srv.received)
+    srv.received.clear()
+    win.input.setText("/hop Oracle"); win.input.returnPressed.emit()
+    assert wait(app, lambda: "MODE #skinhead +h Oracle" in srv.received)
+    assert not any(x.startswith(("PART", "JOIN")) for x in srv.received)
+    srv.received.clear()
+    b.mode_args["k"] = "s3cret"                      # a +k channel: the rejoin needs its key
+    win.input.setText("/cycle"); win.input.returnPressed.emit()
+    assert wait(app, lambda: "JOIN #skinhead s3cret" in srv.received)
+    srv.received.clear()
+    win.select_buffer(s.server_buffer)
+    win.input.setText("/hop #skinhead"); win.input.returnPressed.emit()
+    # the fourth PART/JOIN pair in a row: BChat's flood queue spaces it out, so allow it a few seconds
+    assert wait(app, lambda: any(x.startswith("JOIN #skinhead") for x in srv.received), 12000), srv.received
+    b.mode_args.pop("k", None)

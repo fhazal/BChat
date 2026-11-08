@@ -172,7 +172,11 @@ class InputBox(QLineEdit):
             return True
         return super().event(ev)
 
-    FORMAT_KEYS = {Qt.Key.Key_B: "\x02", Qt.Key.Key_K: "\x03", Qt.Key.Key_U: "\x1f", Qt.Key.Key_O: "\x0f"}
+    # bold, colour, underline, reset, and like mIRC: Ctrl+R reverse, Ctrl+E strikethrough
+    FORMAT_KEYS = {Qt.Key.Key_B: "\x02", Qt.Key.Key_K: "\x03", Qt.Key.Key_U: "\x1f", Qt.Key.Key_O: "\x0f",
+                   Qt.Key.Key_R: "\x16", Qt.Key.Key_E: "\x1e"}
+    WRAPS = ("\x02", "\x1f", "\x16", "\x1e", "\x1d")   # with text selected these go round it, as in mIRC
+    ITALIC = "\x1d"   # Ctrl+Shift+I: Ctrl+I stays Detach (user's choice, 11-08)
 
     def apply_auto_replace(self) -> None:
         """Settings > Auto Replace: the word just finished, as space or Enter is pressed."""
@@ -201,7 +205,9 @@ class InputBox(QLineEdit):
         elif mods == Qt.KeyboardModifier.ShiftModifier and ev.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
             bar.setValue(bar.value() + (bar.singleStep() if ev.key() == Qt.Key.Key_Down else -bar.singleStep()))
         elif mods == Qt.KeyboardModifier.ControlModifier and ev.key() in self.FORMAT_KEYS:
-            self.insert(self.FORMAT_KEYS[ev.key()])  # bold, colour, underline, reset
+            self._format_key(self.FORMAT_KEYS[ev.key()])
+        elif mods == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier) and ev.key() == Qt.Key.Key_I:
+            self._format_key(self.ITALIC)
         elif ev.key() == Qt.Key.Key_Up and self.history:
             self.pos_ = max(0, self.pos_ - 1)
             self.setText(self.history[self.pos_])
@@ -211,6 +217,13 @@ class InputBox(QLineEdit):
         else:
             self._cycle = []
             super().keyPressEvent(ev)
+
+    def _format_key(self, code: str) -> None:
+        """Insert a format code; with text selected, bold/underline/reverse/strike/italic go round it."""
+        if code in self.WRAPS and self.hasSelectedText():
+            self.insert(code + self.selectedText() + code)
+        else:
+            self.insert(code)
 
     def remember(self, text: str) -> None:
         self.history.append(text)
@@ -345,6 +358,7 @@ class MainWindow(FramelessWindow):
         ml.setContentsMargins(0, 0, 0, 0)
         ml.setSpacing(3)
         self.topic = TopicBar(self.cfg.theme, mid)
+        self.topic.edit.exact = self.cfg.colors_exact
         self.topic.submitted.connect(self._topic_entered)
         top_row = QHBoxLayout()
         top_row.setSpacing(3)
@@ -2014,6 +2028,9 @@ class MainWindow(FramelessWindow):
         self._apply_widget_prefs()   # first: a widget style sheet resets the font of the document showing
         self.chat.apply_font()
         self.chat.reload_all()
+        self.topic.edit.exact = self.cfg.colors_exact
+        if self.buf is not None:
+            self.topic.edit.set_topic(self.topic.edit.raw)   # redraw the topic with the colour setting
         self.userlist.set_buffer(self.buf if self.buf is not None and self.buf.kind == CHANNEL else None)
         self.userlist.viewport().update()
         self.tree.viewport().update()          # tree lines and boxes come from the theme

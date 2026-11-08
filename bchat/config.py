@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -46,9 +47,97 @@ DRACULA = dict(rosewater="#ff79c6", flamingo="#ff92df", pink="#ff79c6", mauve="#
                blue="#bd93f9", lavender="#d6acff", text="#f8f8f2", subtext1="#e2e2dc", subtext0="#c4c5c4", overlay2="#9da7c8",
                overlay1="#7f8ab6", overlay0="#6272a4", surface2="#44475a", surface1="#424450", surface0="#343746",
                base="#282a36", mantle="#21222c", crust="#191a21")
-PALETTES = {**CATPPUCCIN, "One Dark Pro": ONE_DARK_PRO, "Dracula": DRACULA}
-LIGHT_THEMES = {"Catppuccin Latte"}
-THEME_NAMES = list(PALETTES)
+# --- added 2026-11-08 (user's pick). Same 26 Catppuccin role names; official colours first, and where a theme has no
+# colour for a role (in-between greys, a darker sidebar shade) one is picked between its own neighbours.
+# Tokyo Night, https://github.com/enkia/tokyo-night-vscode-theme themes/*.json (MIT)
+TOKYO_NIGHT = dict(rosewater="#f7768e", flamingo="#ff9e64", pink="#bb9af7", mauve="#9d7cd8", red="#f7768e", maroon="#db4b4b",
+                   peach="#ff9e64", yellow="#e0af68", green="#9ece6a", teal="#73daca", sky="#7dcfff", sapphire="#2ac3de",
+                   blue="#7aa2f7", lavender="#9abdf5", text="#c0caf5", subtext1="#a9b1d6", subtext0="#9aa5ce", overlay2="#787c99",
+                   overlay1="#646e9c", overlay0="#545c7e", surface2="#515670", surface1="#363b54", surface0="#1e202e",
+                   base="#1a1b26", mantle="#16161e", crust="#101014")
+TOKYO_NIGHT_LIGHT = dict(rosewater="#8c4351", flamingo="#965027", pink="#7b43ba", mauve="#65359d", red="#8c4351", maroon="#942f2f",
+                         peach="#965027", yellow="#8f5e15", green="#385f0d", teal="#33635c", sky="#006c86", sapphire="#0f4b6e",
+                         blue="#2959aa", lavender="#3e6396", text="#343b58", subtext1="#40434f", subtext0="#484c61", overlay2="#5c5f70",
+                         overlay1="#707280", overlay0="#909296", surface2="#acb0bf", surface1="#cdced1", surface0="#dcdee3",
+                         base="#e6e7ed", mantle="#d6d8df", crust="#c1c2c7")
+# Nord, https://github.com/nordtheme/nord src/nord.css (MIT): nord0-15; darker sidebar shades and in-between greys picked
+NORD = dict(rosewater="#d08770", flamingo="#d08770", pink="#b48ead", mauve="#b48ead", red="#bf616a", maroon="#bf616a",
+            peach="#d08770", yellow="#ebcb8b", green="#a3be8c", teal="#8fbcbb", sky="#88c0d0", sapphire="#81a1c1",
+            blue="#81a1c1", lavender="#88c0d0", text="#eceff4", subtext1="#e5e9f0", subtext0="#d8dee9", overlay2="#aeb6c5",
+            overlay1="#8c96a9", overlay0="#6c788f", surface2="#4c566a", surface1="#434c5e", surface0="#3b4252",
+            base="#2e3440", mantle="#2a2f3a", crust="#242933")
+# Gruvbox, https://github.com/morhetz/gruvbox colors/gruvbox.vim (MIT/X11): bright accents on dark, faded ones on light
+GRUVBOX_DARK = dict(rosewater="#d3869b", flamingo="#fe8019", pink="#d3869b", mauve="#d3869b", red="#fb4934", maroon="#cc241d",
+                    peach="#fe8019", yellow="#fabd2f", green="#b8bb26", teal="#8ec07c", sky="#83a598", sapphire="#83a598",
+                    blue="#83a598", lavender="#83a598", text="#ebdbb2", subtext1="#d5c4a1", subtext0="#bdae93", overlay2="#a89984",
+                    overlay1="#928374", overlay0="#7c6f64", surface2="#665c54", surface1="#504945", surface0="#3c3836",
+                    base="#282828", mantle="#1d2021", crust="#161819")
+GRUVBOX_LIGHT = dict(rosewater="#9d0006", flamingo="#af3a03", pink="#8f3f71", mauve="#8f3f71", red="#9d0006", maroon="#cc241d",
+                     peach="#af3a03", yellow="#b57614", green="#79740e", teal="#427b58", sky="#076678", sapphire="#076678",
+                     blue="#076678", lavender="#076678", text="#282828", subtext1="#3c3836", subtext0="#504945", overlay2="#665c54",
+                     overlay1="#7c6f64", overlay0="#928374", surface2="#a89984", surface1="#bdae93", surface0="#d5c4a1",
+                     base="#fbf1c7", mantle="#f2e5bc", crust="#ebdbb2")
+# Rosé Pine, https://github.com/rose-pine/palette palette.json (MIT). It has no green: foam (its cyan) takes that place,
+# as in Rosé Pine's own themes. Highlight greys and darker sidebar shades picked between its own colours.
+ROSE_PINE = dict(rosewater="#ebbcba", flamingo="#ebbcba", pink="#ebbcba", mauve="#c4a7e7", red="#eb6f92", maroon="#eb6f92",
+                 peach="#ea9a97", yellow="#f6c177", green="#9ccfd8", teal="#9ccfd8", sky="#9ccfd8", sapphire="#3e8fb0",
+                 blue="#3e8fb0", lavender="#c4a7e7", text="#e0def4", subtext1="#b8b5d0", subtext0="#908caa", overlay2="#7f7b98",
+                 overlay1="#6e6a86", overlay0="#524f67", surface2="#403d52", surface1="#26233a", surface0="#1f1d2e",
+                 base="#191724", mantle="#16141f", crust="#12101a")
+ROSE_PINE_DAWN = dict(rosewater="#d7827e", flamingo="#d7827e", pink="#d7827e", mauve="#907aa9", red="#b4637a", maroon="#b4637a",
+                      peach="#d7827e", yellow="#ea9d34", green="#56949f", teal="#56949f", sky="#56949f", sapphire="#286983",
+                      blue="#286983", lavender="#907aa9", text="#464261", subtext1="#575279", subtext0="#6e6a86", overlay2="#797593",
+                      overlay1="#8a859c", overlay0="#9893a5", surface2="#cecacd", surface1="#dfdad9", surface0="#f2e9e1",
+                      base="#faf4ed", mantle="#f4ede8", crust="#ebe2da")
+# Solarized, https://github.com/altercation/solarized README (MIT): base03-base3 and the 8 accents, the same on dark and light
+SOLARIZED_DARK = dict(rosewater="#d33682", flamingo="#cb4b16", pink="#d33682", mauve="#6c71c4", red="#dc322f", maroon="#d33682",
+                      peach="#cb4b16", yellow="#b58900", green="#859900", teal="#2aa198", sky="#2aa198", sapphire="#268bd2",
+                      blue="#268bd2", lavender="#6c71c4", text="#93a1a1", subtext1="#8b9b9c", subtext0="#839496", overlay2="#74898f",
+                      overlay1="#657b83", overlay0="#586e75", surface2="#2d4f57", surface1="#1c4450", surface0="#073642",
+                      base="#002b36", mantle="#00252e", crust="#001e26")
+SOLARIZED_LIGHT = dict(rosewater="#d33682", flamingo="#cb4b16", pink="#d33682", mauve="#6c71c4", red="#dc322f", maroon="#d33682",
+                       peach="#cb4b16", yellow="#b58900", green="#859900", teal="#2aa198", sky="#2aa198", sapphire="#268bd2",
+                       blue="#268bd2", lavender="#6c71c4", text="#073642", subtext1="#586e75", subtext0="#657b83", overlay2="#74898f",
+                       overlay1="#839496", overlay0="#93a1a1", surface2="#c7c1ad", surface1="#d9d2bd", surface0="#e6dfca",
+                       base="#fdf6e3", mantle="#f5efdc", crust="#eee8d5")
+# XChat Classic: XChat 2.8.8 src/fe-gtk/palette.c (GPL-2.0, like BChat): black on #f0f0f0, its own 16 IRC colours,
+# selection blue #356ec1, marker red #cc1010, tab colours dark red (new data) and blue (nick mentioned)
+XCHAT_CLASSIC = dict(rosewater="#c33b3b", flamingo="#c73232", pink="#b037b0", mauve="#80267f", red="#cc1010", maroon="#c73232",
+                     peach="#990000", yellow="#9c6c00", green="#2a8c2a", teal="#195555", sky="#2e8c74", sapphire="#356ec1",
+                     blue="#0000ff", lavender="#3535b3", text="#000000", subtext1="#333333", subtext0="#4c4c4c", overlay2="#666666",
+                     overlay1="#808080", overlay0="#959595", surface2="#b0b0b0", surface1="#c4c4c4", surface0="#d6d6d6",
+                     base="#f0f0f0", mantle="#e6e6e6", crust="#d9d9d9")
+# mIRC Modern: mIRC's own "mIRC Modern" colour scheme (mirc.ini) on white with mIRC's standard 16 colours
+MIRC_MODERN = dict(rosewater="#9c009c", flamingo="#fc7f00", pink="#9c009c", mauve="#9c009c", red="#ff0000", maroon="#7f0000",
+                   peach="#fc7f00", yellow="#c86400", green="#009300", teal="#009393", sky="#009393", sapphire="#0000fc",
+                   blue="#0000fc", lavender="#00007f", text="#000000", subtext1="#333333", subtext0="#555555", overlay2="#6a6a6a",
+                   overlay1="#7f7f7f", overlay0="#a0a0a0", surface2="#b4b4b4", surface1="#c8c8c8", surface0="#dadada",
+                   base="#ffffff", mantle="#f0f0f0", crust="#e3e3e3")
+
+# The client themes keep their own 16 IRC colours (XChat's palette.c; mIRC's standard palette), not ones made from roles
+IRC_COLOURS = {
+    "XChat Classic": ["#cccccc", "#000000", "#3535b3", "#2a8c2a", "#c33b3b", "#c73232", "#80267f", "#66361f",
+                      "#d9a641", "#3dcc3d", "#195555", "#2e8c74", "#4545e6", "#b037b0", "#4c4c4c", "#959595"],
+    "mIRC Modern": ["#ffffff", "#000000", "#00007f", "#009300", "#ff0000", "#7f0000", "#9c009c", "#fc7f00",
+                    "#ffff00", "#00fc00", "#009393", "#00ffff", "#0000fc", "#ff00ff", "#7f7f7f", "#d2d2d2"],
+}
+# ...and a few event colours of their own: mIRC Modern shows topics and joins green, own text black, notices maroon
+THEME_FIELDS = {
+    "XChat Classic": dict(nick="#000000", self_nick="#000000", self_text="#000000", marker="#cc1010", topic="#000000"),
+    "mIRC Modern": dict(nick="#000000", self_nick="#000000", self_text="#000000", topic="#009300", join="#009300",
+                        notice_nick="#7f0000", notice_bracket="#7f0000"),
+}
+
+DARK_THEMES = ["Catppuccin Mocha", "Catppuccin Macchiato", "Catppuccin Frappé", "One Dark Pro", "Dracula", "Tokyo Night",
+               "Nord", "Gruvbox Dark", "Rosé Pine", "Solarized Dark"]
+LIGHT_THEME_ORDER = ["Catppuccin Latte", "Tokyo Night Light", "Gruvbox Light", "Rosé Pine Dawn", "Solarized Light",
+                     "XChat Classic", "mIRC Modern"]
+PALETTES = {**CATPPUCCIN, "One Dark Pro": ONE_DARK_PRO, "Dracula": DRACULA, "Tokyo Night": TOKYO_NIGHT, "Nord": NORD,
+            "Gruvbox Dark": GRUVBOX_DARK, "Rosé Pine": ROSE_PINE, "Solarized Dark": SOLARIZED_DARK,
+            "Tokyo Night Light": TOKYO_NIGHT_LIGHT, "Gruvbox Light": GRUVBOX_LIGHT, "Rosé Pine Dawn": ROSE_PINE_DAWN,
+            "Solarized Light": SOLARIZED_LIGHT, "XChat Classic": XCHAT_CLASSIC, "mIRC Modern": MIRC_MODERN}
+LIGHT_THEMES = set(LIGHT_THEME_ORDER)
+THEME_NAMES = DARK_THEMES + LIGHT_THEME_ORDER      # the picker shows them under "Dark" and "Light"
 MOCHA = CATPPUCCIN["Catppuccin Mocha"]
 _m = MOCHA
 
@@ -151,7 +240,7 @@ def make_theme(name: str) -> Theme:
     """A preset theme. Mocha gives exactly the Theme() defaults, so older settings stay Mocha, not Custom."""
     p = PALETTES[name]
     light = name in LIGHT_THEMES
-    return Theme(
+    values = dict(
         name=name, window=p["mantle"], panel=p["base"], border=p["surface0"], text=p["text"], chat_bg=p["base"], chat_fg=p["text"],
         nick=p["lavender"], join=p["green"], topic=p["mauve"], highlight=p["yellow"], selected=p["surface2"], away=p["overlay1"],
         stamp=p["overlay0"], marker=p["red"], new_data=p["peach"], new_msg=p["red"], new_highlight=p["blue"], bar=p["crust"],
@@ -160,7 +249,10 @@ def make_theme(name: str) -> Theme:
         marking_fg=p["text"] if light else "#ffffff", self_nick=p["teal"], self_text=blend(p["text"], p["teal"], 0.3),
         server_mark=p["mauve"], connect=p["mauve"], send_bracket=p["green"], notice_bracket=p["blue"], notice_nick=p["pink"],
         motd_mark=p["overlay0"], motd_text=p["subtext1"], ssl_mark=p["sapphire"], title=p["pink"], muted=p["subtext0"],
-        tree_line=p["surface2"], tree_box=p["overlay1"], palette=irc_palette(p))
+        tree_line=p["surface2"], tree_box=p["overlay1"],
+        palette=list(IRC_COLOURS.get(name) or irc_palette(p)))
+    values.update(THEME_FIELDS.get(name, {}))       # the client themes' own event colours
+    return Theme(**values)
 
 
 def theme_values(t: Theme) -> dict:
@@ -179,7 +271,7 @@ class Config:
     nick: str = ""
     nick2: str = ""
     nick3: str = ""
-    username: str = "bchat"
+    username: str = "bee"
     realname: str = "BChat user"
     part_reason: str = "Leaving"
     quit_reason: str = "Leaving"
@@ -195,6 +287,7 @@ class Config:
     rank_lights: str = "off"       # off | lights | slot (lights + empty slot so text lines up)
     color_nicks: bool = False      # each nick a fixed colour, XChat's "Colored nick names"
     strip_colors: bool = False     # drop mIRC colours from what people say
+    colors_exact: bool = False     # fixed (16-98) and hex text colours exactly as sent, even when hard to read
     chat_bg_image: str = ""        # Text box: background image
     # Input box
     input_chat_font: bool = False
@@ -376,7 +469,7 @@ def load(directory: Path) -> Config:
             # keep the broken file for inspection rather than overwriting it on next save
             path.replace(path.with_suffix(".broken.json"))
             print(f"BChat: settings could not be read, saved aside: {e}")
-            return Config()
+            return fresh_config()
         if d.get("secrets") == "vault":
             from . import vault
             text = vault.get(directory)
@@ -389,7 +482,18 @@ def load(directory: Path) -> Config:
                         setattr(n, f, s.get("networks", {}).get(key, {}).get(f, ""))
                 cfg.proxy_password = s.get("proxy_password", "")
         return cfg
-    return Config()
+    return fresh_config()
+
+
+def random_nick() -> str:
+    """A new user's nickname until they pick one: Bee4821."""
+    return f"Bee{random.randint(1000, 9999)}"
+
+
+def fresh_config() -> Config:
+    """First start: a random bee nick with its second and third choices (an XChat import may replace them)."""
+    nick = random_nick()
+    return Config(nick=nick, nick2=nick + "_", nick3=nick + "__")
 
 
 def save(cfg: Config, directory: Path) -> None:

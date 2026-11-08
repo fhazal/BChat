@@ -14,7 +14,7 @@ from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetrics, QImage
 from PySide6.QtWidgets import QTextBrowser
 
 from .config import Config
-from .protocol import parse_format, split_urls
+from .protocol import colour_of, parse_format, readable, split_urls
 from .session import (ACTION, CONNECT, ERROR, HILITE, INFO, JOIN, MSG, NOTICE, NOW_TALKING, PART, SELF, SERVER, TOPIC,
                       WHOIS, Buffer, Line)
 from .widgets import ASSETS
@@ -274,8 +274,15 @@ class ChatView(QTextBrowser):
         strip = self.cfg.strip_colors
         for sp in parse_format(text):
             cf = QTextCharFormat()
-            fg = QColor(t.palette[sp.fg % 16]) if sp.fg is not None and sp.fg < 99 and not strip else QColor(default_fg)
-            bg = QColor(t.palette[sp.bg % 16]) if sp.bg is not None and sp.bg < 99 and not strip else None
+            # 0-15 follow the theme, 16-98 are the fixed mIRC colours, hex (\x04) as sent; 99 = default
+            fgc = None if strip else colour_of(sp.fg, t.palette)
+            bgc = None if strip else colour_of(sp.bg, t.palette)
+            if fgc and not self.cfg.colors_exact and not (isinstance(sp.fg, int) and sp.fg <= 15):
+                # fixed and hex text colours: nudged just enough to read on the background they sit on
+                # (the theme's 0-15 are made for it; backgrounds are never changed)
+                fgc = readable(fgc, bgc or t.chat_bg)
+            fg = QColor(fgc) if fgc else QColor(default_fg)
+            bg = QColor(bgc) if bgc else None
             if sp.reverse and not strip:
                 fg, bg = QColor(t.chat_bg), fg
             cf.setForeground(fg)
@@ -287,6 +294,10 @@ class ChatView(QTextBrowser):
                 cf.setFontItalic(True)
             if sp.underline:
                 cf.setFontUnderline(True)
+            if sp.strike:
+                cf.setFontStrikeOut(True)
+            if sp.mono:
+                cf.setFontFamilies(["Consolas", "Courier New", "monospace"])
             for piece, is_url in split_urls(sp.text):
                 if is_url:
                     link = QTextCharFormat(cf)
