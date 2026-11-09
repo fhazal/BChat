@@ -106,6 +106,7 @@ def test_double_click_whois_prints_lines_with_info_icon(live):
     app, srv, win, s = live
     b = s.buffers["#skinhead"]
     win.select_buffer(b)
+    win.cfg.ul_double = "QUOTE WHOIS %s %s"        # XChat's old default, for someone who picks it (0.3.0 default opens a chat)
     rect = win.userlist.visualRect(win.userlist.model().index(6))
     QTest.mouseClick(win.userlist.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
     QTest.mouseDClick(win.userlist.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())

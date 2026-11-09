@@ -308,7 +308,8 @@ class Config:
     ul_side: str = "right"         # right | left
     away_track: bool = True
     away_limit: int = 300          # channels bigger than this aren't polled
-    ul_double: str = "QUOTE WHOIS %s %s"
+    ul_double: str = "QUERY %s"      # 0.3.0: mIRC's double-click = private chat (XChat's was QUOTE WHOIS %s %s)
+    ul_double_mirc: bool = True      # the one-time switch below has been done
     # Alerts: each list is [channel message, private message, highlighted]
     alert_popup: list[bool] = field(default_factory=lambda: [False, True, True])   # BChat's own pop-up cards
     alert_tray: list[bool] = field(default_factory=lambda: [False, True, True])
@@ -500,6 +501,11 @@ def load(directory: Path) -> Config:
                 cfg.local_lookup = "normal"          # older settings: "Get my address from the IRC server" off
             from .highlights import migrate
             migrate(cfg)
+            if not d.get("ul_double_mirc"):
+                # 0.3.0: still on XChat's untouched default -> mIRC's (opens a private chat). A changed one stays.
+                if cfg.ul_double.strip().upper() == "QUOTE WHOIS %S %S":
+                    cfg.ul_double = "QUERY %s"
+                cfg.ul_double_mirc = True
         except (ValueError, TypeError) as e:
             # keep the broken file for inspection rather than overwriting it on next save
             path.replace(path.with_suffix(".broken.json"))

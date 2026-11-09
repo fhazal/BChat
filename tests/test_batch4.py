@@ -349,3 +349,32 @@ def test_clienttagdeny_rules():
                                 ("draft/reply", True, False), ("*,-draft/reply,-typing", True, True)):
         s.client_tag_deny = deny
         assert (s.client_tag_ok("+typing"), s.client_tag_ok("+draft/reply")) == (typing, reply), deny
+
+
+def test_double_click_in_nick_list_opens_a_private_chat(app, tmp_path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    srv, win, net, s = live_with(app, tmp_path)
+    b = joined(app, srv, s)
+    win.select_buffer(b)
+    assert win.cfg.ul_double == "QUERY %s"
+    names = [u.nick for u in win.userlist.model().users]
+    i = names.index("Wira")
+    rect = win.userlist.visualRect(win.userlist.model().index(i))
+    QTest.mouseClick(win.userlist.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+    QTest.mouseDClick(win.userlist.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+    assert wait(app, lambda: win.buf is not None and win.buf.name == "Wira" and win.buf.kind == "query")
+    assert not any(x.startswith("WHOIS Wira") for x in srv.received)    # opens the chat, no whois sent
+    win.close(); srv.stop()
+
+
+def test_old_xchat_default_switches_once_custom_stays(tmp_path):
+    import json
+    from bchat import config
+    for old, want in (("QUOTE WHOIS %s %s", "QUERY %s"), ("msg %s hi", "msg %s hi")):
+        (tmp_path / "config.json").write_text(json.dumps({"nick": "a", "ul_double": old}), encoding="utf-8")
+        cfg = config.load(tmp_path)
+        assert cfg.ul_double == want and cfg.ul_double_mirc
+    (tmp_path / "config.json").write_text(json.dumps({"nick": "a", "ul_double": "QUOTE WHOIS %s %s", "ul_double_mirc": True}),
+                                          encoding="utf-8")
+    assert config.load(tmp_path).ul_double == "QUOTE WHOIS %s %s"      # chose it back later: never switched again
