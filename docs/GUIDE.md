@@ -80,7 +80,7 @@ In the input box: `Ctrl+B` bold, `Ctrl+U` underline, `Ctrl+Shift+I` italic, `Ctr
 Many channels only let operators (people with **@**) change the topic. When you can't, BChat hides the topic buttons.
 
 ### How do I open a private chat with someone?
-Right-click their name in the nick list and choose **Open Dialog Window**, or type `/query nick`. Double-clicking a name shows who they are (whois). The right-click menu also has **Send a File**, **User Info (WhoIs)** and **Add to Friends List**.
+Double-click their name in the nick list (like mIRC), right-click it and choose **Open Dialog Window**, or type `/query nick`. To change what a double-click does, go to Settings > Preferences > User list > Action Upon Double Click. The right-click menu also has **Send a File**, **User Info (WhoIs)** and **Add to Friends List**.
 
 ### How do I mark favourite channels?
 Right-click a channel tab and choose **Favourite Channels...** (also in the **Server** menu). Tick **Join on Connect** in the tab's right-click menu to join that channel every time you connect.

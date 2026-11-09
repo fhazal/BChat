@@ -28,18 +28,17 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 
 ---
 
-## 🆕 What's new in 0.2.0
+## 🆕 What's new in 0.3.0
 
-- 🌍 **Popular Networks** in the Network List: 21 well-known networks, each checked for encryption, one click to connect. Your **Favourite Networks** get their own group on top.
-- 📜 **Channel history**: on networks that keep it, you see what was said before you joined, or while you were away.
-- 🔗 **irc:// links** from your browser open in BChat (it asks first).
-- ⭐ **Favourite channels** with *Join on Connect*, and **highlight rules** like mIRC's: words, wildcards, from which nicks or channels, with their own colour and sound.
-- ✍️ **Multi-line input** with `Shift+Enter`, and a paste window that shows what a long paste will send, and how long it takes.
-- 🎵 **/np** shares the song you're playing (off until you turn it on; music only, never videos), and can announce each new song in the channels you pick. **/sysinfo** shares your PC's specs in one line.
-- 👋 An **invite bar** instead of pop-ups, a **Friends** window with `/notify`, rejoin after a kick (optional), and WhoIs when someone opens a private chat.
-- 🖱️ The nick menu gains **Ignore**, **Kick with Reason**, **CTCP** (Ping, Time, Version) and **Slap!**, with a random line from your own list.
-- 🏠 *Settings → Preferences → Network → Local*: how BChat finds your own address, like mIRC.
-- 🎨 Calmer buttons, sharper menu ticks and a lag meter you can actually read.
+- 🐞 **One-click problem reports**: after a crash or a freeze BChat offers to send a report, and *Help → Report a Problem...* sends one any time. You see exactly what is sent first; nicks, channels, addresses and passwords are replaced, and chat text is never included.
+- 📚 **Daily logs and a Logs window**: a new log file every day (or month), *Window → Logs...* to read and search them in the chat's own colours, and an optional clean-up of old days. Logging stays off until you turn it on, and BChat asks how long to keep them.
+- 🎨 **Nick colours** like mIRC's: rules by nick, address or a whole host, for one network or all, in the chat and the nick list.
+- 📇 **Address Book**: one card per person with other nicks, real name, notes and colour. Its *Tell me when they come online* tick is your Friends List.
+- ⏱️ **/timer** and **/alias**: run a command later or again and again, and make your own commands with `$1`, `$2-`, `$nick`, `$chan` and `|`.
+- 🏛️ **Channel Central**: topic, modes, key, limit, bans, exceptions and invites in one window. Double-click in a channel's text, or `/channel`.
+- 💬 **Reply** and **typing**: right-click a line (or `Alt+R`) to answer it, and see *"Belon is typing…"*, on networks that support it. Showing your own typing is off until you turn it on.
+- 🖱️ Double-click a nick in the nick list opens a private chat, like mIRC.
+- 🚀 *Start with Windows* puts itself back if something removed it.
 
 ---
 
@@ -105,7 +104,7 @@ XChat's Python interface, so most XChat 2 scripts just work. Drop them in the `a
 <td valign="top">
 
 ### 🗂️ Tools you'll use
-Channel List, Ban List, Ignore List, Friends (notify), URL Grabber, character chart, spell check while you type, and logs plus scrollback for every chat.
+Channel List, Channel Central, Ignore List, Friends (notify), Address Book, URL Grabber, character chart, spell check while you type, daily logs with a Logs window to search them, and scrollback for every chat.
 
 </td>
 <td valign="top">
@@ -181,7 +180,7 @@ The 0.2.0 installer was checked by [VirusTotal](https://www.virustotal.com/gui/f
 
 ## 🔐 Privacy
 
-BChat connects only to the IRC networks you add, and to GitHub to look for updates (*Settings → Preferences → General → Updates* turns that off). It sends nothing about you anywhere else. Like any IRC client, the networks you join can see your IP address unless you use a bouncer or proxy.
+BChat connects only to the IRC networks you add, and to GitHub to look for updates (*Settings → Preferences → General → Updates* turns that off). A problem report goes to bajubesi.org only when you press **Send**, after showing you what's in it (names and addresses replaced, no chat text). It sends nothing about you anywhere else. Like any IRC client, the networks you join can see your IP address unless you use a bouncer or proxy.
 
 <details>
 <summary><b>Where things live on your PC</b></summary>
@@ -191,7 +190,8 @@ BChat connects only to the IRC networks you add, and to GitHub to look for updat
 | Path | What it is |
 | --- | --- |
 | `config.json` | Your settings and networks (no passwords) |
-| `logs\` | Chat logs, one file per chat (`network-channel.log`) |
+| `logs\` | Chat logs when logging is on: `Network\#channel\2026-11-09.log`, one file a day |
+| `reports\` | A problem report waiting to be sent, and the last crash's note |
 | `scrollback\` | Recent lines shown again when you reopen a chat |
 | `addons\` | Python plugins that load at start |
 | `downloads\` | Files received over DCC (changeable in Preferences) |
@@ -235,7 +235,8 @@ The installer is built with [PyInstaller](https://pyinstaller.org) and [Inno Set
 
 ## 🗺️ Roadmap
 
-- 🐞 One-click problem reports: BChat fills in the details, you only press Send
+- 🔌 Bouncer detection: BChat knows when it's on ZNC or soju and offers their commands
+- 🔑 Client certificates (SASL EXTERNAL) for networks and bouncers that use them
 - 🧭 More of what veterans expect from the big clients, kept out of the newcomer's way
 - 🏷️ Nick list rank icons
 - ✍️ A code-signed installer, so Windows and antivirus programs trust it straight away
