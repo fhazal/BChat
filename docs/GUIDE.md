@@ -22,6 +22,12 @@ The Welcome window appears only once. If you used XChat 2 or XChat-SE before, BC
 ### How do I connect to a network?
 Open **BChat → Network List** (`Ctrl+S`), pick a network, and click **Connect**. To have it connect every time BChat starts, select it, click **Edit...** and tick **Auto connect to this network at startup**.
 
+### Which networks can I pick from?
+**BChat → Network List** (`Ctrl+S`) has three groups: **Favourite Networks** (only once you have one), **Popular Networks** and **My Networks**. Popular Networks lists 21 well-known networks with a shield: green = encrypted and its certificate checked, amber = encrypted but BChat asks once about its certificate, grey = no encryption. Pick one and click **Connect**: BChat copies it into My Networks and connects.
+
+### How do I mark a favourite network?
+In the **Network List**, select the network and click **Favor**: it moves up into **Favourite Networks**. Click **Favor** again to move it back to My Networks. You can fold each group; BChat remembers it.
+
 ### How do I add a network that isn't in the list?
 In the Network List, click **Add**, give it a name, then **Edit...** and type its servers, one per line, as `host/port`. Use `/+port` for an encrypted (SSL) port, for example `irc.bajubesi.org/+6697`.
 
@@ -58,6 +64,15 @@ Type `/nick NewName`. To change it for good, open the Network List and change **
 ### How do I switch between tabs?
 Click a channel in the tree on the left, or use `Alt+1` to `Alt+9`, or `Ctrl+PageUp` / `Ctrl+PageDown`. **View → Channel Switcher** chooses between the tree and tabs.
 
+### How do I write more than one line?
+Press `Shift+Enter` for a new line; the input box grows to 5 lines. **Enter** sends every line. When you paste more than 5 lines, BChat first shows what will be sent and how long it takes, and lets you send it as one line instead.
+
+### How do I reply to a message?
+Right-click the message and choose **Reply**. BChat shows the message you answer above your line, and a click on it jumps to the original. **Reply** only appears on networks that support it (IRCv3 replies).
+
+### Can people see when I'm typing?
+Only if you turn it on: **Settings → Preferences → Input box**, tick **Let others see when I'm typing**. It's off at first and works only on networks that support it, never in the server tab. When someone else is typing, BChat shows "*nick* is typing…" under the chat.
+
 ### How do I use colours, bold and underline?
 In the input box: `Ctrl+B` bold, `Ctrl+U` underline, `Ctrl+Shift+I` italic, `Ctrl+R` reverse, `Ctrl+E` strikethrough, `Ctrl+K` colour, `Ctrl+O` back to normal. Select some text first and `Ctrl+B`, `Ctrl+U`, `Ctrl+Shift+I`, `Ctrl+R` or `Ctrl+E` formats just that part. The topic bar has **B**, **U**, **I**, **Fg** and **Bg** buttons when you're allowed to change the topic.
 
@@ -67,6 +82,15 @@ Many channels only let operators (people with **@**) change the topic. When you 
 ### How do I open a private chat with someone?
 Right-click their name in the nick list and choose **Open Dialog Window**, or type `/query nick`. Double-clicking a name shows who they are (whois). The right-click menu also has **Send a File**, **User Info (WhoIs)** and **Add to Friends List**.
 
+### How do I mark favourite channels?
+Right-click a channel tab and choose **Favourite Channels...** (also in the **Server** menu). Tick **Join on Connect** in the tab's right-click menu to join that channel every time you connect.
+
+### What happens when someone invites me to a channel?
+A bar appears above the input box with **Join** and **Ignore**. BChat never joins by itself, and **Ignore** sends nothing.
+
+### What is Channel Central?
+Double-click in the channel's chat (like mIRC), right-click the channel tab and choose **Channel Central...**, or type `/channel`. It shows the topic, the channel modes, bans, exceptions and invites in one window. Channel operators can change them; everyone else can look.
+
 ### How do I find something someone said earlier?
 **Window → Search Text...** (`Ctrl+F`) searches the tab you're in. `/lastlog word` lists every line with that word.
 
@@ -74,12 +98,31 @@ Right-click their name in the nick list and choose **Open Dialog Window**, or ty
 It's the **marker line**. It shows where you stopped reading when you left that tab. **Window → Reset Marker Line** (`Ctrl+M`) moves it. To hide it, untick **Show marker line** in **Settings → Preferences → Text box**.
 
 ### How do I ignore someone?
-Type `/ignore nick`. **Window → Ignore List...** shows your ignores and removes them (`/unignore nick` works too).
+Right-click their nick and tick **Ignore**, or type `/ignore nick`. Untick it (or `/unignore nick`) to see them again. **Window → Ignore List...** shows all your ignores.
+
+### How do I check someone's ping or client?
+Right-click their nick and choose **CTCP → Ping**, **Time** or **Version**. The answer shows in the tab you're in.
+
+### How do I slap someone?
+Right-click their nick and choose **Slap!** (in a channel, one nick at a time). BChat picks a random line from your list. Change the list in **Settings → Advanced → Slaps...**: `$nick` is the person you slap.
+
+### What is the Friends List?
+Right-click a nick and choose **Add to Friends List**, or type `/notify nick`. **Window → Friends List...** shows which friends are online.
+
+### How do I colour nicks or keep notes about people?
+**Settings → Advanced → Nick Colours...** gives nicks colours by rules, and other nicks automatic colours. To keep a note about someone, right-click their nick and choose **Address Book...**; **Window → Address Book...** lists everyone you saved.
+
+### How do I share the song I'm listening to?
+First turn it on in **Settings → Preferences → Now Playing**, then type `/np` in a channel. It's off at first, shares only music (no videos), and shows you the line before it's sent. To announce every new song, right-click in a channel and choose **Share → Announce Songs Here**.
+
+### How do I share my PC specs?
+Type `/sysinfo` in a channel: one line with Windows, CPU, memory, disks, graphics card and uptime. `/sysinfo -e` shows it only to you. It never includes your PC name, user name or IP address.
+
+### How do I run a command later, or make my own commands?
+`/timer 1 60 Back in a minute!` sends that line once after 60 seconds. `/timer news 0 600 /msg #chat Read the news` repeats every 10 minutes until `/timer news off`. `/timers` lists your timers. `/alias hi /say Hello $1!` makes a new command: `/hi Belon` says "Hello Belon!". Use `$1`, `$2-`, `$nick`, `$chan`, `$me`, `$network`, and `|` between commands. `/alias` alone lists yours.
 
 ### How do I keep logs of my chats?
-**Settings → Preferences → Logging**, tick **Enable logging of conversations to disk**. For a single tab, right-click it and choose **Log to Disk**. Logs go to `%APPDATA%\BChat\logs`.
-
----
+Logging is off until you turn it on. **Settings → Preferences → Logging**, tick **Enable logging of conversations to disk**; for one tab only, right-click it and choose **Log to Disk**. The first time, BChat asks once how long to keep logs. **Window → Logs...** opens your logs by network, channel and day, with a search. Logs go to `%APPDATA%\BChat\logs`.
 
 ## Notifications and the tray
 
@@ -102,6 +145,9 @@ BChat never floods your screen. Messages from the same person update one card, a
 Yes: **Settings → Preferences → General → Start with Windows**. Tick **Start minimized** too if you want it to start quietly.
 
 ---
+
+### Can BChat rejoin a channel when I'm kicked?
+**Settings → Preferences → General**, tick **Rejoin a channel when I'm kicked** (off at first). In the same place, **Show who someone is when they start a private chat with me** (on at first) shows a WhoIs at the top of a new private chat.
 
 ## Looks and themes
 
@@ -215,4 +261,4 @@ Check **Settings → Preferences → Alerts → Show pop-up notifications on:**.
 In `%APPDATA%\BChat`: `config.json` (settings and networks, no passwords), `logs\`, `scrollback\`, `addons\` (plugins), `downloads\` (files received over DCC). Passwords are in Windows Credential Manager under entries named `BChat:...`.
 
 ### How do I report a bug or ask for help?
-Ask in **#BChat** on irc.bajubesi.org: people there and the Buzz helper bot can help. You can also open an issue on [GitHub](https://github.com/fhazal/BChat/issues). **Help → About** lists your BChat, Windows and Qt versions; you can select and copy them for a bug report.
+In BChat 0.3.0 and newer: **Help → Report a Problem...**, pick what happened and click **Send**. BChat adds the details for you and hides names and addresses; **See what's sent** shows every word first. After a crash or a freeze, BChat offers this by itself on the next start. You can also ask in **#BChat** on irc.bajubesi.org (people there and the Buzz helper bot can help), in the BChat forum on bajubesi.org, or open an issue on [GitHub](https://github.com/fhazal/BChat/issues).

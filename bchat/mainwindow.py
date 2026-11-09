@@ -576,6 +576,7 @@ class MainWindow(FramelessWindow):
         self.chat.colour_rule = self.chat_colour_rule
         self.chat.reply_jump = self.reply_jump
         self.chat.channel_double_clicked.connect(self._join_clicked)
+        self.chat.central_requested.connect(self.open_channel_central)
         ml.addWidget(self.chat, 1)
         self.typing_label = QLabel(mid, objectName="typing")       # 0.3.0 +typing: "Aiman is typing..."
         self.typing_label.setTextFormat(Qt.TextFormat.PlainText)

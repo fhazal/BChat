@@ -3947,3 +3947,33 @@ def test_problem_report_while_connected_hides_live_names(live):
     flat = json.dumps(r) if "json" in globals() else __import__("json").dumps(r)
     assert "Oracle" not in flat and "#skinhead" not in flat and s.net.name not in flat
     assert "#<chan" in r["open"] and "channel" in r["open"]
+
+
+def test_double_click_in_channel_text_opens_channel_central(live):
+    """mIRC: a double-click in a channel's text opens Channel Central (user 11-09). #channel names still join."""
+    app, srv, win, s = live
+    from bchat.central import ChannelCentral
+    b = s.buffers["#skinhead"]
+    win.select_buffer(b)
+    wait(app, lambda: False, 100)
+    vp = win.chat.viewport()
+    QTest.mouseDClick(vp, Qt.MouseButton.LeftButton, pos=QPoint(vp.width() - 30, vp.height() - 12))
+    assert wait(app, lambda: any(isinstance(w, ChannelCentral) and w.isVisible() for w in win.tools.values()))
+    for w in list(win.tools.values()):
+        if isinstance(w, ChannelCentral):
+            w.close()
+    got = []
+    win.chat.channel_double_clicked.disconnect()
+    win.chat.channel_double_clicked.connect(got.append)
+    s.add(b, "info", "*", "come to #chat later")
+    wait(app, lambda: False, 100)
+    cur = win.chat.document().find("#chat")
+    rect = win.chat.cursorRect(cur)
+    QTest.mouseDClick(vp, Qt.MouseButton.LeftButton, pos=rect.center() - QPoint(8, 0))
+    assert got == ["#chat"]                                           # a channel name still joins
+    win.select_buffer(s.server_buffer)
+    wait(app, lambda: False, 100)
+    opened = []
+    win.chat.central_requested.connect(opened.append)
+    QTest.mouseDClick(vp, Qt.MouseButton.LeftButton, pos=QPoint(vp.width() - 30, vp.height() - 12))
+    assert opened == []                                               # only channels have a Channel Central

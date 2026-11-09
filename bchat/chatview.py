@@ -22,6 +22,7 @@ from .widgets import ASSETS
 
 class ChatView(QTextBrowser):
     channel_double_clicked = Signal(str)
+    central_requested = Signal(object)    # mIRC: double-click in a channel's text opens Channel Central (the buffer)
     menu_provider = None  # set by the main window; builds the right-click menu
     colour_rule = None    # set by the main window: (buffer, nick) -> colour from Nick Colours / Address Book, or None
     reply_jump = None     # set by the main window: a click on a reply's quote line (buffer, msgid)
@@ -399,6 +400,11 @@ class ChatView(QTextBrowser):
         word = self.word_at(ev.position().toPoint())
         if word.startswith(("#", "&")) and len(word) > 1:
             self.channel_double_clicked.emit(word)
+            ev.accept()
+            return
+        b = self.current
+        if b is not None and getattr(b, "kind", "") == "channel" and not self.anchorAt(ev.position().toPoint()):
+            self.central_requested.emit(b)     # like mIRC; words still copy by dragging over them
             ev.accept()
             return
         super().mouseDoubleClickEvent(ev)

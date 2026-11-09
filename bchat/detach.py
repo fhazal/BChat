@@ -36,6 +36,7 @@ class DetachedWindow(FramedDialog):
         self.chat.colour_rule = win.chat_colour_rule
         self.chat.reply_jump = win.reply_jump
         self.chat.channel_double_clicked.connect(win._join_clicked)
+        self.chat.central_requested.connect(win.open_channel_central)
         self.chat.show_buffer(b)
         split.addWidget(self.chat)
         side = QWidget(split)
