@@ -116,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
             QMessageBox.warning(win, "BChat: saved passwords", "BChat couldn't read your saved network passwords from "
                                 "Windows Credential Manager. Please enter them again in the Network List.")
         win.updater.start()
+        win.check_autostart()
         if not args.no_autoconnect:
             win.autoconnect()
         from .welcome import first_start_action, run_welcome

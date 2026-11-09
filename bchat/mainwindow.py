@@ -1213,18 +1213,13 @@ class MainWindow(FramelessWindow):
 
     def set_autostart(self, on: bool) -> None:
         """Start with Windows, for the installed BChat only: a run from source has nothing stable to point at."""
-        import sys
-        if not getattr(sys, "frozen", False):
-            return
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE) as key:
-            if on:
-                winreg.SetValueEx(key, "BChat", 0, winreg.REG_SZ, f'"{sys.executable}"')
-            else:
-                try:
-                    winreg.DeleteValue(key, "BChat")
-                except FileNotFoundError:
-                    pass
+        from . import autostart
+        autostart.sync(on, autostart.installed_exe())
+
+    def check_autostart(self) -> str:
+        """At every start: Windows' startup entry put back in line with the tick (it can vanish on its own)."""
+        from . import autostart
+        return autostart.sync(self.cfg.start_with_windows, autostart.installed_exe())
 
     def _show(self, b: Buffer) -> None:
         self.buf = b
