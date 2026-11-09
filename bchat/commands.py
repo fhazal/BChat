@@ -26,6 +26,7 @@ COMMAND_NAMES = sorted(set(ALIASES) | {
     "lastlog", "leave", "list", "mdeop", "me", "mkick", "mode", "mop", "msg", "names", "nctcp", "newserver", "nick",
     "notice", "notify", "np", "op", "part", "ping", "query", "quit", "quote", "raw", "reconnect", "say", "server", "topic", "unban",
     "sysinfo", "unignore", "url", "voice", "wallchan", "wallchop", "whois", "wi",
+    "timer", "timers", "alias", "channel",
 })
 
 
@@ -103,10 +104,40 @@ HELP = {
     "reload": "RELOAD <name>: loads a plugin again",
     "send": "SEND <nick> [<file>]: offers a file",
     "chat": "CHAT <nick>: offers or accepts a direct chat",
+    "timer": "TIMER [<name>] <times> <seconds> <command>: runs a command later or again and again (times 0 = until stopped). "
+             "/timer <name> off stops it",
+    "timers": "TIMERS [OFF]: lists this network's timers, or stops them all",
+    "alias": "ALIAS [<name> [<command>]]: adds or changes a command of your own ($1 $2- $nick $chan $me $network, | for more "
+             "than one). /alias <name> removes it, /alias alone lists them",
+    "channel": "CHANNEL: opens Channel Central for this channel (topic, modes, bans, exceptions, invites)",
 }
 
 
-def _expand(pattern: str, s: Session, chan: str, args: list[str], rest: str) -> str | None:
+_DOLLAR = re.compile(r"\$(\d)(-?)|\$(nick|chan|me|network)\b")
+
+
+def _dollars(word: str, s: Session, chan: str, args: list[str], query: str) -> str:
+    """mIRC's alias identifiers: $1 = first word typed after the command, $2- = from the 2nd on, $nick (the other
+    person in a query), $chan, $me, $network. Missing ones are empty, as in mIRC."""
+    def fill(m):
+        if m.group(1):
+            i = int(m.group(1)) - 1
+            if m.group(2):
+                return " ".join(args[i:]) if i >= 0 else " ".join(args)
+            return args[i] if 0 <= i < len(args) else ""
+        return {"nick": query, "chan": chan, "me": s.nick, "network": s.net.name}[m.group(3)]
+    return _DOLLAR.sub(fill, word)
+
+
+_CODES = re.compile(r"([%&])([2-9cemnstuv])|\$\d-?|\$(?:nick|chan|me|network)\b")
+
+
+def _split_bar(pattern: str) -> list[str]:
+    """mIRC: | between commands. Only with spaces around it, so a | inside a word (J|wang) stays."""
+    return [p.strip() for p in re.split(r"\s\|\s", pattern) if p.strip()]
+
+
+def _expand(pattern: str, s: Session, chan: str, args: list[str], rest: str, query: str = "") -> str | None:
     """XChat's auto_insert. None when a value the pattern needs is missing. One pass, so typed text is never read as a code."""
     fixed = {"c": chan, "e": s.net.name, "m": MACHINE, "n": s.nick, "s": s.server_name or s.net.name, "t": time.ctime(),
              "u": s._identity("username") if hasattr(s, "_identity") else "", "v": VERSION}
@@ -126,11 +157,13 @@ def _expand(pattern: str, s: Session, chan: str, args: list[str], rest: str) -> 
 
         def fill(m):
             nonlocal missing
+            if m.group(1) is None:                        # $1 $2- $nick ...: mIRC's, empty when missing
+                return _dollars(m.group(0), s, chan, args, query)
             v = value(m.group(1), m.group(2))
             if not v:
                 missing = m.group(1)
             return v
-        word = re.sub(r"([%&])([2-9cemnstuv])", fill, word)
+        word = _CODES.sub(fill, word)                     # one pass over the pattern only
         if missing == "&":
             return " ".join(out)      # "&2" with nothing typed just drops off the end
         if missing:
@@ -143,6 +176,33 @@ def user_commands(cfg) -> list[list[str]]:
     if cfg.user_commands is not None:
         return cfg.user_commands
     return [[n, c] for n, c in ALIASES.items()]
+
+
+def alias_command(ui, s: Session, b: Buffer, args: list[str], rest: str) -> None:
+    """mIRC's /alias, kept in XChat's User Commands (Settings > Advanced > User Commands): one list, one editor."""
+    cfg = ui.cfg
+    if not args:
+        rows = user_commands(cfg)
+        s.add(b, INFO, "*", f"Your commands ({len(rows)}): " + ", ".join(sorted({"/" + n for n, _c in rows})))
+        return
+    name = args[0].lstrip("/").lower()
+    body = rest.split(None, 1)[1].strip() if len(rest.split(None, 1)) > 1 else ""
+    if not re.fullmatch(r"[\w-]{1,30}", name):
+        s.add(b, ERROR, "*", "An alias name is one word: letters, numbers, - or _.")
+        return
+    rows = [list(r) for r in user_commands(cfg)]
+    had = any(n.lower() == name for n, _c in rows)
+    rows = [r for r in rows if r[0].lower() != name]
+    if body:
+        rows.append([name, body.lstrip("/")])
+        s.add(b, INFO, "*", f"Alias /{name} {'changed' if had else 'added'} (Settings > Advanced > User Commands).")
+    elif had:
+        s.add(b, INFO, "*", f"Alias /{name} removed.")
+    else:
+        s.add(b, ERROR, "*", f"No alias called /{name}.")
+        return
+    cfg.user_commands = rows
+    ui.save_config()
 
 
 def command_names(cfg) -> list[str]:
@@ -284,14 +344,17 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
         if depth >= 10:
             s.add(b, ERROR, "*", "Too many recursive user commands, stopped.")
             return
+        query = b.name if b.kind == QUERY else ""
         for pattern in matches:
-            expanded = _expand(pattern, s, chan, args, rest)
-            if expanded is None:
-                s.add(b, ERROR, "*", f"/{cmd} needs more: {pattern}")
-            elif expanded.startswith("!"):
-                start_program(s, b, expanded[1:])
-            else:
-                run(ui, s, b, "/" + expanded.lstrip("/"), depth + 1)
+            for piece in _split_bar(pattern):
+                expanded = _expand(piece, s, chan, args, rest, query)
+                if expanded is None:
+                    s.add(b, ERROR, "*", f"/{cmd} needs more: {pattern}")
+                    break
+                elif expanded.startswith("!"):
+                    start_program(s, b, expanded[1:])
+                else:
+                    run(ui, s, b, "/" + expanded.lstrip("/"), depth + 1)
         return
 
     def need_channel() -> bool:
@@ -543,6 +606,14 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
         s.disconnect_from_network(rest or None)
     elif cmd == "close":
         ui.close_buffer(b)
+    elif cmd in ("timer", "timers"):
+        from . import timers
+        timers.command(ui, s, b, cmd, args, rest)
+    elif cmd == "alias":
+        alias_command(ui, s, b, args, rest)
+    elif cmd == "channel":
+        if need_channel():
+            ui.open_channel_central(b)
     elif cmd == "help" and args:
         about = HELP.get(args[0].lstrip("/").lower())
         s.add(b, INFO, "*", about or f"No help for {args[0]}. Help > Contents lists every command.")

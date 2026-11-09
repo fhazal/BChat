@@ -13,7 +13,7 @@ from PySide6.QtNetwork import QAbstractSocket, QHostAddress, QHostInfo, QNetwork
 
 from .config import Config, NetworkConfig, Server, random_nick
 from .textevents import EVENTS, render
-from .protocol import Message, build_line, lower, mask_ban, parse_line
+from .protocol import Message, build_line, lower, mask_ban, parse_line, strip_format
 
 # kinds a line can have; the chat view maps them to colours
 MSG, SELF, ACTION, JOIN, PART, TOPIC, INFO, WHOIS, NOW_TALKING, HILITE, NOTICE, ERROR, CONNECT = (
@@ -30,6 +30,8 @@ class Line:
     ts: float = field(default_factory=time.time)
     rank: str = ""   # light name (op, voice, ...) the speaker had when the line was said
     colour: str = ""  # a highlight rule's own colour ("" = the theme's)
+    msgid: str = ""   # IRCv3 msgid: what a +reply points at
+    reply_to: str = ""  # on a quote line: the msgid it quotes (a click jumps there)
 
 
 @dataclass
@@ -62,6 +64,9 @@ class Buffer:
         self.history_since = 0.0      # chathistory: lines after this were asked for (0 = the latest)
         self.rejoined_at = 0.0        # last rejoin after a kick
         self.mode_args: dict[str, str] = {}
+        self.topic_by = ""            # 333 / TOPIC: who set it and when (Channel Central)
+        self.topic_at = 0.0
+        self.typing: dict[str, tuple[str, float]] = {}   # lower nick -> (nick, when): +typing=active
 
     def mode_text(self) -> str:
         """As XChat's title shows them: letters in the server's order, then their values."""
@@ -113,6 +118,7 @@ class Session(QObject):
     notify = Signal(object, str)  # buffer, event: chan priv hilight join part kick notice invite connect disconnect
     lines_inserted = Signal(object)  # history went in above existing lines: the tab is drawn again
     invited = Signal(object, str, str)   # session, channel, who: the window offers Join / Ignore (never joins by itself)
+    typing_changed = Signal(object)      # buffer: someone started or stopped typing (+typing)
 
     MAX_LINES = 5000
     LAG_WARN_MS = 5000
@@ -138,6 +144,9 @@ class Session(QObject):
         self.modes_list = "beI"    # CHANMODES group A: lists, always carry a value, not channel settings
         self.modes_key = "k"       # group B: a value both ways
         self.modes_on_set = "fjl"  # group C: a value only when set
+        self.modes_flags = "imnpst"  # group D: plain on/off (Channel Central shows these)
+        self.client_tag_deny = ""    # CLIENTTAGDENY: client tags (+typing, +draft/reply) the server drops
+        self.sent_count = 0          # lines handed to the server: a /timer's flood check
         self.max_modes = 3
         self.away = False
         self.server_index = -1
@@ -243,8 +252,9 @@ class Session(QObject):
     def all_buffers(self) -> list[Buffer]:
         return [self.server_buffer, *self.buffers.values()]
 
-    def add(self, b: Buffer, kind: str, left: str, text: str, ts: float | None = None, colour: str = "") -> None:
-        line = Line(kind, left, text, ts if ts is not None else time.time(), colour=colour)
+    def add(self, b: Buffer, kind: str, left: str, text: str, ts: float | None = None, colour: str = "",
+            msgid: str = "", reply_to: str = "") -> None:
+        line = Line(kind, left, text, ts if ts is not None else time.time(), colour=colour, msgid=msgid, reply_to=reply_to)
         if b.kind == CHANNEL and kind in (MSG, SELF, HILITE) and left and left[0] not in "<>-":
             u = b.users.get(lower(left))
             if u is not None:
@@ -335,6 +345,7 @@ class Session(QObject):
         self._history = {}
         self.prefix_modes, self.prefix_chars = "ohv", "@%+"
         self.modes_list, self.modes_key, self.modes_on_set, self.max_modes = "beI", "k", "fjl", 3
+        self.modes_flags, self.client_tag_deny = "imnpst", ""
         self._sasl_state = ""
         self._cap_more = set()
         self._cap_offered = {}
@@ -650,6 +661,7 @@ class Session(QObject):
 
     def send(self, command: str, *params: str) -> None:
         line = build_line(command, *params)
+        self.sent_count += 1
         if self.state != "connected":
             self.send_raw(line)
             return
@@ -1022,8 +1034,12 @@ class Session(QObject):
         u = b.users.get(lower(m.nick))
         if u:
             u.last_msg = ts
+        msgid = m.tags.get("msgid", "")
+        if b.typing.pop(lower(m.nick), None) is not None:
+            self.typing_changed.emit(b)
+        self._quote_reply(b, m.tags.get("+draft/reply") or m.tags.get("+reply", ""), ts)
         if from_me:
-            self.add(b, SELF, m.nick, text, ts)
+            self.add(b, SELF, m.nick, text, ts, msgid=msgid)
             return
         hit = self._is_hilite(text, m.nick, b.name)
         hl = hit or b.kind == QUERY
@@ -1031,9 +1047,82 @@ class Session(QObject):
             event = "Private Message to Dialog" if b.kind == QUERY else "Channel Msg Hilight" if hit else "Channel Message"
             if self.print_hook(event, (m.nick, text)):
                 return
-        self.add(b, HILITE if hl else MSG, m.nick, text, ts, colour=self._hilite_colour() if hit else "")
+        self.add(b, HILITE if hl else MSG, m.nick, text, ts, colour=self._hilite_colour() if hit else "", msgid=msgid)
         self._bump(b, 3 if hl else 2)
         self.notify.emit(b, "priv" if b.kind == QUERY else "hilight" if hit else "chan")
+
+    # --- IRCv3 client tags: +typing and +draft/reply ------------------------------------
+
+    TYPING_SHOWN = 6.0         # seconds 'X is typing...' stays without a new active
+
+    def tags_on(self) -> bool:
+        return "message-tags" in self._cap_active and self.state == "connected"
+
+    def client_tag_ok(self, tag: str) -> bool:
+        """CLIENTTAGDENY=*,-typing: every client tag dropped except +typing (draft/ prefixes compared both ways)."""
+        if not self.tags_on():
+            return False
+        name = tag.lstrip("+")
+        bare = name.removeprefix("draft/")
+        deny = [x for x in self.client_tag_deny.split(",") if x]
+        allowed = {x[1:].removeprefix("draft/") for x in deny if x.startswith("-")}
+        if "*" in deny:
+            return bare in allowed
+        return bare not in {x.removeprefix("draft/") for x in deny if not x.startswith("-")}
+
+    def _quote_reply(self, b: Buffer, ref: str, ts: float) -> None:
+        """A reply to a line we still have: a grey quote of it goes above, and a click on it jumps there."""
+        if not ref:
+            return
+        orig = next((ln for ln in reversed(b.lines) if ln.msgid == ref), None)
+        if orig is None:
+            return
+        who = orig.left if orig.left not in ("*", "") else ""
+        text = strip_format(orig.text)
+        short = text if len(text) <= 120 else text[:119] + "\u2026"
+        self.add(b, INFO, "", f"\x0314\u21aa {who + ': ' if who else ''}{short}", ts, reply_to=ref)
+
+    def _irc_tagmsg(self, m: Message) -> None:
+        target = m.param(0)
+        if lower(m.nick) == lower(self.nick) or self.ignored(m.prefix, "C" if self.is_channel(target) else "P"):
+            return
+        state = m.tags.get("+typing") or m.tags.get("+draft/typing")
+        if not state:
+            return
+        dest = target if self.is_channel(target) else m.nick
+        b = self.buffers.get(lower(dest))
+        if b is None:
+            return
+        if state == "active":
+            b.typing[lower(m.nick)] = (m.nick, time.time())
+        else:
+            b.typing.pop(lower(m.nick), None)
+        self.typing_changed.emit(b)
+
+    def typing_now(self, b: Buffer) -> list[str]:
+        """Nicks typing in this tab right now (old 'active' ones fall off)."""
+        now = time.time()
+        for k in [k for k, (_n, t) in b.typing.items() if now - t > self.TYPING_SHOWN]:
+            del b.typing[k]
+        return [n for n, _t in b.typing.values()]
+
+    def send_typing(self, target: str, state: str) -> bool:
+        if not self.client_tag_ok("+typing"):
+            return False
+        self.send_raw(f"@+typing={state} TAGMSG {target}", quiet=True)
+        return True
+
+    def say_reply(self, target: str, text: str, msgid: str) -> None:
+        """A message that answers msgid. Without tag support it is just the message."""
+        if not msgid or not self.client_tag_ok("+draft/reply") or self.state != "connected" or len(text.encode()) > 380:
+            self.say(target, text)
+            return
+        if self.away and self.cfg.auto_unaway:
+            self.set_away(False)
+        self.sent_count += 1
+        self.send_raw(f"@+draft/reply={msgid} " + build_line("PRIVMSG", target, text))
+        if "echo-message" not in self._cap_active:
+            self.add(self.buffer(target), SELF, self.nick, text)
 
     def te(self, event: str, b: Buffer, kind: str, args, ts: float | None = None) -> None:
         """Prints a Text Event with the user's format."""
@@ -1255,6 +1344,7 @@ class Session(QObject):
     def _irc_topic(self, m: Message) -> None:
         b = self.buffer(m.param(0))
         b.topic = m.param(1)
+        b.topic_by, b.topic_at = m.nick, self._ts(m)
         self.te("Topic Change", b, TOPIC, (m.nick, b.topic), self._ts(m))
         self.buffer_changed.emit(b)
 
@@ -1475,6 +1565,10 @@ class Session(QObject):
         else:
             when = time.strftime("%a %b %d %H:%M:%S %Y", time.localtime(int(m.param(3) or 0))) if m.param(3).isdigit() else "?"
             self.te("Topic Creation", target, TOPIC, (name, m.param(2).split("!")[0], when))
+            if b is not None:
+                b.topic_by = m.param(2).split("!")[0]
+                b.topic_at = float(m.param(3)) if m.param(3).isdigit() else 0.0
+                self.buffer_changed.emit(b)
 
     def _isupport(self, tokens: list[str]) -> None:
         for t in tokens:
@@ -1497,6 +1591,10 @@ class Session(QObject):
                 self.chathistory_max = int(v) if v.isdigit() else 0
             elif k == "CHANMODES" and v.count(",") >= 2:
                 self.modes_list, self.modes_key, self.modes_on_set = v.split(",")[:3]
+                if v.count(",") >= 3:
+                    self.modes_flags = v.split(",")[3]
+            elif k == "CLIENTTAGDENY":
+                self.client_tag_deny = v
             elif k == "MODES" and v.isdigit() and int(v) > 0:
                 self.max_modes = int(v)
             elif k == "NETWORK" and v:

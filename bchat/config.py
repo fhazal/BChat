@@ -286,6 +286,9 @@ class Config:
     marker_line: bool = True       # red "read up to here" line
     rank_lights: str = "off"       # off | lights | slot (lights + empty slot so text lines up)
     color_nicks: bool = False      # each nick a fixed colour, XChat's "Colored nick names"
+    nick_colours: list = field(default_factory=list)   # 0.3.0 rules: {"mask", "colour" (a palette name), "net"}
+    address_book: list = field(default_factory=list)   # 0.3.0 cards: {"nick", "other", "real", "email", "web", "notes", "colour"}
+    send_typing: bool = False      # 0.3.0: let others see when I'm typing (+typing); off until the user turns it on
     strip_colors: bool = False     # drop mIRC colours from what people say
     colors_exact: bool = False     # fixed (16-98) and hex text colours exactly as sent, even when hard to read
     chat_bg_image: str = ""        # Text box: background image

@@ -573,8 +573,15 @@ class MainWindow(FramelessWindow):
         ml.addLayout(top_row)
         self.chat = ChatView(self.cfg, mid)
         self.chat.menu_provider = self._chat_menu
+        self.chat.colour_rule = self.chat_colour_rule
+        self.chat.reply_jump = self.reply_jump
         self.chat.channel_double_clicked.connect(self._join_clicked)
         ml.addWidget(self.chat, 1)
+        self.typing_label = QLabel(mid, objectName="typing")       # 0.3.0 +typing: "Aiman is typing..."
+        self.typing_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.typing_label.setStyleSheet(f"color: {self.cfg.theme.muted}; font-style: italic; padding: 1px 6px;")
+        self.typing_label.hide()
+        ml.addWidget(self.typing_label)
 
         right = QWidget(self.split)
         rl = QVBoxLayout(right)
@@ -584,6 +591,7 @@ class MainWindow(FramelessWindow):
         self.count.setTextFormat(Qt.TextFormat.PlainText)
         rl.addWidget(self.count)
         self.userlist = UserList(self.cfg.theme, right, self.cfg)
+        self.userlist.itemDelegate().colour_rule = self.list_colour_rule
         self.userlist.doubleClicked.connect(self._nick_double)
         self.userlist.customContextMenuRequested.connect(self._nick_menu)
         rl.addWidget(self.userlist, 1)
@@ -662,7 +670,27 @@ class MainWindow(FramelessWindow):
         from .reportwindow import ProblemBar
         self.report_bar = ProblemBar(self, body)       # after a crash, an error or a freeze (0.3.0)
         lay.addWidget(self.report_bar)
+        self.reply_bar = QWidget(body, objectName="replybar")    # 0.3.0 +reply: what you are answering
+        rb = QHBoxLayout(self.reply_bar)
+        rb.setContentsMargins(8, 2, 4, 2)
+        self.reply_text = QLabel(self.reply_bar)
+        self.reply_text.setTextFormat(Qt.TextFormat.RichText)
+        rb.addWidget(self.reply_text, 1)
+        self.reply_close = QToolButton(self.reply_bar)
+        self.reply_close.setIcon(icon("close-light"))
+        self.reply_close.setToolTip("Cancel the reply (Esc)")
+        self.reply_close.clicked.connect(self.cancel_reply)
+        rb.addWidget(self.reply_close)
+        self.reply_bar.setStyleSheet(f"#replybar {{ background: {self.cfg.theme.bar}; border-top: 1px solid {self.cfg.theme.border}; }}")
+        self.reply_bar.hide()
+        self.replying: tuple | None = None          # (buffer, msgid, nick)
+        lay.addWidget(self.reply_bar)
         lay.addLayout(bottom)
+        self.input.installEventFilter(self)          # Esc in the input box cancels a reply (nowhere else)
+        QShortcut(QKeySequence("Alt+R"), self, self.reply_to_last)
+        self._typing_sent = 0.0                     # when we last told the channel we're typing
+        self._typing_to: tuple | None = None
+        self.input.textChanged.connect(self._input_typing)
         self.outer.addWidget(body, 1)
 
         self.topic.setVisible(self.cfg.show_topic)
@@ -738,8 +766,10 @@ class MainWindow(FramelessWindow):
                           ("Keyboard Shortcuts...", "keys"), ("Slaps...", "slaps"), ("Text Events...", "events"), ("URL Handlers...", "url"),
                           ("User Commands...", "commands"), ("Userlist Buttons...", "ulbuttons"), ("Userlist Popup...", "popup")):
             self._act(adv, name, lambda _=False, k=key: self.open_editor(k))
+        self._act(adv, "Nick Colours...", self.open_nick_colours)
 
         w = m.addMenu("&Window")
+        self._act(w, "Address Book...", lambda: self.open_address_book(), "", "book")
         self._act(w, "Ban List...", self.open_ban_list)
         self._act(w, "Character Chart...", lambda: self.open_tool("chart"))
         self._act(w, "Direct Chat...", self.open_chats)
@@ -797,6 +827,7 @@ class MainWindow(FramelessWindow):
             s.line_added.connect(self.chat.add_line)
             s.lines_inserted.connect(self.chat.reload)
             s.invited.connect(lambda sess, chan, nick: self.invite_bar.add(sess, chan, nick))
+            s.typing_changed.connect(lambda b: self.show_typing() if b is self.buf else None)
             s.line_added.connect(self._log_line)
             s.line_added.connect(self._grab_urls)
             s.friends_changed.connect(self._friends_changed)
@@ -1222,6 +1253,8 @@ class MainWindow(FramelessWindow):
         return autostart.sync(self.cfg.start_with_windows, autostart.installed_exe())
 
     def _show(self, b: Buffer) -> None:
+        if self.replying is not None and self.replying[0] is not b:
+            self.cancel_reply()                 # a reply belongs to the tab it was started in
         self.buf = b
         b.session.current = b
         if b.activity:
@@ -1329,6 +1362,7 @@ class MainWindow(FramelessWindow):
 
     def _refresh_status(self) -> None:
         self._refresh_meters()
+        self.show_typing()
         state, tip = self.status_info()
         t = self.cfg.theme
         colour = {"off": t.status_off, "connecting": t.status_connecting, "on": t.status_on,
@@ -1365,8 +1399,15 @@ class MainWindow(FramelessWindow):
 
     def _entered(self) -> None:
         text = self.input.text()
+        replying = self.replying
+        self._typing_to = None                     # the message itself says we stopped typing
         self.input.clear()
         if not text:
+            return
+        if replying is not None and replying[0] is self.buf and not text.startswith("/") and self.buf is not None:
+            self.cancel_reply()
+            self.input.remember(text)
+            self.buf.session.say_reply(self.buf.name, self.expand_input(text), replying[1])
             return
         self.input.remember(text)
         from .reports import command_step
@@ -1460,6 +1501,12 @@ class MainWindow(FramelessWindow):
         menu.addAction(icon("save"), "Send a File", lambda: self.send_file_dialog(s, nicks))
         menu.addAction(icon("info"), "User Info (WhoIs)", lambda: [s.whois(n) for n in nicks])
         menu.addAction(icon("add"), "Add to Friends List", lambda: self.ask_friend(nicks[0] if len(nicks) == 1 else " ".join(nicks)))
+        if len(users) == 1:                             # 0.3.0: mIRC's Address Book and Nick Colors, for one person
+            menu.addAction(icon("book"), "Address Book...", lambda: self.open_address_book(one.nick, one.realname))
+            from . import people
+            now = people.colour_name(self.cfg, s.net.name, one.nick, one.host)
+            menu.addAction(people.swatch(self.cfg, now) if now else icon("edit"), "Nick Colour...",
+                           lambda: self.quick_nick_colour(s, one.nick))
         ign = menu.addAction("Ignore")                 # mIRC's Control > Ignore / Unignore as one tick
         ign.setCheckable(True)
         ign.setChecked(all(self._is_ignored(s, u) for u in users))
@@ -1620,6 +1667,8 @@ class MainWindow(FramelessWindow):
             auto.setChecked(fav is not None and fav.join)
             auto.toggled.connect(lambda on: self.join_on_connect(b, on))
         menu.addAction(icon("favourite"), "Favourite Channels...", self.open_favourites)
+        if b.kind == CHANNEL:
+            menu.addAction(icon("preferences"), "Channel Central...", lambda: self.open_channel_central(b))
         menu.addSeparator()
         log = menu.addAction("Log to Disk")
         log.setCheckable(True)
@@ -1909,9 +1958,21 @@ class MainWindow(FramelessWindow):
         href = chat.anchorAt(pos)
         word = chat.word_at(pos)
         user = b.users.get(lower(word)) if b is not None and word else None
+        msgid, _quoted = chat.line_at(pos)
+        can_reply = bool(msgid) and b is not None and s is not None and b.kind in (CHANNEL, QUERY) and s.client_tag_ok("+draft/reply")
         if user is not None and not href:
-            return self.build_nick_menu(b, [user])
+            menu = self.build_nick_menu(b, [user])
+            if can_reply:
+                first = menu.actions()[0] if menu.actions() else None
+                act = QAction(icon("send"), "Reply", menu)
+                act.triggered.connect(lambda: self.start_reply(b, msgid))
+                menu.insertAction(first, act)
+                menu.insertSeparator(first)
+            return menu
         menu = QMenu(self)
+        if can_reply and not href:
+            menu.addAction(icon("send"), "Reply", lambda: self.start_reply(b, msgid))
+            menu.addSeparator()
         if href:
             for act in self.url_menu(href).actions():
                 menu.addAction(act)
@@ -1953,6 +2014,9 @@ class MainWindow(FramelessWindow):
         return share
 
     def eventFilter(self, obj, ev):
+        if obj is getattr(self, "input", None) and ev.type() == QEvent.Type.KeyPress and ev.key() == Qt.Key.Key_Escape                 and getattr(self, "replying", None) is not None:
+            self.cancel_reply()
+            return True
         if obj is getattr(self, "nick_label", None) and ev.type() == QEvent.Type.MouseButtonPress:
             s = self.session
             if s is not None and s.state == "connected":
@@ -2513,6 +2577,170 @@ class MainWindow(FramelessWindow):
 
     def run_command(self, s: Session, text: str) -> None:
         commands.run(self, s, self.buf if self.buf is not None and self.buf.session is s else s.server_buffer, text)
+
+    # --- 0.3.0: nick colours + address book ------------------------------------------------
+
+    def chat_colour_rule(self, b: Buffer, nick: str) -> str | None:
+        from . import people
+        s = b.session
+        if s is None or not (self.cfg.nick_colours or self.cfg.address_book):
+            return None
+        u = b.users.get(lower(nick))
+        return people.colour_for(self.cfg, s.net.name, nick, u.host if u is not None else "")
+
+    def list_colour_rule(self, s: Session, nick: str, host: str) -> str | None:
+        from . import people
+        if s is None or not (self.cfg.nick_colours or self.cfg.address_book):
+            return None
+        return people.colour_for(self.cfg, s.net.name, nick, host)
+
+    def nick_colours_changed(self) -> None:
+        self.save_config()
+        self.chat.reload_all()
+        for w in self.detached.values():
+            w.chat.reload_all()
+        self.userlist.viewport().update()
+        for key in ("nickcolours", "addressbook"):
+            w = self.tools.get(key)
+            if w is not None and w.isVisible() and key == "nickcolours":
+                w.fill(w._row())
+
+    def open_nick_colours(self):
+        from .people import NickColoursWindow
+        w = self.tools.get("nickcolours")
+        if w is None:
+            w = self.tools["nickcolours"] = NickColoursWindow(self)
+        else:
+            w.auto.setChecked(self.cfg.color_nicks)
+            w.fill()
+        w.show()
+        w.raise_()
+        return w
+
+    def open_address_book(self, nick: str = "", real: str = ""):
+        from .people import AddressBookWindow
+        w = self.tools.get("addressbook")
+        if w is None:
+            w = self.tools["addressbook"] = AddressBookWindow(self)
+        if nick:
+            w.open_card(nick, real)
+        else:
+            w.fill()
+        w.show()
+        w.raise_()
+        return w
+
+    def quick_nick_colour(self, s: Session, nick: str):
+        """Nick menu > Nick Colour...: a rule for this nick (on every network), at the top so it wins."""
+        from . import people
+        now = people.colour_name(self.cfg, s.net.name, nick) or "mauve"
+        d = people.RuleDialog(self, {"mask": nick, "colour": now, "net": ""})
+        self.rule_dialog = d
+
+        def done(code: int) -> None:
+            if code:
+                r = d.rule()
+                people.set_rule(self.cfg, r["mask"], r["colour"], r["net"])
+                self.nick_colours_changed()
+        d.finished.connect(done)
+        d.open()
+        return d
+
+    # --- 0.3.0: Channel Central ---------------------------------------------------------------
+
+    def open_channel_central(self, b: Buffer | None = None):
+        from .central import ChannelCentral
+        b = b or self.buf
+        if b is None or b.kind != CHANNEL:
+            return None
+        key = ("central", id(b.session), lower(b.name))
+        w = self.tools.get(key)
+        if w is None:
+            w = self.tools[key] = ChannelCentral(self, b.session, b)
+        else:
+            w.fill()
+        w.show()
+        w.raise_()
+        w.refresh_lists()
+        return w
+
+    # --- 0.3.0: +typing and +reply ------------------------------------------------------------
+
+    def show_typing(self) -> None:
+        b = self.buf
+        s = b.session if b is not None else None
+        nicks = s.typing_now(b) if s is not None and b.kind in (CHANNEL, QUERY) else []
+        if not nicks:
+            self.typing_label.hide()
+            return
+        if len(nicks) == 1:
+            text = f"{nicks[0]} is typing…"
+        elif len(nicks) <= 3:
+            text = f"{', '.join(nicks[:-1])} and {nicks[-1]} are typing…"
+        else:
+            text = f"{len(nicks)} people are typing…"
+        self.typing_label.setText(text)
+        self.typing_label.show()
+
+    def _input_typing(self, text: str) -> None:
+        """Let others see when I'm typing: active at most every 3 s; done when the box is emptied without sending."""
+        b = self.buf
+        if not self.cfg.send_typing or b is None or b.kind not in (CHANNEL, QUERY) or text.startswith("/"):
+            return
+        s = b.session
+        now = time.time()
+        if text:
+            if self._typing_to != (id(b), b.name) or now - self._typing_sent >= 3:
+                if s.send_typing(b.name, "active"):
+                    self._typing_sent, self._typing_to = now, (id(b), b.name)
+        elif self._typing_to == (id(b), b.name):
+            s.send_typing(b.name, "done")
+            self._typing_to = None
+
+    def start_reply(self, b: Buffer, msgid: str) -> None:
+        ln = next((x for x in reversed(b.lines) if x.msgid == msgid), None)
+        if ln is None:
+            return
+        nick = ln.left if ln.left not in ("*", "") else ""
+        text = strip_format(ln.text)
+        short = html.escape(text if len(text) <= 60 else text[:59] + "…")
+        muted = self.cfg.theme.muted
+        self.reply_text.setText(f"<span style='color:{muted}'>↪ Replying to</span> <b>{html.escape(nick)}</b>"
+                                f"<span style='color:{muted}'>: {short}</span>")
+        self.replying = (b, msgid, nick)
+        self.reply_bar.show()
+        if b is not self.buf:
+            self.select_buffer(b)
+        if nick and lower(nick) != lower(b.session.nick):
+            prefix = f"{nick}{self.cfg.nick_suffix or ':'} "
+            if not self.input.text().startswith(prefix):
+                self.input.setText(prefix + self.input.text())      # people on other clients still see who you answer
+        self.input.setFocus()
+        self.input.setCursorPosition(len(self.input.text()))
+
+    def cancel_reply(self) -> None:
+        self.replying = None
+        self.reply_bar.hide()
+
+    def _escape_reply(self) -> None:
+        if self.replying is not None:
+            self.cancel_reply()
+
+    def reply_to_last(self) -> None:
+        """Alt+R: answer the newest line someone else wrote here."""
+        b = self.buf
+        if b is None or b.kind not in (CHANNEL, QUERY) or not b.session.client_tag_ok("+draft/reply"):
+            return
+        me = lower(b.session.nick)
+        ln = next((x for x in reversed(b.lines) if x.msgid and x.left and lower(x.left) != me and x.left not in ("*", "")), None)
+        if ln is not None:
+            self.start_reply(b, ln.msgid)
+
+    def reply_jump(self, b: Buffer, msgid: str) -> None:
+        chat = self.detached[id(b)].chat if id(b) in self.detached else self.chat
+        block = chat.block_of(msgid)
+        if block is not None:
+            chat.flash_block(block)
 
     def save_config(self) -> None:
         config.save(self.cfg, self.cfg_dir)

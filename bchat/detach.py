@@ -33,6 +33,8 @@ class DetachedWindow(FramedDialog):
         split = QSplitter(Qt.Orientation.Horizontal)
         self.chat = ChatView(win.cfg, split)
         self.chat.menu_provider = self._chat_menu
+        self.chat.colour_rule = win.chat_colour_rule
+        self.chat.reply_jump = win.reply_jump
         self.chat.channel_double_clicked.connect(win._join_clicked)
         self.chat.show_buffer(b)
         split.addWidget(self.chat)

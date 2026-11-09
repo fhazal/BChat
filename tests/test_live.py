@@ -122,7 +122,8 @@ def test_nick_menu_matches_xchat_and_info_panel_fills(live):
     u = b.users[lower("Oracle")]
     menu = win.build_nick_menu(b, [u])
     labels = [a.text() for a in menu.actions() if not a.isSeparator()]
-    assert labels == ["Oracle", "Open Dialog Window", "Send a File", "User Info (WhoIs)", "Add to Friends List", "Ignore",
+    assert labels == ["Oracle", "Open Dialog Window", "Send a File", "User Info (WhoIs)", "Add to Friends List",
+                      "Address Book...", "Nick Colour...", "Ignore",
                       "Operator Actions", "CTCP", "Slap!"]          # XChat + mIRC's Ignore, CTCP, Slap!
     before = sum(1 for l in b.lines if l.kind == WHOIS)
     u.server = ""

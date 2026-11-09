@@ -80,6 +80,7 @@ class UserDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self.theme = theme
         self.cfg = cfg
+        self.colour_rule = None   # (session, nick, userhost) -> colour or None; set by the main window
 
     def sizeHint(self, option, index):
         # a bigger chat font needs taller rows
@@ -102,7 +103,10 @@ class UserDelegate(QStyledItemDelegate):
             # or the shine would smear at 125 and 150 %.
             x, y = round((r.x() + self.LEFT) * dpr) / dpr, round((r.y() + (r.height() - 8) // 2) * dpr) / dpr
             p.drawPixmap(QPointF(x, y), pm)
-        col = self.theme.marking_fg if selected else (self.theme.away if u.away else self.theme.text)
+        rule = None
+        if not selected and not u.away and self.colour_rule is not None and model.buffer is not None:
+            rule = self.colour_rule(model.buffer.session, u.nick, u.host)   # Nick Colours / Address Book (0.3.0)
+        col = self.theme.marking_fg if selected else (self.theme.away if u.away else (rule or self.theme.text))
         p.setPen(QColor(col))
         tr = QRect(r.x() + self.TEXT, r.y(), r.width() - self.TEXT, r.height())
         p.drawText(tr, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, u.nick)

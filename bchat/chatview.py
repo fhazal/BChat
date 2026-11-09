@@ -10,7 +10,7 @@ import zlib
 
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetrics, QImage, QPainter, QPen, QTextBlockFormat,
-                           QTextCharFormat, QTextCursor, QTextDocument, QTextImageFormat)
+                           QTextCharFormat, QTextCursor, QTextDocument, QTextFormat, QTextImageFormat)
 from PySide6.QtWidgets import QTextBrowser
 
 from .config import Config
@@ -23,6 +23,8 @@ from .widgets import ASSETS
 class ChatView(QTextBrowser):
     channel_double_clicked = Signal(str)
     menu_provider = None  # set by the main window; builds the right-click menu
+    colour_rule = None    # set by the main window: (buffer, nick) -> colour from Nick Colours / Address Book, or None
+    reply_jump = None     # set by the main window: a click on a reply's quote line (buffer, msgid)
 
     PICTURES = {WHOIS: "info", JOIN: "te-join", NOW_TALKING: "te-join", PART: "te-part", ACTION: "te-action"}
     MAX_BLOCKS = 5000
@@ -145,7 +147,7 @@ class ChatView(QTextBrowser):
         }.get(kind, (t.nick, t.chat_fg))
 
     def _render(self, d: QTextDocument, b: Buffer, ln: Line) -> None:
-        self._render_flow(d, ln, server=b.kind == SERVER)
+        self._render_flow(d, ln, server=b.kind == SERVER, b=b)
 
     def _left_parts(self, ln: Line, colour: str) -> list[tuple[str, str]]:
         """XChat's text events colour the brackets apart from the name (textevents.in):
@@ -164,7 +166,7 @@ class ChatView(QTextBrowser):
             cf.setForeground(QColor(colour))
             cur.insertText(text, cf)
 
-    def _render_flow(self, d: QTextDocument, ln: Line, server: bool) -> None:
+    def _render_flow(self, d: QTextDocument, ln: Line, server: bool, b: Buffer | None = None) -> None:
         """Stamp, one space, nick or marker, one space, text (AdiIRC spacing). Wrapped lines continue under the
         text: on the server tab right after the marker column, elsewhere under this line's own text."""
         t = self.cfg.theme
@@ -188,6 +190,10 @@ class ChatView(QTextBrowser):
         bf.setLeftMargin(indent)
         bf.setTextIndent(-indent)
         bf.setLineHeight(max(100, self.cfg.line_spacing), QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+        if ln.msgid:
+            bf.setProperty(self.MSGID, ln.msgid)          # Reply finds the line's message id here
+        if ln.reply_to:
+            bf.setProperty(self.QUOTE, ln.reply_to)       # a click on a quote line jumps to what it quotes
         if d.isEmpty():
             cur.setBlockFormat(bf)
         else:
@@ -212,12 +218,47 @@ class ChatView(QTextBrowser):
         elif ln.left:
             if light is not None:
                 self._put_light(cur, light)
-            if self.cfg.color_nicks and ln.kind == MSG and not server:
-                mark = self.nick_colour(ln.left)
+            if ln.kind == MSG and not server:
+                rule = self.colour_rule(b, ln.left) if self.colour_rule is not None and b is not None else None
+                if rule:
+                    mark = rule
+                elif self.cfg.color_nicks:
+                    mark = self.nick_colour(ln.left)
             self._put_parts(cur, self._left_parts(ln, mark) + [(" ", mark)])
         self._insert_text(cur, ln.text, text_col)
 
     LIGHT = 7   # logical px, same as the user list
+    MSGID = QTextFormat.Property.UserProperty + 1
+    QUOTE = QTextFormat.Property.UserProperty + 2
+
+    def line_at(self, pos) -> tuple[str, str]:
+        """(msgid, quoted msgid) of the line under the mouse."""
+        block = self.cursorForPosition(pos).block()
+        f = block.blockFormat()
+        return str(f.property(self.MSGID) or ""), str(f.property(self.QUOTE) or "")
+
+    def block_of(self, msgid: str):
+        d = self.document()
+        block = d.lastBlock()
+        while block.isValid():
+            if str(block.blockFormat().property(self.MSGID) or "") == msgid:
+                return block
+            block = block.previous()
+        return None
+
+    def flash_block(self, block) -> None:
+        """Scrolls to a line and lights it up for a moment (a reply's quote was clicked)."""
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QTextEdit
+        cur = QTextCursor(block)
+        self.setTextCursor(cur)
+        self.ensureCursorVisible()
+        sel = QTextEdit.ExtraSelection()
+        sel.cursor = QTextCursor(block)
+        sel.cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        sel.format.setBackground(QColor(self.cfg.theme.selected))
+        self.setExtraSelections([sel])
+        QTimer.singleShot(1200, lambda: self.setExtraSelections([]))
     NICK_COLOURS = ("flamingo", "pink", "mauve", "maroon", "peach", "yellow", "green", "teal", "sky", "sapphire", "blue")
 
     def _stamp(self, ts: float) -> str:
@@ -366,6 +407,10 @@ class ChatView(QTextBrowser):
         super().mouseReleaseEvent(ev)
         if self.textCursor().hasSelection():
             self.copy()  # selecting copies, as in XChat
+        elif ev.button() == Qt.MouseButton.LeftButton and self.reply_jump is not None and self.current is not None:
+            _mid, quoted = self.line_at(ev.position().toPoint())
+            if quoted:
+                self.reply_jump(self.current, quoted)
 
     # --- unread marker ----------------------------------------------------------
 

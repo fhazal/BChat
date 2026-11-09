@@ -290,6 +290,8 @@ class PreferencesDialog(FramedDialog):
         lay.addWidget(_heading("Input box"))
         self.input_font = self._check(lay, "Use the Text box font", c.input_chat_font)
         self.spell = self._check(lay, "Spell checking (English)", c.spell_check, "Right-click a marked word for suggestions")
+        self.send_typing = self._check(lay, "Let others see when I'm typing", c.send_typing,
+                                       "Only on servers that support it (IRCv3 +typing). Never in the server tab.")
         lay.addWidget(_heading("Nick Completion"))
         self.auto_complete = self._check(lay, "Automatic nick completion (without TAB key)", c.auto_complete,
                                          'Typing "fha: hi" sends "Fhazal: hi" when only one nick fits')
@@ -1136,6 +1138,7 @@ class PreferencesDialog(FramedDialog):
         c.nick_suffix = self.suffix.text()
         c.complete_sort = "recent" if self.comp_sort.currentIndex() == 1 else "alpha"
         c.percent_ascii, c.percent_codes = self.pct_ascii.isChecked(), self.pct_codes.isChecked()
+        c.send_typing = self.send_typing.isChecked()
         c.ul_hosts, c.ul_chat_font = self.ul_hosts.isChecked(), self.ul_font.isChecked()
         c.ul_sort = self.ul_sort.currentIndex()
         c.ul_side = "left" if self.ul_side.currentIndex() == 1 else "right"
