@@ -1,7 +1,8 @@
 """Installer pictures (OK'd 2026-11-08, mockup-installer-bee.png + the user's orange-pink B):
 - packaging/wizard-side(-2x).bmp: welcome and finish pages, the bee banner ("BChat IRC CLIENT") on dark with a soft
   amber glow and the tagline
-- packaging/wizard-small(-2x).bmp: top right of the other pages, the orange-pink B
+- packaging/wizard-small(-2x).bmp: top right of the other pages: since 2026-11-11 the bee hexagon with an outlined
+  "BChat" under it (user picked D; drawn by make_beehex_set.py). Was the orange-pink B. The side picture stays (user).
 The app icon and the title bar logo are not touched (make_logo_assets.py). Needs Pillow; run only to change the design.
 """
 from pathlib import Path
@@ -10,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 BANNER = ROOT / "assets/logo/bee/banner-original.png"
-SMALL_B = ROOT / "assets/logo/orangepink/original.webp"
+CORNER = ROOT / "assets/logo/beehex/installer-corner-{}.png"   # 55 and 110, drawn at real size
 CRUST = (17, 17, 27)
 WHITE = (255, 255, 255)
 TAGLINE = "Handle IRC as a bee does a flower"
@@ -41,8 +42,7 @@ def side(k: int) -> Image.Image:
 
 def small(k: int) -> Image.Image:
     bg = Image.new("RGBA", (55 * k, 55 * k), WHITE + (255,))
-    b = fit(trim(Image.open(SMALL_B).convert("RGBA")), 49 * k, 49 * k)
-    bg.alpha_composite(b, ((bg.width - b.width) // 2, (bg.height - b.height) // 2))
+    bg.alpha_composite(Image.open(str(CORNER).format(55 * k)).convert("RGBA"))
     return bg.convert("RGB")
 
 

@@ -267,14 +267,17 @@ def test_header_logo_has_no_background_and_every_scale(app):
 
 
 def test_taskbar_icon_is_the_users_bold_logo():
-    """The user's current transparent set (assets/logo/pinkblue since 11-07 ~11:30) is the app, taskbar and installer icon."""
+    """The user's current transparent set (assets/logo/beehex since 11-11: bajubesi bee hexagon) is the app, taskbar and installer icon."""
     from PIL import Image, ImageChops
     from bchat.widgets import ASSETS
-    root = ASSETS.parents[1] / "assets/logo/pinkblue/transparent"
+    root = ASSETS.parents[1] / "assets/logo/beehex/transparent"
     shipped = Image.open(ASSETS / "bchat.png").convert("RGBA")
     theirs = Image.open(root / "BChat_256.png").convert("RGBA")
     assert ImageChops.difference(shipped, theirs).getbbox() is None
     assert (ASSETS / "bchat.ico").read_bytes() == (root / "BChat.ico").read_bytes()
+    for h in (16, 20, 24, 28, 32, 40, 48):   # title bar: the small-tuned bee drawn at each size, not a shrunk big one
+        assert ImageChops.difference(Image.open(ASSETS / f"header/logo-{h}.png").convert("RGBA"),
+                                     Image.open(root / f"header_{h}.png").convert("RGBA")).getbbox() is None
 
 def test_ticked_checkbox_has_a_real_tick():
     """User: ticked boxes were only a slightly lighter grey. Now a sapphire box with a dark tick."""

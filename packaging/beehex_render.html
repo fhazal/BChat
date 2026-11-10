@@ -1,0 +1,64 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@700&display=swap">
+</head><body><pre id="out"></pre>
+<script>
+// BChat logo since 2026-11-11: the bajubesi.org bee hexagon (user picked "2 + A").
+// Run by make_beehex_set.py through headless Chrome --dump-dom; prints name=base64png lines.
+// Full drawing for 40 px and up, small-tuned drawing (bigger bee, thick lines, 2 stripes) below that.
+const badge = (small) => {
+  const hex = `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd54a"/><stop offset="1" stop-color="#f0a000"/></linearGradient>
+    <clipPath id="c"><ellipse cx="40" cy="46" rx="15" ry="17"/></clipPath></defs>
+    <polygon points="40,4 72,22 72,58 40,76 8,58 8,22" fill="url(#g)" stroke="#1a1a1a" stroke-width="${small ? 6 : 4}" stroke-linejoin="round"/>`;
+  if (!small) return hex + `
+    <polygon points="40,12 65,26 65,54 40,68 15,54 15,26" fill="none" stroke="#fff3" stroke-width="2"/>
+    <ellipse cx="30" cy="30" rx="11" ry="8" fill="#fffde8" opacity=".9" transform="rotate(-25 30 30)" stroke="#1a1a1a" stroke-width="2"/>
+    <ellipse cx="50" cy="30" rx="11" ry="8" fill="#fffde8" opacity=".9" transform="rotate(25 50 30)" stroke="#1a1a1a" stroke-width="2"/>
+    <ellipse cx="40" cy="45" rx="13" ry="15" fill="#ffc72c" stroke="#1a1a1a" stroke-width="2.5"/>
+    <path d="M28 40 h24 M27 47 h26 M30 54 h20" stroke="#1a1a1a" stroke-width="4"/>
+    <circle cx="35" cy="35" r="2" fill="#1a1a1a"/><circle cx="45" cy="35" r="2" fill="#1a1a1a"/>
+    <path d="M36 23 q-3 -7 -7 -8 M44 23 q3 -7 7 -8" stroke="#1a1a1a" stroke-width="2" fill="none"/>`;
+  return hex + `
+    <ellipse cx="27" cy="29" rx="13" ry="9" fill="#ffffff" transform="rotate(-25 27 29)" stroke="#1a1a1a" stroke-width="3.5"/>
+    <ellipse cx="53" cy="29" rx="13" ry="9" fill="#ffffff" transform="rotate(25 53 29)" stroke="#1a1a1a" stroke-width="3.5"/>
+    <ellipse cx="40" cy="46" rx="15" ry="17" fill="#ffc72c"/>
+    <path d="M20 43 h40 M20 54 h40" stroke="#1a1a1a" stroke-width="6" clip-path="url(#c)"/>
+    <ellipse cx="40" cy="46" rx="15" ry="17" fill="none" stroke="#1a1a1a" stroke-width="4"/>
+    <circle cx="34.5" cy="35" r="2.8" fill="#1a1a1a"/><circle cx="45.5" cy="35" r="2.8" fill="#1a1a1a"/>`;
+};
+const svgImg = (small) => new Promise(ok => {
+  const im = new Image(); im.onload = () => ok(im);
+  im.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 80 80">${badge(small)}</svg>`);
+});
+(async () => {
+  const out = [], full = await svgImg(false), small = await svgImg(true);
+  const icon = (S) => { const c = document.createElement('canvas'); c.width = c.height = S;
+    const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(S < 40 ? small : full, 0, 0, S, S); return c; };
+  for (const S of [16, 20, 24, 28, 32, 40, 48, 64, 128, 256, 512, 1024]) out.push(`icon_${S}=` + icon(S).toDataURL().split(',')[1]);
+  // wordmark A: white B + gold Chat with a dark outline (for dark pages); dark B + deeper gold for light pages
+  await document.fonts.load('700 46px Fredoka');
+  for (const [name, H, light] of [['wordmark_dark_90', 90, 0], ['wordmark_dark_180', 180, 0], ['wordmark_light_90', 90, 1], ['wordmark_light_180', 180, 1]]) {
+    const m = document.createElement('canvas').getContext('2d'); m.font = '700 46px Fredoka';
+    const a = m.measureText('B').width, b = m.measureText('Chat').width, W = 86 + a + b + 6, k = H / 80;
+    const c = document.createElement('canvas'); c.width = Math.ceil(W * k); c.height = H;
+    const g = c.getContext('2d'); g.scale(k, k); g.drawImage(full, 0, 0, 80, 80);
+    g.font = '700 46px Fredoka'; g.lineJoin = 'round';
+    if (!light) { g.strokeStyle = '#111'; g.lineWidth = 7; g.strokeText('B', 86, 58); g.strokeText('Chat', 86 + a, 58); }
+    g.fillStyle = light ? '#1a1a1a' : '#ffffff'; g.fillText('B', 86, 58);
+    g.fillStyle = light ? '#f0a000' : '#ffc72c'; g.fillText('Chat', 86 + a, 58);
+    out.push(`${name}=` + c.toDataURL().split(',')[1]);
+  }
+  // installer corner (55 px box, user picked D 11-11): bee hex on top, outlined "BChat" under it (white B, gold Chat)
+  for (const k of [1, 2]) {
+    const c = document.createElement('canvas'); c.width = c.height = 55 * k;
+    const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.scale(k / 2, k / 2);   // drawn in a 110 box
+    g.drawImage(full, 23, 0, 64, 64);
+    g.font = '700 29px Fredoka'; g.lineJoin = 'round';
+    const a = g.measureText('B').width, b = g.measureText('Chat').width, x = 55 - (a + b) / 2;
+    g.strokeStyle = '#111'; g.lineWidth = 29 * 7 / 46; g.strokeText('B', x, 98); g.strokeText('Chat', x + a, 98);
+    g.fillStyle = '#ffffff'; g.fillText('B', x, 98); g.fillStyle = '#ffc72c'; g.fillText('Chat', x + a, 98);
+    out.push(`corner_${55 * k}=` + c.toDataURL().split(',')[1]);
+  }
+  document.getElementById('out').textContent = out.join('\n');
+})();
+</script></body></html>
