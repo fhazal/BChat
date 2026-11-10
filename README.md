@@ -1,8 +1,14 @@
 <div align="center">
 
-<img src="docs/banner.png" alt="BChat IRC client" width="100%">
+<img src="docs/banner.png" alt="BChat IRC client" width="60%">
 
-# BChat
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/beehex/wordmark-dark-180.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo/beehex/wordmark-light-180.png">
+    <img src="assets/logo/beehex/wordmark-light-180.png" alt="BChat" height="80">
+  </picture>
+</h1>
 
 **Handle IRC as a bee does a flower. A calm, modern IRC client for Windows, made by BajuBesi Labs.**
 Classic XChat feel · six themes · safe by default · notification cards · Python plugins
