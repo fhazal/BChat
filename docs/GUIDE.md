@@ -11,6 +11,9 @@ New to IRC? Start with [Getting started](#getting-started). Something not workin
 ### What is IRC?
 IRC is one of the oldest ways to chat on the internet. You join a **network** (a group of servers, like Libera.Chat or BajuBesi Community), then **channels** on it (rooms whose names start with `#`, like `#BChat`). You pick a **nickname**. No account or phone number is needed.
 
+### Is BChat on Mac or Linux?
+No. BChat is made for **Windows 10 and 11**. There is no Mac or Linux version.
+
 ### What happens the first time I open BChat?
 If BChat finds no networks, it shows the **Welcome** window: type a nickname, pick where to start, and click **Connect**.
 - **BajuBesi Community** (recommended) connects to irc.bajubesi.org and joins **#BChat** (help and chat about BChat) and **#chat**.
