@@ -343,7 +343,7 @@ def test_local_page_moves_the_fields_and_warns_on_home_addresses(app, tmp_path):
     import json
     from bchat import config
     from bchat.preferences import CATEGORIES, PreferencesDialog, home_address
-    assert CATEGORIES["Network"] == ["Network setup", "Local", "File transfers"]
+    assert CATEGORIES["Network"] == ["Network setup", "Flood", "Local", "File transfers"]
     assert home_address("192.168.1.20") and home_address("10.0.0.2") and home_address("100.70.1.1")
     assert not home_address("203.0.113.5".replace("203.0.113", "8.8.8")) and not home_address("")
     (tmp_path / "config.json").write_text(json.dumps({"nick": "x", "dcc_ip_from_server": False}))

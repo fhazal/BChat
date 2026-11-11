@@ -124,7 +124,7 @@ def test_nick_menu_matches_xchat_and_info_panel_fills(live):
     menu = win.build_nick_menu(b, [u])
     labels = [a.text() for a in menu.actions() if not a.isSeparator()]
     assert labels == ["Oracle", "Open Dialog Window", "Send a File", "User Info (WhoIs)", "Add to Friends List",
-                      "Address Book...", "Nick Colour...", "Ignore",
+                      "Address Book...", "Nick Colour...", "Trust for Files and Chats", "Ignore",
                       "Operator Actions", "CTCP", "Slap!"]          # XChat + mIRC's Ignore, CTCP, Slap!
     before = sum(1 for l in b.lines if l.kind == WHOIS)
     u.server = ""
@@ -357,11 +357,12 @@ def test_user_command_goes_before_background_lines(live):
 
 def test_ctcp_flood_stops_replies(live):
     app, srv, win, s = live
-    for _ in range(9):
+    for _ in range(9):                     # 0.6.0: one person gets 2 answers a minute, then one 'flood' line
         srv.send(":x!y@z PRIVMSG Badaboom :\x01TIME\x01")
-    assert wait(app, lambda: len(s._ctcp_times) >= 9)
-    assert len(s._ctcp_times) == 9
-    assert any("CTCP flood" in l.text for b in s.all_buffers() for l in b.lines)
+    assert wait(app, lambda: any("CTCP flood from x" in l.text for b in s.all_buffers() for l in b.lines))
+    time.sleep(0.5); app.processEvents()
+    assert len([x for x in srv.received if x.startswith("NOTICE x")]) <= 2
+    assert sum("CTCP flood" in l.text for b in s.all_buffers() for l in b.lines) == 1
 
 
 def test_markup_from_network_is_not_rendered(live):
@@ -1883,6 +1884,7 @@ def test_auto_replace_on_space_and_enter(live):
 
 def test_ctcp_replies_list(live):
     app, srv, win, s = live
+    win.cfg.flood_ctcp_person = 99         # this test is about the reply list, not the per-person limit
     srv.send(":Belon!b@h PRIVMSG Badaboom :\x01PING 123 abc\x01")
     assert wait(app, lambda: any("NOTICE Belon" in x and "PING 123 abc" in x for x in srv.received))
     s._ctcp_times.clear()
@@ -2385,7 +2387,7 @@ def test_dcc_names_from_the_network_cannot_escape_or_overwrite(live, tmp_path):
 
 def test_dcc_auto_accept_never_takes_programs(live, tmp_path):
     app, srv, win, s = live
-    prefs(win, lambda d: (d.dcc_auto.setCurrentIndex(1), d.dcc_dir.setText(str(tmp_path)), d.dcc_nick.setChecked(True), d.dcc_open_recv.setChecked(False)))
+    prefs(win, lambda d: (d.dcc_auto.setCurrentIndex(2), d.dcc_dir.setText(str(tmp_path)), d.dcc_nick.setChecked(True), d.dcc_open_recv.setChecked(False)))
     payload = b"auto"
     port, _ = _sender(payload)
     srv.send(f":Belon!b@h PRIVMSG Badaboom :\x01DCC SEND song.mp3 2130706433 {port} {len(payload)}\x01")
@@ -2720,7 +2722,7 @@ def test_files_page_saved(app, tmp_path):
     from bchat import config
     win, _ = make_win(tmp_path, 1)
     # 0.2.0: the IP field and the lookup moved to Network > Local
-    prefs(win, lambda d: (d.dcc_auto.setCurrentIndex(1), d.dcc_dir.setText("D:/in"), d.dcc_ip.setText("1.2.3.4"), d.dcc_down_all.setValue(5), d.dcc_open_chat.setChecked(False), d.local_ways["normal"].setChecked(True)))
+    prefs(win, lambda d: (d.dcc_auto.setCurrentIndex(2), d.dcc_dir.setText("D:/in"), d.dcc_ip.setText("1.2.3.4"), d.dcc_down_all.setValue(5), d.dcc_open_chat.setChecked(False), d.local_ways["normal"].setChecked(True)))
     back = config.load(tmp_path)
     assert (back.dcc_auto, back.dcc_dir, back.dcc_ip, back.dcc_max_get_all, back.dcc_open_chat, back.local_lookup, back.dcc_ip_from_server) == (1, "D:/in", "1.2.3.4", 5, False, "normal", False)
     win.close()

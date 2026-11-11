@@ -216,7 +216,7 @@ class PluginManager(QObject):
         b = buf or self._front()
         s = b.session if b is not None else None
         name = name.lower()
-        values = {"version": commands.VERSION.split()[-1], "xchatdir": str(self.win.cfg_dir), "xchatdirfs": str(self.win.cfg_dir),
+        values = {"version": __import__("bchat").full_version(), "xchatdir": str(self.win.cfg_dir), "xchatdirfs": str(self.win.cfg_dir),
                   "configdir": str(self.win.cfg_dir), "win_status": "active" if self.win.isActiveWindow() else "normal"}
         if s is not None:
             values.update(nick=s.nick, channel=b.name, server=s.server_name, network=s.net.name, host=s.net.name,

@@ -148,6 +148,8 @@ class ChatView(QTextBrowser):
         }.get(kind, (t.nick, t.chat_fg))
 
     def _render(self, d: QTextDocument, b: Buffer, ln: Line) -> None:
+        if ln.hidden:
+            return                              # per-tab setting: join and part lines hidden here
         self._render_flow(d, ln, server=b.kind == SERVER, b=b)
 
     def _left_parts(self, ln: Line, colour: str) -> list[tuple[str, str]]:
@@ -176,7 +178,7 @@ class ChatView(QTextBrowser):
         left_col, text_col = self._kind_colours(ln.kind)
         if ln.kind == HILITE and ln.colour:              # a highlight rule's own colour
             left_col = text_col = ln.colour
-        stamp = self._stamp(ln.ts)
+        stamp = self._stamp(ln.ts, b)
         pic = self.PICTURES.get(ln.kind)
         side = self.fm.height() - 2
         light = self._light_slot(ln, server)   # None, "" (empty slot) or a light name
@@ -221,9 +223,10 @@ class ChatView(QTextBrowser):
                 self._put_light(cur, light)
             if ln.kind == MSG and not server:
                 rule = self.colour_rule(b, ln.left) if self.colour_rule is not None and b is not None else None
+                from . import tabopts
                 if rule:
                     mark = rule
-                elif self.cfg.color_nicks:
+                elif tabopts.get(self.cfg, b, "color_nicks") if b is not None else self.cfg.color_nicks:
                     mark = self.nick_colour(ln.left)
             self._put_parts(cur, self._left_parts(ln, mark) + [(" ", mark)])
         self._insert_text(cur, ln.text, text_col)
@@ -262,8 +265,9 @@ class ChatView(QTextBrowser):
         QTimer.singleShot(1200, lambda: self.setExtraSelections([]))
     NICK_COLOURS = ("flamingo", "pink", "mauve", "maroon", "peach", "yellow", "green", "teal", "sky", "sapphire", "blue")
 
-    def _stamp(self, ts: float) -> str:
-        if not self.cfg.timestamps:
+    def _stamp(self, ts: float, b: Buffer | None = None) -> str:
+        from . import tabopts
+        if not (tabopts.get(self.cfg, b, "timestamps") if b is not None else self.cfg.timestamps):
             return ""
         try:
             return time.strftime(self.cfg.stamp_format or "[%H:%M]", time.localtime(ts)) + " "

@@ -437,6 +437,10 @@ class DccManager(QObject):
         except (ValueError, OSError, struct.error):
             s.add(s._front(), "error", "*", f"Received a bad DCC from {nick}")
 
+    def trusted(self, s, nick: str) -> bool:
+        """Preferences > File transfers > Trusted people: the whole address must match (a nick alone never does)."""
+        return is_trusted(self.cfg, s.net.name, getattr(s, "last_ctcp_prefix", "") or "")
+
     def _offer_file(self, s, nick, name, ip, port, size, token) -> None:
         # an answer to our passive offer: they listen, we connect
         if token:
@@ -451,8 +455,13 @@ class DccManager(QObject):
         t.path = str(self.target_path(clean, nick))
         s.add(s._front(), "info", "*", f"{nick} has offered {clean} ({size} bytes)")
         s.last_dcc = nick
+        trusted = self.trusted(s, nick)
+        auto = (self.cfg.dcc_auto == 1 or self.cfg.dcc_auto == 2 and trusted) and not is_program(clean)
+        s.last_dcc_trusted = auto and trusted
         s.notify.emit(s._front(), "dcc")         # its own card; taskbar / tray blink follow the Private column
-        if self.cfg.dcc_auto == 1 and not is_program(clean):
+        if auto:
+            if trusted:
+                s.add(s._front(), "info", "*", f"Accepted {clean} from {nick} (trusted).")
             self.accept(t)
         if self.cfg.dcc_open_recv:
             self.win.open_transfers()
@@ -542,6 +551,9 @@ class DccManager(QObject):
         t.ip, t.port = int_to_ip(ip), port
         s.add(s._front(), "info", "*", f"Received a DCC CHAT offer from {nick}")
         s.notify.emit(s._front(), "priv")
+        if self.cfg.dcc_auto in (1, 2) and self.trusted(s, nick):
+            s.add(s._front(), "info", "*", f"Direct chat with {nick} accepted (trusted).")
+            self.accept(t)
         if self.cfg.dcc_open_chat:
             self.win.open_chats()
 
@@ -605,3 +617,87 @@ class DccManager(QObject):
 
 def lower_eq(a: str, b: str) -> bool:
     return a.lower() == b.lower()
+
+
+def nick_only(mask: str) -> bool:
+    """A trust entry must name an address: '*!*@host' or '*!user@host'. 'Wira' or 'Wira!*@*' is refused."""
+    m = mask.strip()
+    if "@" not in m:
+        return True
+    host = m.split("@", 1)[1]
+    return host.strip("*.") == ""
+
+
+def is_trusted(cfg, network: str, prefix: str) -> bool:
+    import fnmatch
+    from .protocol import lower
+    if not prefix or "!" not in prefix or "@" not in prefix:
+        return False
+    for e in cfg.dcc_trusted:
+        net = e.get("net", "")
+        if net and lower(net) != lower(network or ""):
+            continue
+        mask = e.get("mask", "")
+        if not mask or nick_only(mask):
+            continue
+        if "!" not in mask:
+            mask = "*!" + mask
+        if fnmatch.fnmatchcase(lower(prefix), lower(mask)):
+            return True
+    return False
+
+
+class TrustDialog:
+    """Add or edit one trusted person: nick (a label), address mask, network. Built lazily (Qt only when used)."""
+
+    def __new__(cls, parent, entry: dict, networks: list[str]):
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton
+        from .widgets import FramedDialog, icon
+
+        class _Dialog(FramedDialog):
+            def __init__(self):
+                super().__init__("BChat: Trusted Person", parent)
+                f = QFormLayout()
+                self.nick = QLineEdit(entry.get("nick", ""))
+                self.mask = QLineEdit(entry.get("mask", ""))
+                self.mask.setPlaceholderText("*!user@host  or  *!*@host")
+                self.net = QComboBox()
+                self.net.addItem("All networks", "")
+                for n in networks:
+                    self.net.addItem(n, n)
+                want = entry.get("net", "")
+                if want and self.net.findData(want) < 0:
+                    self.net.addItem(want, want)
+                self.net.setCurrentIndex(max(0, self.net.findData(want)))
+                f.addRow("Nick:", self.nick)
+                f.addRow("Address:", self.mask)
+                f.addRow("Network:", self.net)
+                self.body.addLayout(f)
+                self.why = QLabel("")
+                self.body.addWidget(self.why)
+                row = QHBoxLayout()
+                row.addStretch(1)
+                cancel = QPushButton(icon("close-light"), "&Cancel")
+                cancel.setAutoDefault(False)
+                cancel.clicked.connect(self.reject)
+                self.ok = QPushButton(icon("save"), "&OK")
+                self.ok.setDefault(True)
+                self.ok.clicked.connect(self.accept)
+                row.addWidget(cancel)
+                row.addWidget(self.ok)
+                self.body.addLayout(row)
+                self.mask.textChanged.connect(self._check)
+                self._check()
+                self.resize(420, 0)
+
+            def _check(self) -> None:
+                bad = nick_only(self.mask.text())
+                self.ok.setEnabled(not bad)
+                self.why.setText("The address needs a host, like *!*@their.host: a nick alone is never enough." if bad and
+                                 self.mask.text().strip() else "")
+
+            def entry(self) -> dict:
+                return {"nick": self.nick.text().strip(), "mask": self.mask.text().strip(), "net": self.net.currentData() or ""}
+
+        return _Dialog()

@@ -17,9 +17,9 @@ from .widgets import FramedDialog, icon
 
 CATEGORIES = {"Interface": ["Text box", "Input box", "User list", "Channel switcher", "Colors"],
               "Chatting": ["Alerts", "Highlights", "General", "Logging", "Sound", "Now Playing", "Advanced"],
-              "Network": ["Network setup", "Local", "File transfers"],
+              "Network": ["Network setup", "Flood", "Local", "File transfers"],
               "BChat": ["Updates"]}
-BUILT = ("Text box", "Input box", "User list", "Channel switcher", "Colors", "Alerts", "Highlights", "General", "Logging", "Sound", "Now Playing", "Advanced", "Network setup", "Local", "File transfers", "Updates")
+BUILT = ("Flood", "Text box", "Input box", "User list", "Channel switcher", "Colors", "Alerts", "Highlights", "General", "Logging", "Sound", "Now Playing", "Advanced", "Network setup", "Local", "File transfers", "Updates")
 SWITCHER_POS = ("Left", "Right", "Top", "Bottom", "Hidden")
 SORTS = ("A-Z, Ops first", "A-Z", "Z-A, Ops last", "Z-A", "Unsorted")
 # Sound page: session notify event -> the name XChat's Sound page uses
@@ -120,7 +120,7 @@ class PreferencesDialog(FramedDialog):
         self.page_of["Colors"] = self.pages.addWidget(self._colors_page())
         for name, build in (("File transfers", self._files_page), ("Channel switcher", self._switcher_page), ("Input box", self._input_page), ("User list", self._userlist_page), ("Alerts", self._alerts_page), ("Highlights", self._highlights_page),
                             ("General", self._general_page), ("Logging", self._logging_page), ("Sound", self._sound_page), ("Now Playing", self._np_page),
-                            ("Advanced", self._advanced_page), ("Network setup", self._network_page), ("Local", self._local_page), ("Updates", self._updates_page)):
+                            ("Advanced", self._advanced_page), ("Network setup", self._network_page), ("Flood", self._flood_page), ("Local", self._local_page), ("Updates", self._updates_page)):
             self.page_of[name] = self.pages.addWidget(build())
         row.addWidget(self.tree)
         row.addWidget(right, 1)
@@ -436,7 +436,7 @@ class PreferencesDialog(FramedDialog):
         page, lay = self._new_page()
         lay.addWidget(_heading("Highlight Rules"))
         self.hl_on = self._check(lay, "Enable highlighting", c.hl_on,
-                                 "Your nick always highlights. This turns the rules below on or off, as in mIRC")
+                                 "Your nick always highlights. This turns the rules below on or off.")
         self.hl_rules = [dict(r) for r in c.hl_rules]
         self.hl_list = QTreeWidget()
         self.hl_list.setRootIsDecorated(False)
@@ -912,33 +912,155 @@ class PreferencesDialog(FramedDialog):
         g.addWidget(pick, row, 2)
         return edit
 
+    # --- Flood (0.6.0) ------------------------------------------------------------------------
+
+    FLOOD_DEFAULTS = {"pace": 1, "ctcp": 5, "person": 2, "queries": 5, "whois": 3}
+
+    def _flood_page(self) -> QWidget:
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Sending"))
+        g = QGridLayout()
+        paces = ("careful", "normal", "fast")
+        self.flood_pace = self._menu(g, 0, "Pace:", ("Careful (slow servers)", "Normal", "Fast (your own server or bouncer)"),
+                                     paces.index(c.flood_pace) if c.flood_pace in paces else 1)
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        tip = QLabel("How quickly BChat sends lines, so the server never throws you out for flooding. "
+                     "Your own messages always go before automatic ones.")
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
+        lay.addWidget(_heading("Answering others"))
+        g = QGridLayout()
+        rows = (("flood_ctcp", "CTCP requests (version, ping, time):", c.flood_ctcp, "in 30 s, then stay quiet for 2 min"),
+                ("flood_person", "From one person:", c.flood_ctcp_person, "a minute"),
+                ("flood_queries", "New private chats:", c.flood_queries, "a minute, more go to the server tab"),
+                ("flood_whois", "WhoIs on new private chats:", c.flood_whois, "a minute"))
+        for r, (attr, label, value, rest) in enumerate(rows):
+            box = self._number(g, r, label, value, 0, 99)
+            g.addWidget(QLabel(rest), r, 2)
+            setattr(self, attr, box)
+        g.setColumnStretch(3, 1)
+        lay.addLayout(g)
+        lay.addWidget(QLabel("0 = never. When a limit is hit, BChat says so once in the server tab."))
+        row = QHBoxLayout()
+        row.addStretch(1)
+        back = QPushButton(icon("revert"), "Back to Normal")
+        back.setAutoDefault(False)
+        back.clicked.connect(self._flood_defaults)
+        row.addWidget(back)
+        lay.addLayout(row)
+        lay.addStretch(1)
+        return page
+
+    def _flood_defaults(self) -> None:
+        d = self.FLOOD_DEFAULTS
+        self.flood_pace.setCurrentIndex(d["pace"])
+        for attr, key in (("flood_ctcp", "ctcp"), ("flood_person", "person"), ("flood_queries", "queries"), ("flood_whois", "whois")):
+            getattr(self, attr).setValue(d[key])
+
+    # --- File transfers: trusted people (0.6.0) -------------------------------------------------
+
+    def _trust_fill(self, keep: int | None = None) -> None:
+        self.trust_list.clear()
+        for e in self.trusted:
+            self.trust_list.addTopLevelItem(QTreeWidgetItem([e.get("nick", ""), e.get("mask", ""), e.get("net", "") or "All networks"]))
+        if keep is not None and 0 <= keep < self.trust_list.topLevelItemCount():
+            self.trust_list.setCurrentItem(self.trust_list.topLevelItem(keep))
+
+    def _trust_row(self) -> int:
+        it = self.trust_list.currentItem()
+        return self.trust_list.indexOfTopLevelItem(it) if it is not None else -1
+
+    def _trust_dialog(self, entry: dict | None):
+        from .dcc import TrustDialog
+        d = TrustDialog(self, entry or {}, [n.name for n in self.cfg.networks])
+        self.trust_dialog = d
+        return d
+
+    def _trust_add(self) -> None:
+        d = self._trust_dialog(None)
+
+        def done(code):
+            if code:
+                self.trusted.append(d.entry())
+                self._trust_fill(len(self.trusted) - 1)
+        d.finished.connect(done)
+        d.open()
+
+    def _trust_edit(self) -> None:
+        i = self._trust_row()
+        if i < 0:
+            return
+        d = self._trust_dialog(self.trusted[i])
+
+        def done(code):
+            if code:
+                self.trusted[i] = d.entry()
+                self._trust_fill(i)
+        d.finished.connect(done)
+        d.open()
+
+    def _trust_remove(self) -> None:
+        i = self._trust_row()
+        if i >= 0:
+            del self.trusted[i]
+            self._trust_fill(min(i, len(self.trusted) - 1))
+
     def _files_page(self) -> QWidget:
         c = self.cfg
         page, lay = self._new_page()
         lay.addWidget(_heading("Files and Directories"))
         g = QGridLayout()
-        self.dcc_auto = self._menu(g, 0, "Auto accept file offers:", ("No, ask me", "Yes"), c.dcc_auto)
+        self.dcc_auto = self._menu(g, 0, "Auto accept file offers:", ("No, ask me", "From trusted people only", "From everyone"),
+                                   {0: 0, 2: 1, 1: 2}.get(c.dcc_auto, 0))
         self.dcc_dir = self._folder_row(g, 1, "Download files to:", c.dcc_dir)
         self.dcc_done = self._folder_row(g, 2, "Move completed files to:", c.dcc_done_dir)
         lay.addLayout(g)
-        lay.addWidget(QLabel("Programs (.exe and the like) are never auto accepted."))
+        lay.addWidget(QLabel("Trusted people (files and direct chats from them are accepted by themselves):"))
+        self.trusted = [dict(e) for e in c.dcc_trusted]
+        self.trust_list = QTreeWidget()
+        self.trust_list.setHeaderLabels(["Nick", "Address", "Network"])
+        self.trust_list.setRootIsDecorated(False)
+        self.trust_list.setColumnWidth(0, 110)
+        self.trust_list.setColumnWidth(1, 210)
+        self.trust_list.setFixedHeight(60)
+        self.trust_list.itemDoubleClicked.connect(lambda *_: self._trust_edit())
+        lay.addWidget(self.trust_list)
+        row = QHBoxLayout()
+        for label, ic, slot in (("Add...", "add", self._trust_add), ("Edit...", "edit", self._trust_edit), ("Remove", "remove", self._trust_remove)):
+            btn = QPushButton(icon(ic), label)
+            btn.setAutoDefault(False)
+            btn.clicked.connect(lambda _=False, f=slot: f())
+            row.addWidget(btn)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self._trust_fill()
+        note = QLabel("Programs always ask. A nick alone is never enough: the address must match.")
+        lay.addWidget(note)
         self.dcc_nick = self._check(lay, "Save nick name in filenames", c.dcc_with_nick)
         lay.addWidget(_heading("Ports"))
-        g = QGridLayout()
+        g = QGridLayout()                      # one row: first and last port side by side
         self.dcc_first = self._number(g, 0, "First DCC send port:", c.dcc_first_port, 0, 65535)
-        self.dcc_last = self._number(g, 1, "Last DCC send port:", c.dcc_last_port, 0, 65535)
-        g.setColumnStretch(2, 1)
+        right = QGridLayout()
+        self.dcc_last = self._number(right, 0, "Last:", c.dcc_last_port, 0, 65535)
+        g.addLayout(right, 0, 2)
+        g.setColumnMinimumWidth(1, 120)
+        g.setColumnStretch(3, 1)
         lay.addLayout(g)
         where = QLabel("The address file offers carry is on Network > Local.")
         where.setStyleSheet(f"color: {c.theme.muted};")
         lay.addWidget(where)
         lay.addWidget(_heading("Maximum File Transfer Speeds (KB/s, 0 = no limit)"))
-        g = QGridLayout()
+        g = QGridLayout()                      # two columns: uploads left, downloads right (room for Trusted people)
         self.dcc_up = self._number(g, 0, "One upload:", c.dcc_max_send, 0, 999999)
-        self.dcc_down = self._number(g, 1, "One download:", c.dcc_max_get, 0, 999999)
-        self.dcc_up_all = self._number(g, 2, "All uploads combined:", c.dcc_max_send_all, 0, 999999)
-        self.dcc_down_all = self._number(g, 3, "All downloads combined:", c.dcc_max_get_all, 0, 999999)
-        g.setColumnStretch(2, 1)
+        self.dcc_up_all = self._number(g, 1, "All uploads:", c.dcc_max_send_all, 0, 999999)
+        right = QGridLayout()
+        self.dcc_down = self._number(right, 0, "One download:", c.dcc_max_get, 0, 999999)
+        self.dcc_down_all = self._number(right, 1, "All downloads:", c.dcc_max_get_all, 0, 999999)
+        g.addLayout(right, 0, 2, 2, 1)
+        g.setColumnMinimumWidth(1, 120)
+        g.setColumnStretch(3, 1)
         lay.addLayout(g)
         lay.addWidget(_heading("Auto Open DCC Windows"))
         row = QHBoxLayout()
@@ -1221,7 +1343,11 @@ class PreferencesDialog(FramedDialog):
         c.log_stamps, c.log_stamp_format = self.log_stamps.isChecked(), self.log_fmt.text()
         c.sounds = {k: e.text().strip() for k, e in self.sound_edits.items() if e.text().strip()}
         c.reconnect_delay = self.reconnect.value()
-        c.dcc_auto = self.dcc_auto.currentIndex()
+        c.dcc_auto = {0: 0, 1: 2, 2: 1}[self.dcc_auto.currentIndex()]
+        c.dcc_trusted = [dict(e) for e in self.trusted]
+        c.flood_pace = ("careful", "normal", "fast")[self.flood_pace.currentIndex()]
+        c.flood_ctcp, c.flood_ctcp_person = self.flood_ctcp.value(), self.flood_person.value()
+        c.flood_queries, c.flood_whois = self.flood_queries.value(), self.flood_whois.value()
         c.dcc_dir, c.dcc_done_dir = self.dcc_dir.text().strip(), self.dcc_done.text().strip()
         c.dcc_with_nick = self.dcc_nick.isChecked()
         c.dcc_first_port, c.dcc_last_port = self.dcc_first.value(), self.dcc_last.value()

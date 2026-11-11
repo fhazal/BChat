@@ -28,14 +28,18 @@ def _read(path: Path) -> list[str]:
 def parse_server(entry: str, net_ssl: bool) -> Server:
     host, _, rest = entry.partition("/")
     ssl = net_ssl
+    starttls = False
     port = 0
     if rest:
         if rest.startswith("+"):
             ssl = True
             rest = rest[1:]
+        elif rest.startswith("*"):               # a plain port, switched to SSL first (STARTTLS)
+            ssl, starttls = False, True
+            rest = rest[1:]
         if rest.isdigit():
             port = int(rest)
-    return Server(host, port or (6697 if ssl else 6667), ssl)
+    return Server(host, port or (6697 if ssl else 6667), ssl, starttls)
 
 
 def parse_servlist(lines: list[str]) -> list[NetworkConfig]:

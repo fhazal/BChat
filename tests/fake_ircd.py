@@ -11,7 +11,13 @@ AWAY = {"J|wang", "Psycho", "BeerAddict", "Combat90", "Corumn26"}
 
 
 class FakeIrcd:
-    def __init__(self, certfile: str | None = None, keyfile: str | None = None, taken_nicks=(), caps="", sasl_ok=True, whox=False, refuse=False, history=None, client_ca=None):
+    def __init__(self, certfile: str | None = None, keyfile: str | None = None, taken_nicks=(), caps="", sasl_ok=True, whox=False, refuse=False, history=None, client_ca=None, starttls=None, scram_password=None, scram_bad_server=False):
+        self.starttls = starttls          # 0.6.0: "ok" = answer 670 and switch to SSL, "refuse" = 691
+        self.scram_password = scram_password
+        self.scram_bad_server = scram_bad_server
+        self._scram = None
+        self._scram_stage = 0
+        self._upgrade = False
         self.history = history     # [(prefix, command, text, unix time)]: a channel that keeps history (+H)
         self.refuse = refuse
         self.extra_caps = caps
@@ -49,7 +55,7 @@ class FakeIrcd:
             except OSError:
                 continue
             try:
-                if self.ctx:
+                if self.ctx and not self.starttls:
                     conn = self.ctx.wrap_socket(conn, server_side=True)
                     self.peer_der = conn.getpeercert(binary_form=True) or b""
             except (ssl_mod.SSLError, OSError):
@@ -77,6 +83,13 @@ class FakeIrcd:
             *lines, buf = buf.split(b"\n")
             for raw in lines:
                 self._line(raw.decode("utf-8", "replace").rstrip("\r"))
+                if self._upgrade:                       # STARTTLS: the rest of the talk is over SSL
+                    self._upgrade = False
+                    try:
+                        conn = self.ctx.wrap_socket(conn, server_side=True)
+                    except (ssl_mod.SSLError, OSError):
+                        return
+                    self.client = conn
 
     def _line(self, line: str):
         self.received.append(line)
@@ -86,6 +99,42 @@ class FakeIrcd:
         if self.refuse and cmd == "USER":
             self.send(":irc.znc.in 464 * :Invalid Password")
             self.client.close()
+            return
+        if cmd == "STARTTLS":
+            if self.starttls == "ok":
+                self.send(":srv 670 * :STARTTLS successful, go ahead with TLS handshake")
+                self._upgrade = True
+            else:
+                self.send(":srv 691 * :STARTTLS failed")
+            return
+        if cmd == "AUTHENTICATE" and self.scram_password is not None and (word[1] == "SCRAM-SHA-256" or self._scram):
+            import base64
+            import sys as _sys
+            from pathlib import Path as _P
+            _sys.path.insert(0, str(_P(__file__).resolve().parents[1]))
+            from bchat.scram import ScramServer
+            if word[1] == "SCRAM-SHA-256":
+                self._scram, self._scram_stage = ScramServer(self.scram_password), 0
+                self.send("AUTHENTICATE +")
+                return
+            data = base64.b64decode(word[1]) if word[1] != "+" else b""
+            if self._scram_stage == 0:
+                self._scram_stage = 1
+                self.send("AUTHENTICATE " + base64.b64encode(self._scram.first(data)).decode())
+            elif self._scram_stage == 1:
+                self._scram_stage = 2
+                v = self._scram.final(data)
+                if v is None:
+                    self._scram = None
+                    self.send(f":srv 904 {self.nick or '*'} :SASL authentication failed")
+                    return
+                if self.scram_bad_server:
+                    v = b"v=" + base64.b64encode(b"x" * 32)
+                self.send("AUTHENTICATE " + base64.b64encode(v).decode())
+            else:
+                self._scram = None
+                self.send(f":srv 900 {self.nick or '*'} {self.nick or '*'}!u@h acct :You are now logged in as acct")
+                self.send(f":srv 903 {self.nick or '*'} :SASL authentication successful")
             return
         if cmd == "CAP" and word[1] == "END":
             self.cap_open = False

@@ -41,6 +41,7 @@ class Line:
     colour: str = ""  # a highlight rule's own colour ("" = the theme's)
     msgid: str = ""   # IRCv3 msgid: what a +reply points at
     reply_to: str = ""  # on a quote line: the msgid it quotes (a click jumps there)
+    hidden: bool = False  # 0.6.0: a join/part line in a tab set to hide them (still logged, not drawn)
 
 
 @dataclass
@@ -136,7 +137,9 @@ class Session(QObject):
     LAG_FULL_MS = 1000     # the lag bar is full at 1 second, like XChat's (fe_set_lag)
     WANTED_CAPS = {"multi-prefix", "away-notify", "userhost-in-names", "server-time", "znc.in/server-time-iso",
                    "znc.in/self-message", "chghost", "cap-notify", "account-notify", "account-tag", "extended-join",
-                   "invite-notify", "message-tags", "setname", "batch", "draft/chathistory", "chathistory"}
+                   "invite-notify", "message-tags", "setname", "batch", "draft/chathistory", "chathistory",
+                   "labeled-response"}
+    PACE = {"careful": 1.5, "normal": 1.0, "fast": 0.5}   # Preferences > Network > Flood: how quickly lines go out
     HISTORY_LINES = 50     # asked for on join when the server keeps channel history (IRCv3 chathistory)
 
     def __init__(self, net: NetworkConfig, cfg: Config, parent=None):
@@ -185,6 +188,9 @@ class Session(QObject):
         self.join_once: list[tuple[str, str]] = []   # (channel, key) from an irc:// link: joined after login, not saved
         self._history: dict[str, tuple[str, list]] = {}   # open history batch id -> (target, lines)
         self._sasl_state = ""
+        self._starttls, self._scram, self._sasl_mech, self._scram_in = "", None, "", ""
+        self._labels, self._label_batches, self._route = {}, {}, None
+        self.last_ctcp_prefix = ""
         self._cert_loaded = False          # a client certificate is on the socket (Log in with: Certificate)
         self.bouncer = ""                  # 0.4.0: "ZNC", "soju" or "psyBNC" when we talk to one, not the network itself
         self.bouncer_version = ""
@@ -279,8 +285,9 @@ class Session(QObject):
         return [self.server_buffer, *self.buffers.values()]
 
     def add(self, b: Buffer, kind: str, left: str, text: str, ts: float | None = None, colour: str = "",
-            msgid: str = "", reply_to: str = "") -> None:
-        line = Line(kind, left, text, ts if ts is not None else time.time(), colour=colour, msgid=msgid, reply_to=reply_to)
+            msgid: str = "", reply_to: str = "", hidden: bool = False) -> None:
+        line = Line(kind, left, text, ts if ts is not None else time.time(), colour=colour, msgid=msgid, reply_to=reply_to,
+                    hidden=hidden)
         if b.kind == CHANNEL and kind in (MSG, SELF, HILITE) and left and left[0] not in "<>-":
             u = b.users.get(lower(left))
             if u is not None:
@@ -293,7 +300,21 @@ class Session(QObject):
         self.line_added.emit(b, line)
 
     def _front(self) -> Buffer:
+        if self._route is not None:
+            return self._route
         return self.current if self.current is not None and self.current.session is self else self.server_buffer
+
+    def send_labeled(self, b: Buffer, line: str) -> None:
+        """A raw line the user typed: with labeled-response its answer comes back to tab b."""
+        if "labeled-response" in self._cap_active and self.state == "connected" and not line.startswith("@"):
+            self._label_n = getattr(self, "_label_n", 0) + 1
+            label = f"bc{self._label_n}"
+            now = time.time()
+            self._labels = {k: v for k, v in self._labels.items() if now - v[1] < 120}
+            self._labels[label] = (b, now)
+            self.send_raw(f"@label={label} {line}")
+            return
+        self.send_raw(line)
 
     def clear_buffer(self, b: Buffer) -> None:
         b.lines.clear()
@@ -383,6 +404,12 @@ class Session(QObject):
         self.online_since, self.motd_asked = 0.0, False
         self.services, self.services_guessed, self._services_wait = "", False, []
         self._cert_loaded = False
+        self._starttls = "waiting" if s.starttls and not s.ssl else ""
+        self._scram = None
+        self._sasl_mech = ""
+        self._labels: dict[str, tuple] = {}     # label -> (buffer, when): labeled-response
+        self._label_batches: dict[str, object] = {}
+        self._route = None
         host, port, tls = s.host, s.port, s.ssl
         policy = self.cfg.sts.get(host.lower())
         self._sts_enforced = bool(policy and policy.get("expires", 0) > time.time())
@@ -390,6 +417,11 @@ class Session(QObject):
             port, tls = int(policy["port"]), True
             self.add(self.server_buffer, INFO, "*", f"{host} requires secure connections (STS), using SSL port {port}")
         self._tls_now = tls
+        if self._starttls and not self._sts_enforced:
+            self._new_socket()                    # SSL settings start clean, the switch happens after STARTTLS
+            self._apply_network_settings()
+        elif self._starttls:
+            self._starttls = ""                   # STS already moved us to a real SSL port
         if tls:
             # a fresh socket: Qt keeps an "ignore certificate errors" from an earlier connection on the old one,
             # and Connect Once must not carry over to the next connection
@@ -478,9 +510,34 @@ class Session(QObject):
         self._cert_loaded = True
 
     def _on_tcp(self) -> None:
+        if self._starttls == "waiting" and not self._tls_now:
+            self.add(self.server_buffer, CONNECT, "*", "Connected. Asking the server to switch to SSL (STARTTLS)...")
+            self.send_raw("STARTTLS")
+            return
         self.add(self.server_buffer, CONNECT, "*", "Connected. Now logging in..." if not self._tls_now else "Connected. Starting SSL...")
         if not self._tls_now:
             self._login()
+
+    def _starttls_answer(self, n: int, m: Message) -> bool:
+        """670 = switch now; anything else while waiting = the server can't. Never falls back to plain."""
+        if self._starttls != "waiting":
+            return False
+        if n == 670:
+            self._starttls = "tls"
+            self._tls_now = True
+            self._use_client_cert()
+            self.sock.startClientEncryption()
+            return True
+        if n in (691, 421, 451, 461, 462) or 400 <= n < 600:
+            self._starttls = ""
+            self.want_connected = False
+            self._reconnect.stop()
+            self.add(self.server_buffer, ERROR, "*", "This server can't switch to SSL (STARTTLS), so BChat didn't connect: "
+                                                     "it never falls back to a plain connection. Use an SSL port (/+port) instead.")
+            self.sock.abort()
+            self._set_state("disconnected")
+            return True
+        return False
 
     def _on_tls(self) -> None:
         c = self.sock.sessionCipher()
@@ -492,6 +549,8 @@ class Session(QObject):
                                  ("O", names(cert.SubjectInfo.Organization)), ("CN", names(cert.SubjectInfo.CommonName))) if v)
             self.add(self.server_buffer, INFO, "SSL",
                      f"Issuer: {dn(cert.issuerInfo)}   Subject: {dn(cert.subjectInfo)}")
+        if self._starttls == "tls":
+            self.add(self.server_buffer, INFO, "*", "Switched to SSL on the same port (STARTTLS).")
         self.add(self.server_buffer, CONNECT, "*", "Now logging in...")
         self._login()
 
@@ -756,7 +815,7 @@ class Session(QObject):
                 return
             line = self._queue.pop(at)
             _, _, rest = line.partition(" ")
-            self._next_send += 2 + len(rest) / 120
+            self._next_send += (2 + len(rest) / 120) * self.PACE.get(self.cfg.flood_pace, 1.0)
             self.send_raw(line)
         self._queue_timer.stop()
 
@@ -857,6 +916,29 @@ class Session(QObject):
         return time.time()
 
     def _handle(self, m: Message) -> None:
+        """labeled-response: an answer to a labeled line goes to the tab it was typed in (via _front)."""
+        label = m.tags.get("label", "")
+        route = self._labels.get(label, (None,))[0] if label else None
+        bid = m.tags.get("batch")
+        if route is None and bid:
+            route = self._label_batches.get(bid)
+        if m.command == "BATCH" and label and route is not None and m.params and m.params[0].startswith("+"):
+            self._label_batches[m.params[0][1:]] = route
+        if m.command == "BATCH" and m.params and m.params[0].startswith("-"):
+            self._label_batches.pop(m.params[0][1:], None)
+        if m.command == "ACK":
+            self._labels.pop(label, None)
+            return
+        if route is not None and route in self.all_buffers():
+            self._route = route
+            try:
+                self._handle_inner(m)
+            finally:
+                self._route = None
+            return
+        self._handle_inner(m)
+
+    def _handle_inner(self, m: Message) -> None:
         bid = m.tags.get("batch")
         if bid and bid in self._history and m.command in ("PRIVMSG", "NOTICE"):
             self._history[bid][1].append(m)      # history: kept until the batch ends, then put above the join
@@ -912,8 +994,12 @@ class Session(QObject):
                     wanted.add("sasl")
             elif self.net.login == "none":
                 pass
+            elif "sasl" in offered and self.net.sasl_user and "SCRAM-SHA-256" in mechs:
+                self._sasl_mech = "SCRAM-SHA-256"       # the password itself never crosses the network
+                wanted.add("sasl")
             elif "sasl" in offered and self.net.sasl_user and (not mechs or "PLAIN" in mechs):
                 if self._tls_now:
+                    self._sasl_mech = "PLAIN"
                     wanted.add("sasl")
                 else:
                     self.add(self.server_buffer, ERROR, "*", "SASL login skipped: the password would be sent without SSL.")
@@ -940,6 +1026,12 @@ class Session(QObject):
                     self._sasl_state = "external"
                     self.add(self.server_buffer, INFO, "*", "Logging in with your certificate (SASL EXTERNAL)...")
                     self.send_raw("AUTHENTICATE EXTERNAL")
+                elif self._sasl_mech == "SCRAM-SHA-256":
+                    from .scram import Scram
+                    self._sasl_state = "scram"
+                    self._scram = Scram(self.net.sasl_user, self.net.sasl_password)
+                    self._scram_in = ""
+                    self.send_raw("AUTHENTICATE SCRAM-SHA-256")
                 else:
                     self._sasl_state = "plain"
                     self.send_raw("AUTHENTICATE PLAIN")
@@ -971,7 +1063,33 @@ class Session(QObject):
                 self.cfg.sts.pop(host, None)
         return False
 
+    def _sasl_send(self, payload: bytes) -> None:
+        data = base64.b64encode(payload).decode() if payload else ""
+        chunks = [data[i:i + 400] for i in range(0, len(data), 400)] or ["+"]
+        if len(chunks[-1]) == 400:
+            chunks.append("+")
+        for c in chunks:
+            self.send_raw(f"AUTHENTICATE {c}", secret=True)
+
     def _irc_authenticate(self, m: Message) -> None:
+        if self._sasl_state == "scram":
+            part = m.param(0)
+            if part != "+":
+                self._scram_in += part
+                if len(part) == 400:
+                    return                          # more of the same message follows
+            text, self._scram_in = self._scram_in, ""
+            try:
+                answer = self._scram.step(base64.b64decode(text) if text else b"")
+            except ValueError as e:
+                self.send_raw("AUTHENTICATE *")
+                self._sasl_done(False, f"SCRAM login stopped: {e}")
+                return
+            if answer is None:
+                self.send_raw("AUTHENTICATE +")    # the server's last message checked out: nothing more to say
+            else:
+                self._sasl_send(answer)
+            return
         if self._sasl_state == "external" and m.param(0) == "+":
             self.send_raw("AUTHENTICATE +")       # the server takes the account from the certificate
             return
@@ -986,6 +1104,11 @@ class Session(QObject):
             self.send_raw(f"AUTHENTICATE {c}", secret=True)
 
     def _sasl_done(self, ok: bool, text: str) -> None:
+        if ok and self._sasl_state == "scram":
+            if self._scram is None or not self._scram.verified:
+                ok, text = False, "SCRAM login: the server couldn't prove it knows your password. Not trusting it."
+            else:
+                text = f"Logged in as {self.net.sasl_user} with SCRAM-SHA-256: your password itself was never sent."
         self._sasl_state = ""
         self.add(self.server_buffer, INFO if ok else ERROR, "*", text)
         if not self._welcomed:
@@ -1136,6 +1259,10 @@ class Session(QObject):
             self.add(front, HILITE, f"*{m.nick}*", text.strip("\x01").removeprefix("ACTION "), ts)
             self.notify.emit(front, "priv")
             return
+        if not from_me and not self.is_channel(target) and lower(dest) not in self.buffers \
+                and not (text.startswith("\x01") and not text.startswith("\x01ACTION")) and self._query_flood(m.nick, time.time()):
+            self.add(self.server_buffer, HILITE, f"*{m.nick}*", text.strip("\x01").removeprefix("ACTION "), ts)
+            return
         if text.startswith("\x01") :
             body = text.strip("\x01")
             verb, _, rest = body.partition(" ")
@@ -1150,6 +1277,7 @@ class Session(QObject):
                 if not from_me:
                     self.notify.emit(b, "priv" if b.kind == QUERY else "hilight" if hit else "chan")
             else:
+                self.last_ctcp_prefix = m.prefix          # DCC trust list checks the whole address
                 self._ctcp_request(m.nick, verb.upper(), rest)
             return
         new = lower(dest) not in self.buffers
@@ -1253,11 +1381,13 @@ class Session(QObject):
         """Prints a Text Event with the user's format."""
         if self.print_hook is not None and self.print_hook(event, args):
             return
+        from . import tabopts
         fmt = self.cfg.text_events.get(event)
-        if not fmt and self.cfg.short_joins and event in SHORT:
+        joins = tabopts.get(self.cfg, b, "joins") if event in tabopts.HIDEABLE else "show"
+        if not fmt and event in SHORT and joins in ("short", "hide"):
             fmt = SHORT[event]                 # only the default wording: the user's own Text Events stay as they are
         left, text = render(fmt or EVENTS[event][0], args)
-        self.add(b, kind, left, text, ts)
+        self.add(b, kind, left, text, ts, hidden=joins == "hide")   # hidden: kept and logged, just not drawn
 
     def _ctcp_reply_list(self) -> list:
         if self.cfg.ctcp_replies is not None:
@@ -1266,28 +1396,27 @@ class Session(QObject):
 
     def _ctcp_request(self, nick: str, verb: str, rest: str) -> None:
         now = time.time()
-        self._ctcp_times = [t for t in self._ctcp_times if now - t < 30]
-        self._ctcp_times.append(now)
         if verb == "DCC":
             if self.on_dcc is not None:
                 self.on_dcc(self, nick, rest)
             else:
                 self.add(self._front(), INFO, "*", f"{nick} offered a file or direct chat. BChat can't accept these here.")
             return
-        self.te("CTCP Generic", self._front(), INFO, (verb, nick))
-        if len(self._ctcp_times) > 5:  # XChat's limit: 5 in 30 s, then no replies
-            if len(self._ctcp_times) == 6:
-                self.add(self._front(), ERROR, "*", "CTCP flood: not replying for a while.")
+        if not self._ctcp_allowed(nick, now):
             return
+        self.te("CTCP Generic", self._front(), INFO, (verb, nick))
         mine = [c for n, c in self._ctcp_reply_list() if n.upper() == verb.upper()]
         if mine and self.on_command is not None:
-            values = {"d": rest, "e": self.net.name, "m": "Windows", "n": self.nick, "s": nick, "t": time.ctime(), "v": "BChat 0.1"}
+            from . import full_version
+            values = {"d": rest, "e": self.net.name, "m": "Windows", "n": self.nick, "s": nick, "t": time.ctime(),
+                      "v": f"BChat {full_version()}"}
             for cmd in mine:
                 if not cmd.startswith("!"):     # others can trigger these, so never a program
                     self.on_command(self, "/" + re.sub(r"%([demnstv])", lambda m: values[m.group(1)], cmd).lstrip("/"))
             return
         if verb == "VERSION":
-            self.send("NOTICE", nick, "\x01VERSION BChat 0.1 by BajuBesi Labs\x01")
+            from . import full_version
+            self.send("NOTICE", nick, f"\x01VERSION BChat {full_version()} by BajuBesi Labs\x01")
         elif verb == "PING":
             self.send("NOTICE", nick, f"\x01PING {rest}\x01")
         elif verb == "TIME":
@@ -1451,11 +1580,60 @@ class Session(QObject):
         if self.state == "connected" and b is not None and not b.joined:
             self.send("JOIN", name, *([key] if key else []))
 
+    # --- Preferences > Network > Flood: answering others ----------------------------------
+
+    def _ctcp_allowed(self, nick: str, now: float) -> bool:
+        """At most flood_ctcp answers in 30 s (then quiet 2 min) and flood_ctcp_person a minute per person."""
+        c = self.cfg
+        if c.flood_ctcp <= 0:
+            return False
+        if now < getattr(self, "_ctcp_quiet_until", 0.0):
+            return False
+        self._ctcp_times = [t for t in self._ctcp_times if now - t < 30]
+        if len(self._ctcp_times) >= c.flood_ctcp:
+            self._ctcp_quiet_until = now + 120
+            self.add(self.server_buffer, ERROR, "*", f"CTCP flood from {nick}: not answering CTCP for 2 minutes.")
+            return False
+        per = getattr(self, "_ctcp_by", {})
+        self._ctcp_by = per
+        key = lower(nick)
+        mine = [t for t in per.get(key, []) if now - t < 60]
+        if len(mine) >= c.flood_ctcp_person:                 # 0 = never answer anyone
+            if len(mine) == c.flood_ctcp_person:
+                self.add(self.server_buffer, ERROR, "*", f"CTCP flood from {nick}: not answering them for a minute.")
+                mine.append(now)                    # said once
+            per[key] = mine
+            return False
+        mine.append(now)
+        per[key] = mine
+        self._ctcp_times.append(now)
+        return True
+
+    def _query_flood(self, nick: str, now: float) -> bool:
+        """True = too many new private chats this minute: show it in the server tab instead of a new tab."""
+        limit = self.cfg.flood_queries
+        times = [t for t in getattr(self, "_new_queries", []) if now - t < 60]
+        self._new_queries = times
+        if limit > 0 and len(times) < limit:
+            times.append(now)
+            return False
+        if not getattr(self, "_query_flood_said", 0.0) or now - self._query_flood_said > 60:
+            self._query_flood_said = now
+            self.add(self.server_buffer, INFO, "*", f"{len(times) + 1} new private chats in a minute: "
+                                                    "the rest show here instead of new tabs.")
+        return True
+
     def _whois_new_query(self, b: Buffer, nick: str) -> None:
         """Someone opened a private chat with us: who they are goes at the top of the new tab."""
         if nick.startswith("*"):
             return            # ZNC's own *status, *controlpanel...: not people, a WHOIS only says 'No such nick'
         if self.cfg.whois_on_query and self.state == "connected" and b.kind == QUERY:
+            now = time.time()
+            times = [t for t in getattr(self, "_auto_whois", []) if now - t < 60]
+            self._auto_whois = times
+            if self.cfg.flood_whois <= 0 or len(times) >= self.cfg.flood_whois:
+                return                              # Preferences > Network > Flood: WhoIs on new private chats
+            times.append(now)
             self.whois(nick, b)
 
     def _irc_nick(self, m: Message) -> None:
@@ -1596,6 +1774,8 @@ class Session(QObject):
     # numerics --------------------------------------------------------------------
 
     def _numeric(self, n: int, m: Message) -> None:
+        if self._starttls == "waiting" and self._starttls_answer(n, m):
+            return
         if n in (372, 375, 376, 422):
             if self.cfg.skip_motd and not self.motd_asked:
                 return                             # Preferences > General: skip the welcome message (/motd shows it)

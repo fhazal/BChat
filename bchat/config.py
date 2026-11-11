@@ -163,6 +163,7 @@ class Server:
     host: str
     port: int = 6667
     ssl: bool = False
+    starttls: bool = False         # 0.6.0: /*port = a plain port switched to SSL first (never falls back)
 
 
 @dataclass
@@ -373,7 +374,14 @@ class Config:
     proxy_user: str = ""
     proxy_password: str = ""
     # File transfers
-    dcc_auto: int = 0              # 0 ask, 1 auto accept (never for programs)
+    dcc_auto: int = 0              # 0 ask, 1 auto accept from everyone, 2 only from trusted people (never programs)
+    dcc_trusted: list = field(default_factory=list)   # 0.6.0: {"nick", "mask" (*!user@host), "net" ('' = all)}
+    flood_pace: str = "normal"     # 0.6.0: careful / normal / fast (how quickly lines go out)
+    flood_ctcp: int = 5            # CTCP answers in 30 s, then quiet for 2 min (0 = never answer)
+    flood_ctcp_person: int = 2     # CTCP answers to one person a minute
+    flood_queries: int = 5         # new private chats a minute; more show in the server tab
+    flood_whois: int = 3           # automatic WhoIs on new private chats a minute
+    tab_opts: dict = field(default_factory=dict)   # 0.6.0 per-tab settings: "net/#chan" -> {name: value}
     dcc_dir: str = ""
     dcc_done_dir: str = ""
     dcc_with_nick: bool = False

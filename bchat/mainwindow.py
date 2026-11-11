@@ -1514,6 +1514,15 @@ class MainWindow(FramelessWindow):
             now = people.colour_name(self.cfg, s.net.name, one.nick, one.host)
             menu.addAction(people.swatch(self.cfg, now) if now else icon("edit"), "Nick Colour...",
                            lambda: self.quick_nick_colour(s, one.nick))
+            from .dcc import is_trusted
+            trust = menu.addAction("Trust for Files and Chats")     # 0.6.0: Preferences > File transfers > Trusted people
+            trust.setCheckable(True)
+            prefix = f"{one.nick}!{one.host}" if "@" in one.host else ""
+            trust.setChecked(bool(prefix) and is_trusted(self.cfg, s.net.name, prefix))
+            trust.setEnabled(bool(prefix))
+            if not prefix:
+                trust.setToolTip("Their address isn't known yet")
+            trust.toggled.connect(lambda on: self.trust_user(s, one, on))
         ign = menu.addAction("Ignore")                 # mIRC's Control > Ignore / Unignore as one tick
         ign.setCheckable(True)
         ign.setChecked(all(self._is_ignored(s, u) for u in users))
@@ -1690,10 +1699,13 @@ class MainWindow(FramelessWindow):
         if b.kind == CHANNEL:
             menu.addAction(icon("preferences"), "Channel Central...", lambda: self.open_channel_central(b))
         menu.addSeparator()
-        log = menu.addAction("Log to Disk")
-        log.setCheckable(True)
-        log.setChecked(self._log_key(b) in self.cfg.log_tabs)
-        log.toggled.connect(lambda on: self._log_to_disk(b, on))
+        if b.kind in (CHANNEL, QUERY):
+            self._tab_settings_menu(menu, b)       # 0.6.0: this tab's own settings, Log to Disk among them
+        else:
+            log = menu.addAction("Log to Disk")
+            log.setCheckable(True)
+            log.setChecked(self._log_key(b) in self.cfg.log_tabs)
+            log.toggled.connect(lambda on: self._log_to_disk(b, on))
         if self.logs_of(b):          # only once there is something to read
             menu.addAction(icon("find"), "View Log", lambda: self.open_logs(b))
         menu.addSeparator()
@@ -1703,6 +1715,60 @@ class MainWindow(FramelessWindow):
             menu.addAction(icon("dialog"), "Detach", lambda: self.detach(b))
         menu.addAction(icon("close-light"), "Close", lambda: self.close_buffer(b))
         return menu
+
+    def _tab_settings_menu(self, menu: QMenu, b: Buffer) -> QMenu:
+        """Settings for #chan: ticks that only change this tab. One that differs from Preferences shows bold."""
+        from . import tabopts
+        sub = menu.addMenu(icon("justify"), f"Settings for {b.name}")
+        bold = QFont()
+        bold.setBold(True)
+
+        def tick(label: str, name: str) -> None:
+            a = sub.addAction(label)
+            a.setCheckable(True)
+            a.setChecked(bool(tabopts.get(self.cfg, b, name)))
+            if tabopts.has_own(self.cfg, b, name):
+                a.setFont(bold)
+            a.toggled.connect(lambda on, n=name: self.set_tab_opt(b, n, on))
+        tick("Timestamps", "timestamps")
+        tick("Colored nick names", "color_nicks")
+        jp = sub.addMenu("Join and part lines")
+        if tabopts.has_own(self.cfg, b, "joins"):
+            jp.menuAction().setFont(bold)
+        group = QActionGroup(jp)
+        now = tabopts.get(self.cfg, b, "joins")
+        base = tabopts.default(self.cfg, "joins", b)
+        for value, label in (("show", "Show"), ("short", "Short"), ("hide", "Hide")):
+            a = jp.addAction(label + (" (default)" if value == base else ""))
+            a.setCheckable(True)
+            a.setChecked(value == now)
+            group.addAction(a)
+            a.triggered.connect(lambda _=False, v=value: self.set_tab_opt(b, "joins", v))
+        sub.addSeparator()
+        tick("Beep on new message", "beep")
+        tick("Flash the taskbar", "flash")
+        tick("Pop-up cards", "popups")
+        log = sub.addAction("Log to Disk")
+        log.setCheckable(True)
+        log.setChecked(self._log_key(b) in self.cfg.log_tabs)
+        log.toggled.connect(lambda on: self._log_to_disk(b, on))
+        sub.addSeparator()
+        reset = sub.addAction(icon("revert"), "Use the defaults again", lambda: self.clear_tab_opts(b))
+        reset.setEnabled(tabopts.key(b) in self.cfg.tab_opts)
+        return sub
+
+    def set_tab_opt(self, b: Buffer, name: str, value) -> None:
+        from . import tabopts
+        tabopts.set_(self.cfg, b, name, value)
+        self.save_config()
+        if name in ("timestamps", "color_nicks"):
+            self.reload_buffer(b)
+
+    def clear_tab_opts(self, b: Buffer) -> None:
+        from . import tabopts
+        tabopts.clear(self.cfg, b)
+        self.save_config()
+        self.reload_buffer(b)
 
     # --- menu actions --------------------------------------------------------------
 
@@ -2102,9 +2168,18 @@ class MainWindow(FramelessWindow):
         flash = rule.get("flash") if rule and rule.get("flash") is not None else c.alert_flash[which]
         tip = rule.get("tip") if rule and rule.get("tip") is not None else c.alert_popup[which]
         tip = tip and kind != "dcc"                        # a file offer already has its own card
+        beep = c.alert_beep[which]
+        if b.kind in (CHANNEL, QUERY) and b.session is not None:
+            from . import tabopts                          # 0.6.0: this tab's own beep / flash / pop-up ticks win
+            if tabopts.has_own(c, b, "flash"):
+                flash = tabopts.get(c, b, "flash")
+            if tabopts.has_own(c, b, "beep"):
+                beep = tabopts.get(c, b, "beep")
+            if tabopts.has_own(c, b, "popups") and kind != "dcc":
+                tip = tabopts.get(c, b, "popups")
         if flash:
             QApplication.alert(self)
-        if c.alert_beep[which]:
+        if beep:
             QApplication.beep()
         if tip and b.lines and self._pop_up(b, kind) == "new" and not played:
             self.play_soft_chime()
@@ -2139,6 +2214,8 @@ class MainWindow(FramelessWindow):
         elif kind == "dcc":
             nick = getattr(s, "last_dcc", "")
             title, where = f"{nick} sends a file", net
+            if getattr(s, "last_dcc_trusted", False):
+                text = "Accepted (trusted)"            # so you always know it happened
         else:                                              # notice: people only, never services or servers
             from .control import SERVICES
             nick = (last.left if last is not None else "").strip("-")
@@ -2789,6 +2866,30 @@ class MainWindow(FramelessWindow):
         commands.run(self, s, self.buf if self.buf is not None and self.buf.session is s else s.server_buffer, text)
 
     # --- 0.3.0: nick colours + address book ------------------------------------------------
+
+    def trust_user(self, s: Session, u: User, on: bool) -> None:
+        """Nick menu tick: trust = *!user@host on this network; untrust = every entry that matches them."""
+        import fnmatch
+        prefix = f"{u.nick}!{u.host}"
+        if on:
+            user, _, host = u.host.partition("@")
+            mask = f"*!{user.lstrip('~')}@{host}" if user else f"*!*@{host}"
+            if user.startswith("~"):
+                mask = f"*!*{user.lstrip('~')}@{host}"
+            self.cfg.dcc_trusted.append({"nick": u.nick, "mask": mask, "net": s.net.name})
+            self._say_here(f"{u.nick} is trusted now: files and direct chats from {mask} are accepted by themselves "
+                           "(Preferences > File transfers).")
+        else:
+            keep = []
+            for e in self.cfg.dcc_trusted:
+                m = e.get("mask", "")
+                m = m if "!" in m else "*!" + m
+                hit = fnmatch.fnmatchcase(lower(prefix), lower(m)) and (not e.get("net") or lower(e["net"]) == lower(s.net.name))
+                if not hit:
+                    keep.append(e)
+            self.cfg.dcc_trusted = keep
+            self._say_here(f"{u.nick} isn't trusted any more.")
+        self.save_config()
 
     def chat_colour_rule(self, b: Buffer, nick: str) -> str | None:
         from . import people

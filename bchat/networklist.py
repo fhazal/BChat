@@ -45,9 +45,10 @@ class NetworkEditDialog(FramedDialog):
         self.name = QLineEdit(net.name, self)
         top.addRow("Network name:", self.name)
         self.body.addLayout(top)
-        self.body.addWidget(QLabel("Servers, one per line: host/port. Use /+port for SSL."))
+        self.body.addWidget(QLabel("Servers, one per line: host/port. Use /+port for SSL,\n"
+                                   "or /*port to switch a plain port to SSL (STARTTLS)."))
         self.servers = QPlainTextEdit(self)
-        self.servers.setPlainText("\n".join(f"{s.host}/{'+' if s.ssl else ''}{s.port}" for s in net.servers))
+        self.servers.setPlainText("\n".join(f"{s.host}/{'+' if s.ssl else '*' if s.starttls else ''}{s.port}" for s in net.servers))
         self.body.addWidget(self.servers)
         form = QFormLayout()
         self.autojoin = QLineEdit(net.autojoin, self)

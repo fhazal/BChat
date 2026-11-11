@@ -30,7 +30,12 @@ COMMAND_NAMES = sorted(set(ALIASES) | {
 })
 
 
-VERSION = "BChat 0.1"
+VERSION = "BChat"           # %v in user commands: _version() adds the real number
+
+
+def _version() -> str:
+    from . import full_version
+    return f"BChat {full_version()}"
 MACHINE = "Windows"
 
 
@@ -94,7 +99,7 @@ HELP = {
     "whois": "WHOIS <nick>: shows who someone is",
     "dehop": "DEHOP <nick>...: takes half-operator status",
     "disconnect": "DISCONNECT: disconnects from the server",
-    "hop": "HOP [#channel]: leaves and rejoins the channel (as in mIRC). HOP <nick>...: gives half-operator status",
+    "hop": "HOP [#channel]: leaves and rejoins the channel. HOP <nick>...: gives half-operator status",
     "j": "J <channel> [<key>]: joins a channel",
     "leave": "LEAVE [<channel>] [<reason>]: leaves a channel",
     "raw": "RAW <text>: sends text to the server as it is",
@@ -143,7 +148,7 @@ def _split_bar(pattern: str) -> list[str]:
 def _expand(pattern: str, s: Session, chan: str, args: list[str], rest: str, query: str = "") -> str | None:
     """XChat's auto_insert. None when a value the pattern needs is missing. One pass, so typed text is never read as a code."""
     fixed = {"c": chan, "e": s.net.name, "m": MACHINE, "n": s.nick, "s": s.server_name or s.net.name, "t": time.ctime(),
-             "u": s._identity("username") if hasattr(s, "_identity") else "", "v": VERSION}
+             "u": s._identity("username") if hasattr(s, "_identity") else "", "v": _version()}
 
     def value(kind: str, code: str) -> str:
         if code.isdigit():
@@ -468,7 +473,7 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
     elif cmd == "back":
         s.set_away(False)
     elif cmd in ("quote", "raw"):
-        s.send_raw(rest)
+        s.send_labeled(b, rest)                  # labeled-response: the answer comes back to this tab
     elif cmd == "ctcp" and len(args) >= 2:
         s.send("PRIVMSG", args[0], "\x01" + rest.partition(" ")[2] + "\x01")
         s.add(b, INFO, "*", f"CTCP sent to {args[0]}: {rest.partition(' ')[2]}")
@@ -649,4 +654,4 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
                             "/ignore /unignore /nctcp /url /flushq /mop /mdeop /mkick /wallchan /wallchop "
                             + " ".join("/" + a for a in sorted(ALIASES)))
     else:
-        s.send_raw(text[1:])
+        s.send_labeled(b, text[1:])

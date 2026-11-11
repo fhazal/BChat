@@ -154,6 +154,7 @@ def test_private_message_pops_up_by_default_and_click_opens_that_chat(app, tmp_p
 
 def test_flood_stays_calm_and_bchat_stays_responsive(app, tmp_path):
     srv, win, s = make(app, tmp_path)
+    win.cfg.flood_queries = 99                 # this test is about the cards; the new-private-chat limit has its own
     srv.send(":Badaboom!b@h PRIVMSG Badaboom :warm up")
     # 600 private lines from 20 people, plus 200 from one spammer with colour junk and huge lines
     lines = [f":User{i % 20}!u@h PRIVMSG Badaboom :message {i}" for i in range(600)]
