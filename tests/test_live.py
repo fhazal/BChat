@@ -465,7 +465,7 @@ def test_window_buttons_are_top_right_in_windows_order(app, tmp_path):
     logo_x = win.titlebar.logo.mapTo(win.titlebar, QPoint(0, 0)).x()
     assert logo_x < 15 and logo_x < win.titlebar.title.mapTo(win.titlebar, QPoint(0, 0)).x() < 45
     assert not win.titlebar.logo.pixmap().isNull()
-    assert win.titlebar.logo.height() == 16
+    assert win.titlebar.logo.height() == 20          # 0.5.0: 20 px honey tile (was 16)
     win.close()
 
 
@@ -1348,7 +1348,8 @@ def test_prefs_tray_icon_blinks_balloons_and_quits(app, tmp_path, monkeypatch):
     win.notifier.clear()
     win._stop_blink()
     assert not win._blink_timer.isActive()
-    assert [a.text() for a in win.tray.contextMenu().actions() if not a.isSeparator()] == ["Show BChat", "Quit"]
+    texts = [a.text() for a in win.tray.contextMenu().actions() if not a.isSeparator()]
+    assert texts[1] == "Show BChat" and texts[-1] == "Quit" and "#skinhead" in texts      # 0.5.0: tabs listed
     prefs(win, lambda d: d.tray_icon.setChecked(False))
     assert win.tray is None
     win.close(); srv.stop()
@@ -1702,7 +1703,7 @@ def test_friends_with_ison_and_window(live):
     assert wait(app, lambda: w.view.topLevelItem(0).text(1) == "Offline")
     assert sum("is online" in l.text for l in s.server_buffer.lines) == 1
     assert any("Notify: Belon is offline" in l.text for l in s.server_buffer.lines)
-    assert "minutes ago" in w.view.topLevelItem(0).text(3)
+    assert w.view.topLevelItem(0).text(3).startswith("seen ")       # 0.5.0 "Online for" column: offline = seen ... ago
     # a typed /ison still prints
     srv.send(":srv 303 Badaboom :Typed")
     assert wait(app, lambda: any("Typed" in l.text for l in s.server_buffer.lines))

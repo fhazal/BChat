@@ -25,7 +25,12 @@ W, H = 316, 66          # the card, in points
 PAD = 10                # shadow room around it
 RIGHT, BOTTOM = 7, 4    # gap from the screen's right edge and the taskbar: where AdiIRC puts its balloon
 GAP = 8                 # between stacked cards
-SHOW_MS = 6000
+SHOW_MS = 6000          # the default; Preferences > Alerts 'Keep pop-ups on screen for' sets Notifier.show_ms (0 = until closed)
+# 0.5.0 card kinds: stripe colour (a theme field) and Lucide icon
+ACCENT = {"priv": "join", "hilight": "highlight", "chan": "new_highlight", "many": "new_highlight", "kicked": "status_off",
+          "disconnect": "status_off", "friend": "join", "invite": "new_highlight", "dcc": "new_highlight", "notice": "highlight"}
+ICON = {"priv": "message-circle", "hilight": "at-sign", "chan": "hash", "many": "messages-square", "kicked": "ban",
+        "disconnect": "unplug", "friend": "arrow-right", "invite": "send", "dcc": "download", "notice": "info"}
 MAX_CARDS = 3
 MIN_NEW_MS = 1000
 MAX_CHARS = 300
@@ -71,14 +76,26 @@ class Card(QWidget):
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.dismiss)
+        self.show_ms = SHOW_MS
         self.timer.start(SHOW_MS)
 
     def update_text(self, text: str, more: int = 1) -> None:
         self.text, self.count = text, self.count + more
         self.when = time.strftime("%I:%M %p").lstrip("0")
         if not self.hover:
-            self.timer.start(SHOW_MS)
+            self._restart()
         self.update()
+
+    def set_time(self, ms: int) -> None:
+        """How long it stays: ms, or 0 = until it is closed or clicked."""
+        self.show_ms = ms
+        self._restart()
+
+    def _restart(self) -> None:
+        if self.show_ms:
+            self.timer.start(self.show_ms)
+        else:
+            self.timer.stop()
 
     def dismiss(self) -> None:
         self.timer.stop()
@@ -95,7 +112,8 @@ class Card(QWidget):
 
     def leaveEvent(self, ev) -> None:
         self.hover = False
-        self.timer.start(SHOW_MS // 2)
+        if self.show_ms:
+            self.timer.start(self.show_ms // 2)
         self.update()
 
     def mousePressEvent(self, ev) -> None:
@@ -139,7 +157,7 @@ class Card(QWidget):
         p.setBrush(QColor(t.popup if self.hover else t.panel))
         p.setPen(QColor(t.border))
         p.drawPath(path)
-        accent = {"priv": t.join, "hilight": t.highlight, "chan": t.new_highlight, "many": t.new_highlight}[self.kind]
+        accent = getattr(t, ACCENT.get(self.kind, "new_highlight"))
         p.save()
         p.setClipPath(path)
         p.setPen(Qt.PenStyle.NoPen)
@@ -151,7 +169,7 @@ class Card(QWidget):
         p.setBrush(bubble)
         p.drawEllipse(QPointF(r.left() + 25, r.top() + 22), 13, 13)
         dpr = self.devicePixelRatioF()
-        name = {"priv": "message-circle", "hilight": "at-sign", "chan": "hash", "many": "messages-square"}[self.kind]
+        name = ICON.get(self.kind, "messages-square")
         im = lucide.image(name, accent, round(16 * dpr))
         im.setDevicePixelRatio(dpr)
         p.drawImage(QPointF(r.left() + 17, r.top() + 14), im)
@@ -215,29 +233,33 @@ class Notifier(QWidget):
         self.held = 0
         self.held_from: set[str] = set()
         self.last_new = 0.0
+        self.show_ms: int | None = None      # None = SHOW_MS; MainWindow sets it from Preferences
         self.busy = windows_busy
         self.buffers: dict[int, object] = {}
 
-    def notify(self, kind: str, buffer, key, nick: str, where: str, text: str) -> None:
+    def notify(self, kind: str, buffer, key, nick: str, where: str, text: str) -> str:
+        """'new' when a card came up, 'more' when a card or the summary counted up, '' when nothing showed."""
         if self.busy():
-            return
+            return ""
         text = clean(text)
         for c in self.cards:
             if c.key == key and c.isVisible():
                 c.update_text(text)
-                return
+                return "more"
         now = time.monotonic()
         if len(self.cards) >= MAX_CARDS or (now - self.last_new) * 1000 < MIN_NEW_MS:
             self._hold(nick)
-            return
+            return "more"
         self.last_new = now
         c = Card(self.theme, kind, key, nick, where, text)
+        c.set_time(SHOW_MS if self.show_ms is None else self.show_ms)
         self.buffers[id(c)] = buffer
         c.clicked.connect(self._clicked)
         c.closed.connect(self._closed)
         self.cards.append(c)
         self._place()
         c.show()
+        return "new"
 
     def _hold(self, nick: str) -> None:
         self.held += 1
@@ -247,13 +269,14 @@ class Notifier(QWidget):
         where = f"from {people} {'person' if people == 1 else 'people'}"
         if self.summary is None:
             self.summary = Card(self.theme, "many", "summary", title, where, "BChat is holding them. Click to open BChat.")
+            self.summary.set_time(SHOW_MS if self.show_ms is None else self.show_ms)
             self.summary.clicked.connect(self._clicked)
             self.summary.closed.connect(self._closed)
             self._place()
             self.summary.show()
         else:
             self.summary.nick, self.summary.where = title, where
-            self.summary.timer.start(SHOW_MS) if not self.summary.hover else None
+            self.summary._restart() if not self.summary.hover else None
             self.summary.update()
 
     def _clicked(self, card: Card) -> None:

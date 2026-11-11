@@ -103,7 +103,9 @@ def main(argv: list[str] | None = None) -> int:
     app.setQuitOnLastWindowClosed(False)
     win.quit_requested.connect(app.quit)
     win.link_server = listen_for_links(win, args.config_dir)
-    if cfg.start_minimized:
+    if cfg.start_in_tray and win.tray is not None:
+        win._was_maximized = cfg.win_maximized          # the tray click brings it back as it was
+    elif cfg.start_minimized:
         win.showMinimized()
     elif cfg.win_maximized:
         win.showMaximized()

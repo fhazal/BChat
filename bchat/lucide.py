@@ -26,6 +26,8 @@ NAMES = {
     "report": "bug", "send": "send", "alert": "triangle-alert",
     # chat line pictures
     "te-join": "arrow-right", "te-part": "arrow-left", "te-action": "asterisk",
+    # 0.5.0 tray menu + pop-up cards
+    "private": "message-circle",
 }
 _svg: dict[str, bytes] = {}
 

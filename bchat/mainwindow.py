@@ -496,6 +496,7 @@ class MainWindow(FramelessWindow):
         self.notifier = Notifier(cfg.theme, self)
         self.notifier.open_requested.connect(self._open_from_notice)
         self._last_sound = 0.0
+        self._last_chime = -100.0
         self.updater.install_requested.connect(self._install_update_now)
         self._update_restart = False
         self.update_window: UpdateDialog | None = None
@@ -773,6 +774,7 @@ class MainWindow(FramelessWindow):
 
         w = m.addMenu("&Window")
         self._act(w, "Address Book...", lambda: self.open_address_book(), "", "book")
+        self._act(w, "Auto-Op && Protect...", lambda: self.open_control())
         self._act(w, "Ban List...", self.open_ban_list)
         self._act(w, "Character Chart...", lambda: self.open_tool("chart"))
         self._act(w, "Direct Chat...", self.open_chats)
@@ -937,6 +939,7 @@ class MainWindow(FramelessWindow):
         self._rebuild_tabs()
 
     def _buffer_changed(self, b: Buffer) -> None:
+        self.tray_tip()
         if b is self.buf:
             self._sync_button_bars()
         it = self.items.get(id(b))
@@ -1260,6 +1263,7 @@ class MainWindow(FramelessWindow):
             self.cancel_reply()                 # a reply belongs to the tab it was started in
         self.buf = b
         b.session.current = b
+        b.unread, b.mentioned = 0, False
         if b.activity:
             b.activity = 0
             self._buffer_changed(b)
@@ -1528,6 +1532,7 @@ class MainWindow(FramelessWindow):
             if not can_manage(s, b) or s.state != "connected":
                 acc.setEnabled(False)
                 acc.setText(f"ChanServ Access... (you need @ in {b.name})".replace("&", "&&"))
+            ops.addAction("Auto-Op / Auto-Voice...", lambda: self.open_control(one, s, b))
         ops.addSeparator()
         ops.addAction("Kick", lambda: self._kick(b, nicks))
         ops.addAction("Kick with Reason...", lambda: self.kick_with_reason(b, nicks))
@@ -2065,32 +2070,103 @@ class MainWindow(FramelessWindow):
 
     # --- alerts: XChat's Alerts page, and its Sound page ------------------------------
 
+    MORE_CARDS = {"kicked": "kick", "disconnect": "disconnect", "friend": "friend", "invite": "invite", "dcc": "dcc",
+                  "notice": "notice"}
+
     def _on_notify(self, b: Buffer, kind: str) -> None:
+        if kind in ("friend", "friend_off"):
+            name = getattr(b.session, "last_friend", "")
+            opts = self.cfg.friend_opts.get(name.lower(), {})
+            played = False
+            if opts.get("sound"):                          # per friend (0.5.0): their file, the Sound page's, or the chime
+                played = (self._play_sound("friend", path=opts.get("sound_file", "")) if opts.get("sound_file")
+                          else self._play_sound("friend") or self.play_soft_chime(wanted=True))
+            if kind == "friend":
+                self._more_card(b, kind, played or opts.get("sound") is False)   # sound ticked off for them: no chime
+            return
         rule = getattr(b.session, "last_hilite", None) if kind == "hilight" else None
         sound = (rule or {}).get("sound", "") or ""
-        if sound == "none":
-            pass                                           # this highlight rule is silent
-        elif sound:
-            self._play_sound(kind, path=sound)             # the rule's own sound
-        else:
-            self._play_sound(kind)
-        which = {"chan": 0, "priv": 1, "hilight": 2}.get(kind)
+        played = sound == "none"                           # a silent highlight rule: no chime either
+        if sound and sound != "none":
+            played = self._play_sound(kind, path=sound)    # the rule's own sound
+        elif not sound:
+            played = self._play_sound(kind)
+        if kind in self.MORE_CARDS:
+            self._more_card(b, kind, played)
+            if kind != "dcc":
+                return
+        which = {"chan": 0, "priv": 1, "hilight": 2, "dcc": 1}.get(kind)
         if which is None or self.isActiveWindow():
             return
         c = self.cfg
         flash = rule.get("flash") if rule and rule.get("flash") is not None else c.alert_flash[which]
         tip = rule.get("tip") if rule and rule.get("tip") is not None else c.alert_popup[which]
+        tip = tip and kind != "dcc"                        # a file offer already has its own card
         if flash:
             QApplication.alert(self)
         if c.alert_beep[which]:
             QApplication.beep()
-        if tip and b.lines:
-            self._pop_up(b, kind)
+        if tip and b.lines and self._pop_up(b, kind) == "new" and not played:
+            self.play_soft_chime()
         if self.tray is not None:
             if c.alert_tray[which] and not self._blink_timer.isActive():
                 self._blink_timer.start()
 
-    def _pop_up(self, b: Buffer, kind: str) -> None:
+    def _more_card(self, b: Buffer, kind: str, played: bool) -> None:
+        """0.5.0: pop-up cards for being kicked, a lost connection, a friend coming online, an invite, a file offer
+        and (off by default) a notice. Same cards and flood rules as messages; only while you're not looking."""
+        s = b.session
+        if self.isActiveWindow() or s is None or not self.cfg.popup_more.get(self.MORE_CARDS[kind], False):
+            return
+        net = s.net.name
+        last = b.lines[-1] if b.lines else None
+        text = last.text if last is not None else ""
+        if kind == "kicked":
+            title, where = "You were kicked", f"{b.name} \u00b7 {net}"
+        elif kind == "disconnect":
+            if not s.want_connected:
+                return                                     # you quit or disconnected yourself
+            title, where, text = "Disconnected", net, f"BChat will reconnect in {self.cfg.reconnect_delay} s."
+        elif kind == "friend":
+            name = getattr(s, "last_friend", "")
+            opts = self.cfg.friend_opts.get(name.lower(), {})
+            if not name or not opts.get("popup", True):
+                return
+            title, where, text = f"{name} is online", net, "Your friend just came online"
+        elif kind == "invite":
+            chan, nick = getattr(s, "last_invite", ("", ""))
+            title, where, text = f"{nick} invites you", f"{chan} \u00b7 {net}", "Click to see the invite bar"
+        elif kind == "dcc":
+            nick = getattr(s, "last_dcc", "")
+            title, where = f"{nick} sends a file", net
+        else:                                              # notice: people only, never services or servers
+            from .control import SERVICES
+            nick = (last.left if last is not None else "").strip("-")
+            if not nick or "." in nick or nick.lower() in SERVICES or b is s.server_buffer:
+                return
+            title, where = f"-{nick}-", f"notice \u00b7 {net}"
+        target = ("dcc", b) if kind == "dcc" else b
+        if self.notifier.notify(kind, target, (id(s), kind, title.lower()), title, where, text) == "new" and not played:
+            self.play_soft_chime()
+
+    def play_soft_chime(self, force: bool = False, wanted: bool = False, name: str = "") -> bool:
+        """BChat's one soft pop-up sound (packaging/make_chime.py): at most once every 10 seconds, never during
+        full-screen games, presentations or Do Not Disturb. force = the Play button in Preferences."""
+        from .notify import windows_busy
+        now = time.monotonic()
+        if not force and ((not self.cfg.popup_sound and not wanted) or now - self._last_chime < 10 or windows_busy()):
+            return False
+        self._last_chime = now
+        name = name or ("bee" if self.cfg.popup_sound_name == "bee" else "soft")
+        path = Path(__file__).resolve().parent / "assets" / "sounds" / f"{name}.wav"
+        try:
+            import winsound
+            winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+        except (ImportError, RuntimeError):
+            return False
+        return True
+
+    def _pop_up(self, b: Buffer, kind: str) -> str:
         """A card above the taskbar for the line that just came in (notify.py does the flood rules)."""
         line = b.lines[-1]
         left, text = line.left, line.text
@@ -2102,47 +2178,143 @@ class MainWindow(FramelessWindow):
             nick = left
         net = b.session.net.name
         where = f"private \u00b7 {net}" if kind == "priv" else f"{b.name} \u00b7 {net}"
-        self.notifier.notify(kind, b, (id(b.session), b.name.lower(), nick.lower()), nick, where, text)
+        return self.notifier.notify(kind, b, (id(b.session), b.name.lower(), nick.lower()), nick, where, text)
 
     def _open_from_notice(self, b) -> None:
         if self.isHidden() or self.isMinimized():
             self._restore_from_tray()
         self.raise_()
         self.activateWindow()
+        if isinstance(b, tuple):                          # a file offer card opens File Transfers too
+            self.open_transfers()
+            b = b[1]
         if b is not None and any(b in s.all_buffers() for s in self.sessions.values()):
             self.select_buffer(b)
 
-    def _play_sound(self, kind: str, path: str = "") -> None:
+    def _play_sound(self, kind: str, path: str = "") -> bool:
+        """The .wav picked for this event on the Sound page. True when one played (then no chime as well)."""
         path = path or self.cfg.sounds.get(kind)
         if not path:
-            return
+            return False
         now = time.monotonic()
         if now - self._last_sound < 2:                    # a flood plays one sound, not hundreds
-            return
+            return True
         self._last_sound = now
         try:
             import winsound
             winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
         except (ImportError, RuntimeError):
-            pass
+            return False
+        return True
 
     def _sync_tray(self) -> None:
-        wanted = self.cfg.tray_icon or self.cfg.minimize_to_tray or self.cfg.close_to_tray or self._tray_now
+        wanted = (self.cfg.tray_icon or self.cfg.minimize_to_tray or self.cfg.close_to_tray or self.cfg.start_in_tray
+                  or self._tray_now)
         if wanted and self.tray is None and QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = QSystemTrayIcon(self.windowIcon(), self)
-            self.tray.setToolTip("BChat")
-            menu = QMenu(self)
-            menu.addAction("Show BChat", self._restore_from_tray)
-            menu.addSeparator()
-            menu.addAction("Quit", self._quit_for_real)
-            self.tray.setContextMenu(menu)
-            self.tray.activated.connect(lambda why: why in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick) and self._restore_from_tray())
+            self.tray_menu = QMenu(self)
+            self.tray_menu.aboutToShow.connect(lambda: self.fill_tray_menu(self.tray_menu))
+            self.fill_tray_menu(self.tray_menu)
+            self.tray.setContextMenu(self.tray_menu)
+            self.tray.activated.connect(self._tray_clicked)
+            self.tray_tip()
             self.tray.show()
         elif not wanted and self.tray is not None:
             self._stop_blink()
             self.tray.hide()
             self.tray.deleteLater()
             self.tray = None
+
+    def _tray_clicked(self, why) -> None:
+        R = QSystemTrayIcon.ActivationReason
+        if why == R.DoubleClick or (why == R.Trigger and self.cfg.tray_click != "double"):
+            self._restore_from_tray()
+
+    def tray_entries(self) -> list:
+        """[(network, [(tab, label, mark)])] for the tray menu: open channels and private chats, in tree order.
+        mark: '@' when your nick was said, else the unread count, else ''."""
+        out = []
+        for s in self.sessions.values():
+            rows = []
+            for b in s.all_buffers():
+                if b.kind not in (CHANNEL, QUERY) or b.placeholder:
+                    continue
+                mark = "@" if b.mentioned else (str(b.unread) if b.unread else "")
+                rows.append((b, b.name, mark))
+            if rows:
+                out.append((s.net.name, rows))
+        return out
+
+    TRAY_MAX = 20
+
+    def fill_tray_menu(self, menu: QMenu) -> None:
+        """Right-click on the tray icon (0.5.0): Show BChat, your tabs by network (bold + a number = unread,
+        '@' = your nick was said), Away, Preferences, Quit. No colours or dots (zen)."""
+        from .widgets import add_menu_title
+        menu.clear()
+        add_menu_title(menu, "BChat")
+        menu.addSeparator()
+        menu.addAction(icon("dialog"), "Show BChat", self._restore_from_tray)
+        entries = self.tray_entries() if self.cfg.tray_list else []
+        if entries:
+            menu.addSeparator()
+            total = sum(len(rows) for _, rows in entries)
+            more = None
+            for net, rows in entries:
+                h = menu.addAction(net.replace("&", "&&"))
+                h.setEnabled(False)
+                for b, label, mark in rows:
+                    target = menu
+                    if total > self.TRAY_MAX and not mark and b.kind == CHANNEL:
+                        if more is None:
+                            more = QMenu("More...", menu)
+                        target = more                       # quiet channels fold away when there are many tabs
+                    a = target.addAction(icon("jump") if b.kind == CHANNEL else icon("private"),
+                                         label.replace("&", "&&") + (f"\t{mark}" if mark else ""))
+                    a.triggered.connect(lambda _=False, b=b: self._open_from_tray(b))
+                    if mark:
+                        f = a.font()
+                        f.setBold(True)
+                        a.setFont(f)
+            if more is not None:
+                menu.addMenu(more)
+        menu.addSeparator()
+        away = menu.addAction("Away")
+        away.setCheckable(True)
+        live = [s for s in self.sessions.values() if s.state == "connected"]
+        away.setChecked(bool(live) and all(s.away for s in live))
+        away.setEnabled(bool(live))
+        away.toggled.connect(self.set_away_everywhere)
+        menu.addAction(icon("preferences"), "Preferences...", self._prefs_from_tray)
+        menu.addSeparator()
+        menu.addAction(icon("quit"), "Quit", self._quit_for_real)
+
+    def _prefs_from_tray(self) -> None:
+        self._restore_from_tray()
+        self.open_preferences()
+
+    def _open_from_tray(self, b: Buffer) -> None:
+        self._restore_from_tray()
+        if any(b in s.all_buffers() for s in self.sessions.values()):
+            self.select_buffer(b)
+
+    def set_away_everywhere(self, away: bool) -> None:
+        for s in self.sessions.values():
+            if s.state == "connected" and s.away != away:
+                s.set_away(away)
+
+    def tray_tip(self) -> None:
+        """The tray icon's tooltip: 'BChat: 4 unread, 1 private' (or just BChat)."""
+        if self.tray is None:
+            return
+        unread = private = 0
+        for s in self.sessions.values():
+            for b in s.all_buffers():
+                if b.kind in (CHANNEL, QUERY) and b.unread:
+                    unread += b.unread
+                    private += b.kind == QUERY
+        parts = ([f"{unread} unread"] if unread else []) + ([f"{private} private"] if private else [])
+        self.tray.setToolTip("BChat: " + ", ".join(parts) if parts else "BChat")
 
     def _quit_for_real(self) -> None:
         self.really_quit = True
@@ -2600,6 +2772,7 @@ class MainWindow(FramelessWindow):
         self._rebuild_tabs()
         self._refresh_meters()
         self.setWindowOpacity(max(30, c.opacity) / 100)
+        self.notifier.show_ms = c.popup_seconds * 1000      # 0 = cards stay until closed
         self._sync_tray()
 
     # --- tool windows ---------------------------------------------------------------
@@ -2652,6 +2825,21 @@ class MainWindow(FramelessWindow):
             w.fill()
         w.show()
         w.raise_()
+        return w
+
+    def open_control(self, u: User | None = None, s: Session | None = None, b: Buffer | None = None):
+        """Window > Auto-Op & Protect (0.5.0); from the nick menu the Add dialog opens filled in for that person."""
+        from .control import ControlWindow
+        w = self.tools.get("control")
+        if w is None:
+            w = self.tools["control"] = ControlWindow(self)
+        else:
+            w.fill()
+        w.show()
+        w.raise_()
+        if u is not None:
+            w.add(nick=u.nick, account=u.account, host=u.host, network=s.net.name if s else "",
+                  channel=b.name if b is not None and b.kind == CHANNEL else "")
         return w
 
     def open_address_book(self, nick: str = "", real: str = ""):
@@ -2852,20 +3040,58 @@ class MainWindow(FramelessWindow):
         if path:
             self.plugins.load(path)
 
-    def ask_friend(self, nick: str = "", nets: str = ""):
-        """XChat's notify window: the nick filled in, ALL networks, then OK adds and says so where you are."""
+    def ask_friend(self, nick: str = "", nets: str = "", edit: bool = False):
+        """XChat's notify window: the nick filled in, ALL networks, then OK adds and says so where you are.
+        edit = Friends List > Edit... (0.5.0): networks, note and what happens when they come online or leave."""
+        from . import people
         from .frienddialog import FriendDialog
-        d = FriendDialog(self, nick, nets)
+        note = (people.card_for(self.cfg, nick) or {}).get("notes", "") if nick else ""
+        if edit:
+            nets = self.cfg.friend_nets.get(next((n for n in self.cfg.friends if lower(n) == lower(nick)), nick), "")
+        d = FriendDialog(self, nick, nets, edit=edit, note=" ".join(note.split()),
+                         opts=self.cfg.friend_opts.get(lower(nick)) if nick else None)
         self.friend_dialog = d
 
         def done(code: int) -> None:
-            if code:
-                name, where = d.result_values()
-                for n in name.split():
+            if not code:
+                return
+            name, where = d.result_values()
+            for n in name.split():
+                if edit:
+                    real = next((f for f in self.cfg.friends if lower(f) == lower(n)), n)
+                    if where:
+                        self.cfg.friend_nets[real] = where
+                    else:
+                        self.cfg.friend_nets.pop(real, None)
+                else:
                     self.add_friend(n, where, say=True)
+                self.set_friend_extras(n, d.options(), d.note_text())
+            if edit:
+                self._restart_friends()
+            else:
+                self.save_config()
         d.finished.connect(done)
         d.open()
         return d
+
+    def set_friend_extras(self, nick: str, opts: dict, note: str) -> None:
+        """Per-friend pop-up / sound / WHOIS, and the note, which lives on their Address Book card (one note)."""
+        from . import people
+        from .frienddialog import friend_defaults
+        if opts == friend_defaults(self.cfg):
+            self.cfg.friend_opts.pop(lower(nick), None)
+        else:
+            self.cfg.friend_opts[lower(nick)] = dict(opts)
+        card = people.card_for(self.cfg, nick)
+        if card is not None:
+            if " ".join(card.get("notes", "").split()) != note:
+                card["notes"] = note
+        elif note:
+            self.cfg.address_book.append({"nick": nick, "other": "", "real": "", "email": "", "web": "", "notes": note,
+                                          "colour": ""})
+        w = self.tools.get("addressbook")
+        if w is not None and w.isVisible():
+            w.fill()
 
     def add_friend(self, nick: str, nets: str = "", say: bool = False) -> bool:
         from .frienddialog import nets_from_text
@@ -3000,6 +3226,7 @@ class MainWindow(FramelessWindow):
         name = next((n for n in self.cfg.friends if lower(n) == lower(nick)), nick)
         self.cfg.friends = [n for n in self.cfg.friends if n != name]
         self.cfg.friend_nets.pop(name, None)
+        self.cfg.friend_opts.pop(lower(name), None)          # the Address Book card (and its note) stays
         self._restart_friends()
 
     def _restart_friends(self) -> None:

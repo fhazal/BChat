@@ -268,6 +268,14 @@ def is_custom(t: Theme) -> bool:
     return t.name not in PALETTES or theme_values(t) != theme_values(make_theme(t.name))
 
 
+# 0.5.0 'Also show a pop-up when:' (Preferences > Alerts), with what each is on by default
+POPUP_MORE = (("kick", "I'm kicked from a channel"), ("disconnect", "A network disconnects (not when I quit)"),
+              ("friend", "A friend comes online"), ("invite", "Someone invites me"),
+              ("dcc", "A file is offered to me (DCC)"), ("notice", "Someone sends me a notice (not services, not servers)"))
+POPUP_MORE_DEFAULT = {"kick": True, "disconnect": True, "friend": True, "invite": True, "dcc": True, "notice": False}
+POPUP_TIMES = ((4, "4 seconds"), (6, "6 seconds"), (10, "10 seconds"), (0, "Until I close them"))
+
+
 @dataclass
 class Config:
     nick: str = ""
@@ -290,6 +298,8 @@ class Config:
     color_nicks: bool = False      # each nick a fixed colour, XChat's "Colored nick names"
     nick_colours: list = field(default_factory=list)   # 0.3.0 rules: {"mask", "colour" (a palette name), "net"}
     address_book: list = field(default_factory=list)   # 0.3.0 cards: {"nick", "other", "real", "email", "web", "notes", "colour"}
+    control_on: bool = True        # 0.5.0 Auto-Op / Auto-Voice / Protect list in use (it does nothing while empty)
+    control_rules: list = field(default_factory=list)  # {"who", "by": account|mask, "give": @|+, "protect", "channels", "network"}
     send_typing: bool = False      # 0.3.0: let others see when I'm typing (+typing); off until the user turns it on
     strip_colors: bool = False     # drop mIRC colours from what people say
     colors_exact: bool = False     # fixed (16-98) and hex text colours exactly as sent, even when hard to read
@@ -316,6 +326,10 @@ class Config:
     alert_popup: list[bool] = field(default_factory=lambda: [False, True, True])   # BChat's own pop-up cards
     alert_tray: list[bool] = field(default_factory=lambda: [False, True, True])
     alert_flash: list[bool] = field(default_factory=lambda: [False, True, True])
+    popup_more: dict = field(default_factory=lambda: dict(POPUP_MORE_DEFAULT))  # 0.5.0 pop-ups for more events
+    popup_seconds: int = 6         # how long a pop-up card stays; 0 = until I close it
+    popup_sound: bool = True       # 0.5.0: one soft sound with a pop-up card (rate limited, quiet in games / DND)
+    popup_sound_name: str = "soft" # soft (chime) | bee (buzz): files in bchat/assets/sounds, made by packaging/make_chime.py
     alert_beep: list[bool] = field(default_factory=lambda: [False, False, False])
     tray_icon: bool = False
     hilite_no: str = ""            # nicks never highlighted
@@ -390,6 +404,9 @@ class Config:
     opacity: int = 100
     start_with_windows: bool = False
     start_minimized: bool = False
+    start_in_tray: bool = False    # 0.5.0 'When BChat starts: In the tray' (Show / Minimized / In the tray)
+    tray_click: str = "one"        # one | double: what opens BChat from the tray icon
+    tray_list: bool = True         # the tray menu lists your channels and private chats
     close_to_tray: bool = False
     minimize_to_tray: bool = False
     ask_on_quit: bool = True
@@ -420,6 +437,7 @@ class Config:
     ignore_kinds: dict = field(default_factory=dict)   # mask -> letters of C P N T D I U; missing means C P N T D I
     friends: list[str] = field(default_factory=list)
     friend_nets: dict = field(default_factory=dict)    # nick -> "net1,net2", empty for all
+    friend_opts: dict = field(default_factory=dict)    # 0.5.0 lower nick -> {"popup", "sound", "whois"} (missing = defaults)
     sysinfo_line: str = ""             # /sysinfo template; empty = sysinfo.DEFAULT_LINE
     np_enabled: bool = False           # /np shares nothing until the user turns it on
     np_music_only: bool = True         # skip videos and anything Windows doesn't call music

@@ -102,6 +102,14 @@ Double-click in the channel's chat (like mIRC), right-click the channel tab and 
 ### How do I give someone auto-op or auto-voice?
 You need to be an operator (**@**) in the channel. Right-click their nick → **Operator Actions** → **ChanServ Access...** and pick **Auto-op @**, **Auto-voice +** or **No access**. BChat asks ChanServ what they have now, shows the exact line it will send, and ChanServ's answer appears in the channel. It works with Anope and Atheme services. The person must be registered with NickServ.
 
+### Can BChat give @ or + to people by itself?
+Yes, even without ChanServ: **Window → Auto-Op & Protect...**, or right-click their nick → **Operator Actions** → **Auto-Op / Auto-Voice...**. Choose them by their **NickServ account** (safest: nobody can fake it) or by their address, like `*!*@bsn.my`. A nick alone isn't allowed, because anyone can take a nick. Pick **Auto-op @** or **Auto-voice +**, and the channels (empty = every channel where you have @).
+
+BChat only acts in channels where you have **@** yourself. It waits 2 to 4 seconds and does nothing if ChanServ or another op already did it, and it prints one grey line saying why. On channels with ChanServ, **ChanServ Access** is better, because it works while you're offline.
+
+### What does Protect do?
+Tick **Protect** on someone in **Auto-Op & Protect**: if another person takes their @ or + away, or bans them, BChat gives it back or removes the ban. It never kicks anyone, and it leaves changes by you, services and the server alone. If it keeps being taken away, BChat stops after 3 times in a minute and says so, so it can't start an op war.
+
 ### How do I find something someone said earlier?
 **Window → Search Text...** (`Ctrl+F`) searches the tab you're in. `/lastlog word` lists every line with that word.
 
@@ -127,7 +135,10 @@ Right-click their nick and choose **CTCP → Ping**, **Time** or **Version**. Th
 Right-click their nick and choose **Slap!** (in a channel, one nick at a time). BChat picks a random line from your list. Change the list in **Settings → Advanced → Slaps...**: `$nick` is the person you slap.
 
 ### What is the Friends List?
-Right-click a nick and choose **Add to Friends List**, or type `/notify nick`. **Window → Friends List...** shows which friends are online.
+Right-click a nick and choose **Add to Friends List**, or type `/notify nick`. **Window → Friends List...** shows which friends are online, for how long, and your note about them.
+
+### Can I keep a note or a sound per friend?
+Yes: in **Window → Friends List...**, pick a friend and click **Edit...**. Write a **Note** (it's the same note as in their Address Book card), and choose what happens when they come online or leave: **Show a pop-up**, **Play a sound** (your pop-up sound, or a .wav you pick), **Ask WHOIS**. When they leave, the server tab says how long they were online.
 
 ### How do I colour nicks or keep notes about people?
 **Settings → Advanced → Nick Colours...** gives nicks colours by rules, and other nicks automatic colours. To keep a note about someone, right-click their nick and choose **Address Book...**; **Window → Address Book...** lists everyone you saved.
@@ -147,7 +158,15 @@ Logging is off until you turn it on. **Settings → Preferences → Logging**, t
 ## Notifications and the tray
 
 ### How does BChat tell me about new messages?
-When BChat isn't the window you're using, a small card appears above the taskbar for **private messages** and when someone **mentions your nick**. Click the card to jump to that chat. The tray icon blinks too.
+When BChat isn't the window you're using, a small card appears above the taskbar for **private messages** and when someone **mentions your nick**, with one soft sound. Click the card to jump to that chat. The tray icon blinks too.
+
+It also shows a card when you're **kicked**, when a network **disconnects** (not when you quit yourself), when a **friend comes online**, when someone **invites** you and when someone **offers you a file**. Cards for **notices** are off at first. Change all of these in **Settings → Preferences → Alerts → Also show a pop-up when**.
+
+### Can I change or turn off the notification sound?
+**Settings → Preferences → Alerts → Sound with pop-ups**: **Soft chime** (the default), **Bee buzz** or **None**; the play button lets you hear it. It plays at most once every 10 seconds, never during full-screen games or Do Not Disturb, and a sound you picked yourself on the **Sound** page plays instead of it.
+
+### How long do the cards stay?
+**Settings → Preferences → Alerts → Keep pop-ups on screen for**: 4, 6 (the default) or 10 seconds, or **Until I close them**. Hovering a card keeps it open.
 
 ### Can I stop the notification cards?
 Yes: **Settings → Preferences → Alerts**, in the row **Show pop-up notifications on:**, untick what you don't want (channel messages, private messages, highlights).
@@ -161,8 +180,11 @@ BChat never floods your screen. Messages from the same person update one card, a
 ### How do I keep BChat running in the tray?
 **Settings → Preferences → General**, tick **Minimize button sends BChat to the tray** and/or **Close button sends BChat to the tray**. To really quit, right-click the tray icon → **Quit**, or use **BChat → Quit** (`Ctrl+Q`).
 
+### What's in the tray icon's menu?
+Right-click the tray icon: **Show BChat**, then your open channels and private chats by network. Bold with a number means unread lines, **@** means someone said your nick. Click one to open BChat right there. Below them: **Away** (sets you away on every network; untick to come back), **Preferences...** and **Quit**. Hovering the tray icon shows how many lines are unread. To open BChat with a double-click instead of one click, or to hide the list, see **Settings → Preferences → Alerts → Tray icon**.
+
 ### Can BChat start with Windows?
-Yes: **Settings → Preferences → General → Start with Windows**. Tick **Start minimized** too if you want it to start quietly.
+Yes: **Settings → Preferences → General → Start with Windows**. Next to **When BChat starts**, choose **Minimized** or **In the tray** if you want it to start quietly: in the tray, BChat connects and stays out of sight until you click the tray icon.
 
 ---
 

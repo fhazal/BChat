@@ -21,7 +21,7 @@ OUT = ROOT / "assets/logo/beehex"
 CHROME = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
 SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 ICO = (16, 20, 24, 32, 40, 48, 64, 128, 256)
-HEADER = (16, 20, 24, 28, 32, 40, 48)
+HEADER = (20, 24, 26, 30, 36, 40, 50, 60)   # title bar logo 20 logical px at 100-300 % (0.5.0)
 
 
 def render() -> dict[str, Image.Image]:

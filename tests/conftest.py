@@ -11,6 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pytest
 import bchat.updater
 bchat.updater.UPDATE_URL = ""      # tests never ask the real GitHub for releases
+import winsound
+SOUNDS_PLAYED: list = []
+winsound.PlaySound = lambda path, flags: SOUNDS_PLAYED.append(path)   # tests never make a sound on the user's PC
 from PySide6.QtWidgets import QApplication
 
 

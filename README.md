@@ -34,13 +34,22 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 
 ---
 
-## 🆕 What's new in 0.4.0
+## 🆕 What's new in 0.5.0
 
-- 🔌 **Bouncer detection**: BChat knows when it's talking to ZNC, soju or psyBNC and says so once. What ZNC plays back shows under one grey line with the times it was really said, then *Now live*, so nothing shows twice. Hover the network to see the bouncer and how long you've been online.
-- 🔑 **Log in with a certificate** (SASL EXTERNAL): no password stored or sent. *Make New* makes one on your PC, *Add to NickServ* registers it, and BChat logs in with it from then on.
-- 🛡️ **ChanServ Access** in the nick menu: give someone auto-op (@) or auto-voice (+), or take it away, without typing services commands. BChat shows what they have now and the exact line it sends (Anope and Atheme).
-- 🤫 **Skip the server's welcome message** and **short join and part lines**, both off until you turn them on.
-- ⌨️ `/partall` leaves every channel at once, `/online` shows how long you've been connected, `/motd` shows the welcome message any time.
+- 🛡️ **Auto-Op, Auto-Voice & Protect**: give @ or + to people by their NickServ account or address, even without ChanServ. Protect gives it back if someone takes it, and lifts bans on them. It never kicks, waits its turn behind ChanServ, and stops by itself before an op war.
+- 🗂️ **Tray menu with your chats**: right-click the tray icon to see every channel and private chat, with unread counts, and jump straight in. An Away tick for every network, and BChat can now **start in the tray**.
+- 🔔 **More notification cards, with a soft sound**: when you're kicked, a network drops, a friend comes online, someone invites you or offers a file. One quiet chime (or a bee buzz), at most every 10 seconds and never while you game. Choose how long cards stay.
+- 👥 **Friends List extras**: how long each friend has been online, a note per friend (shared with the Address Book), and their own pop-up, sound and WhoIs.
+- 🐝 **A bigger icon**: the honey tile now fills the taskbar and tray like other apps, and the title bar logo is bigger.
+
+<details><summary>0.4.0</summary>
+
+- 🔌 **Bouncer detection**: BChat knows when it's talking to ZNC, soju or psyBNC and says so once. What ZNC plays back shows under one grey line with the times it was really said, then *Now live*, so nothing shows twice.
+- 🔑 **Log in with a certificate** (SASL EXTERNAL): no password stored or sent.
+- 🛡️ **ChanServ Access** in the nick menu: auto-op (@) or auto-voice (+) without typing services commands (Anope and Atheme).
+- 🤫 **Skip the server's welcome message** and **short join and part lines**; `/partall`, `/online`, `/motd`.
+
+</details>
 
 ---
 
@@ -84,7 +93,7 @@ Passwords live in **Windows Credential Manager**, not in a settings file. Server
 <td valign="top">
 
 ### 🔔 Notification cards
-A small themed card above the taskbar when someone highlights you or sends a private message. Click it to jump to that chat. Floods turn into one summary card, and nothing pops up while you game, present or use Focus.
+A small themed card above the taskbar when someone highlights you, sends a private message, kicks or invites you, or a friend comes online, with one soft chime. Click it to jump to that chat. Floods turn into one summary card, and nothing pops up or plays while you game, present or use Focus.
 
 </td>
 </tr>

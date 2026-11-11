@@ -439,9 +439,11 @@ class IgnoreWindow(ToolWindow):
 
 class FriendsWindow(ToolWindow):
     def __init__(self, win):
-        super().__init__("BChat: Friends List", win, (520, 340))
+        super().__init__("BChat: Friends List", win, (640, 340))
         self.view = QTreeWidget()
-        self.view.setHeaderLabels(["Name", "Status", "Network", "Last Seen"])
+        self.view.setHeaderLabels(["Name", "Status", "Network", "Online for", "Note"])
+        for c, w in ((0, 100), (1, 60), (2, 90), (3, 110)):
+            self.view.setColumnWidth(c, w)
         self.view.setRootIsDecorated(False)
         self.view.setSortingEnabled(True)
         self.view.itemDoubleClicked.connect(lambda *_: self.open_dialog())
@@ -449,9 +451,10 @@ class FriendsWindow(ToolWindow):
         row = QHBoxLayout()
         row.addStretch(1)
         self.add_btn = button("Add...", self.ask_add)
+        self.edit_btn = button("Edit...", self.edit_selected)
         self.remove_btn = button("Remove", self.remove_selected)
         self.dialog_btn = button("Open Dialog", self.open_dialog)
-        for w in (self.add_btn, self.remove_btn, self.dialog_btn):
+        for w in (self.add_btn, self.edit_btn, self.remove_btn, self.dialog_btn):
             row.addWidget(w)
         self.body.addLayout(row)
         self.timer = QTimer(self, interval=30000, timeout=self.fill)
@@ -460,27 +463,43 @@ class FriendsWindow(ToolWindow):
 
     @staticmethod
     def _ago(t: float) -> str:
+        """'seen 2 h ago' / 'seen 3 days ago' for someone offline."""
         if not t:
-            return "Never"
-        return f"{int((time.time() - t) // 60)} minutes ago"
+            return "never seen"
+        secs = time.time() - t
+        if secs >= 2 * 86400:
+            return f"seen {int(secs // 86400)} days ago"
+        from .session import duration
+        return f"seen {duration(secs)} ago" if secs >= 60 else "seen just now"
+
+    @staticmethod
+    def _for(since: float) -> str:
+        from .session import duration
+        secs = time.time() - since
+        return f"{int(secs // 86400)} days" if secs >= 2 * 86400 else duration(secs)
 
     def fill(self) -> None:
+        from .people import card_for
         keep = self.view.currentItem().text(0) if self.view.currentItem() else ""
         self.view.clear()
         for nick in self.win.cfg.friends:
             on, off = [], []
-            seen = 0.0
+            seen = since = 0.0
             for s in self.win.sessions.values():
                 st = s.friend_state.get(lower(nick))
                 if st is None:
                     continue
                 (on if st["online"] else off).append(s.net.name)
                 seen = max(seen, st["seen"])
+                if st["online"] and st.get("since"):
+                    since = min(since, st["since"]) if since else st["since"]
+            note = " ".join(((card_for(self.win.cfg, nick) or {}).get("notes") or "").split())
             if on:
-                row = [nick, "Online", ", ".join(on), self._ago(seen)]
+                row = [nick, "Online", ", ".join(on), self._for(since) if since else "", note]
             else:
-                row = [nick, "Offline", "", self._ago(seen)]
+                row = [nick, "Offline", "", self._ago(seen), note]
             it = QTreeWidgetItem(row)
+            it.setToolTip(4, note)
             self.view.addTopLevelItem(it)
             if nick == keep:
                 self.view.setCurrentItem(it)
@@ -492,6 +511,14 @@ class FriendsWindow(ToolWindow):
     def add(self, nick: str, nets: str = "") -> None:
         self.win.add_friend(nick, nets)
         self.fill()
+
+    def edit_selected(self):
+        it = self.view.currentItem()
+        if it is None:
+            return None
+        d = self.win.ask_friend(it.text(0), edit=True)
+        d.finished.connect(lambda _c: self.fill())
+        return d
 
     def remove_selected(self) -> None:
         it = self.view.currentItem()

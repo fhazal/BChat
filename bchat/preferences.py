@@ -24,7 +24,8 @@ SWITCHER_POS = ("Left", "Right", "Top", "Bottom", "Hidden")
 SORTS = ("A-Z, Ops first", "A-Z", "Z-A, Ops last", "Z-A", "Unsorted")
 # Sound page: session notify event -> the name XChat's Sound page uses
 SOUND_EVENTS = (("chan", "Channel Message"), ("hilight", "Channel Msg Hilight"), ("priv", "Private Message"), ("notice", "Notice"),
-                ("join", "Join"), ("part", "Part"), ("kick", "Kick"), ("invite", "Invited"), ("connect", "Connected"), ("disconnect", "Disconnected"))
+                ("join", "Join"), ("part", "Part"), ("kick", "Kick"), ("invite", "Invited"), ("connect", "Connected"), ("disconnect", "Disconnected"),
+                ("friend", "Friend Online/Offline"))
 RANK_CHOICES = (("off", "Off"), ("lights", "Lights before ranked nicks"),
                 ("slot", "Lights, and an empty slot for others so all text lines up"))
 
@@ -385,10 +386,46 @@ class PreferencesDialog(FramedDialog):
             self.alert_boxes[key] = boxes
         g.setColumnStretch(4, 1)
         lay.addLayout(g)
-        self.tray_icon = self._check(lay, "Enable system tray icon", c.tray_icon)
         hint = QLabel("Words and nicks to highlight are on Chatting > Highlights.")
         hint.setStyleSheet(f"color: {c.theme.muted};")
         lay.addWidget(hint)
+        from .config import POPUP_MORE, POPUP_TIMES
+        lay.addWidget(_heading("Also show a pop-up when"))
+        self.popup_more = {}
+        for key, label in POPUP_MORE:
+            self.popup_more[key] = self._check(lay, label, c.popup_more.get(key, False))
+        g2 = QGridLayout()
+        g2.setHorizontalSpacing(8)
+        secs = [s for s, _ in POPUP_TIMES]
+        self.popup_time = self._menu(g2, 0, "Keep pop-ups on screen for:", [t for _, t in POPUP_TIMES],
+                                     secs.index(c.popup_seconds) if c.popup_seconds in secs else 1)
+        g2.setColumnStretch(2, 1)
+        lay.addLayout(g2)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Sound with pop-ups:"))
+        self.popup_sound = QComboBox()
+        self.popup_sound.addItems(["None", "Soft chime", "Bee buzz"])
+        self.popup_sound.setCurrentIndex(0 if not c.popup_sound else 2 if c.popup_sound_name == "bee" else 1)
+        self.popup_sound.setToolTip("One short sound, at most once every 10 seconds. Quiet during full-screen games "
+                                    "and Do Not Disturb. A sound you picked on the Sound page plays instead.")
+        row.addWidget(self.popup_sound)
+        self.popup_sound_try = QPushButton(icon("play"), "", objectName="compact")
+        self.popup_sound_try.setToolTip("Play it now")
+        self.popup_sound_try.setAutoDefault(False)
+        self.popup_sound_try.clicked.connect(
+            lambda: self.win.play_soft_chime(force=True, name="bee" if self.popup_sound.currentIndex() == 2 else "soft"))
+        row.addWidget(self.popup_sound_try)
+        row.addStretch(1)
+        lay.addLayout(row)
+        lay.addWidget(_heading("Tray icon"))
+        self.tray_icon = self._check(lay, "Enable system tray icon", c.tray_icon)
+        g3 = QGridLayout()
+        g3.setHorizontalSpacing(8)
+        self.tray_click = self._menu(g3, 0, "Open BChat with:", ["One click", "Double-click"], 1 if c.tray_click == "double" else 0)
+        g3.setColumnStretch(2, 1)
+        lay.addLayout(g3)
+        self.tray_list = self._check(lay, "List my channels and private chats in the tray menu", c.tray_list,
+                                     "Bold with a number = unread lines, @ = your nick was said")
         lay.addStretch(1)
         return page
 
@@ -535,7 +572,13 @@ class PreferencesDialog(FramedDialog):
                                      "Type /motd to read it any time")
         lay.addWidget(_heading("Starting and Closing"))
         self.start_win = self._check(lay, "Start with Windows", c.start_with_windows, "Only for the installed BChat")
-        self.start_min = self._check(lay, "Start minimized", c.start_minimized)
+        g = QGridLayout()
+        g.setHorizontalSpacing(8)
+        self.start_how = self._menu(g, 0, "When BChat starts:", ["Show the window", "Minimized", "In the tray"],
+                                    2 if c.start_in_tray else 1 if c.start_minimized else 0)
+        self.start_how.setToolTip("In the tray: BChat connects and stays out of sight; click the tray icon to open it")
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
         self.ask_quit = self._check(lay, "Ask before quitting while connected", c.ask_on_quit)
         self.report_offer = self._check(lay, "Offer to send a problem report after a crash or freeze", c.report_offer,
                                         "A bar above the input box asks first; nothing is ever sent by itself. Help > Report a Problem... works any time.")
@@ -1152,6 +1195,14 @@ class PreferencesDialog(FramedDialog):
         for key, boxes in self.alert_boxes.items():
             setattr(c, key, [b.isChecked() for b in boxes])
         c.tray_icon = self.tray_icon.isChecked()
+        from .config import POPUP_TIMES
+        c.popup_more = {k: b.isChecked() for k, b in self.popup_more.items()}
+        c.popup_seconds = POPUP_TIMES[self.popup_time.currentIndex()][0]
+        c.popup_sound = self.popup_sound.currentIndex() > 0
+        if c.popup_sound:
+            c.popup_sound_name = "bee" if self.popup_sound.currentIndex() == 2 else "soft"
+        c.tray_click = "double" if self.tray_click.currentIndex() == 1 else "one"
+        c.tray_list = self.tray_list.isChecked()
         c.hilite_no = self.hl_no.text().strip()
         c.hl_on, c.hl_rules = self.hl_on.isChecked(), [dict(r) for r in self.hl_rules]
         c.quit_reason = self.quit_msg.text() or "Leaving"
@@ -1189,7 +1240,8 @@ class PreferencesDialog(FramedDialog):
         c.dialogs_in_windows = self.sw_windows.currentIndex() == 1
         if self.start_win.isChecked() != c.start_with_windows:
             self.win.set_autostart(self.start_win.isChecked())
-        c.start_with_windows, c.start_minimized, c.close_to_tray = self.start_win.isChecked(), self.start_min.isChecked(), self.close_tray.isChecked()
+        c.start_with_windows, c.close_to_tray = self.start_win.isChecked(), self.close_tray.isChecked()
+        c.start_minimized, c.start_in_tray = self.start_how.currentIndex() == 1, self.start_how.currentIndex() == 2
         c.minimize_to_tray, c.ask_on_quit = self.min_tray.isChecked(), self.ask_quit.isChecked()
         c.report_offer = self.report_offer.isChecked()
         c.update_check, c.update_auto_download, c.update_test_versions = self.upd_check.isChecked(), self.upd_auto.isChecked(), self.upd_test.isChecked()

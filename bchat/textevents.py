@@ -26,8 +26,8 @@ EVENTS = {
     "Channel UnBan": ("*$t$1 removes ban on $2", ("nick", "mask"), ("Fhazal", "*!*@bad.host")),
     "Invited": ("*$tYou have been invited to $1 by $2 ($3)", ("channel", "nick", "host"), ("#skinhead", "Belon", "b@host.my")),
     "Away Line": ("*$t$1 is away: $2", ("nick", "reason"), ("Belon", "out to lunch")),
-    "Notify Online": ("*$tNotify: $1 is online ($2).", ("nick", "network"), ("Belon", "SkinIRC")),
-    "Notify Offline": ("*$tNotify: $1 is offline ($2).", ("nick", "network"), ("Belon", "SkinIRC")),
+    "Notify Online": ("*$tNotify: $1 is online ($2).$3", ("nick", "network", "note from the Address Book"), ("Belon", "SkinIRC", "  Note: knows the radio setup")),
+    "Notify Offline": ("*$tNotify: $1 is offline ($2).$3", ("nick", "network", "time online"), ("Belon", "SkinIRC", " Online for 4 h 05 min.")),
     "CTCP Generic": ("*$tReceived a CTCP $1 from $2", ("what", "nick"), ("VERSION", "Belon")),
     # 0.2.0: your own modes on connect (one line, the user's wording) and mIRC's Local host line
     "Your Modes": ("*$t$1 sets mode: %C11[%O $2 %C11]%O", ("nick", "modes"), ("Belon", "+iwxz")),   # brackets like Raw Modes

@@ -91,8 +91,12 @@ def pixmap(name: str) -> QPixmap:
     return QPixmap(str(p))
 
 
+LOGO = 20                                     # title bar logo, logical px (16 = XChat's size until 0.5.0; user picked 20)
+HEADER_PX = (20, 24, 26, 30, 36, 40, 50, 60)  # the drawn sizes in assets/header (packaging/make_logo_assets.py)
+
+
 def header_logo(dpr: float) -> QPixmap:
-    height = min((16, 20, 24, 28, 32, 40, 48), key=lambda h: abs(h - 16 * dpr))
+    height = min(HEADER_PX, key=lambda h: abs(h - LOGO * dpr))
     pm = QPixmap(str(ASSETS / "header" / f"logo-{height}.png"))
     pm.setDevicePixelRatio(dpr)
     return pm
@@ -396,10 +400,10 @@ class TitleBar(QWidget):
             self.lights.append(b)
         g.insertWidget(1, self.lights[2]) if full else None
         self.group.installEventFilter(self)
-        # 16 px tall like XChat's title bar icon, no background, drawn for this display scale
+        # LOGO px tall (20 since 0.5.0, the honey tile like the taskbar icon), no background, drawn for this display scale
         self.logo = QLabel(self)
         pm = header_logo(self.devicePixelRatioF())
-        self.logo.setFixedSize(math.ceil(pm.width() / pm.devicePixelRatio()), 16)
+        self.logo.setFixedSize(math.ceil(pm.width() / pm.devicePixelRatio()), LOGO)
         self.logo.setPixmap(pm)
         self.logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         lay.addWidget(self.logo)

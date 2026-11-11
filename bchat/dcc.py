@@ -450,7 +450,8 @@ class DccManager(QObject):
         t.ip, t.port, t.token, t.passive = int_to_ip(ip), port, token, port == 0
         t.path = str(self.target_path(clean, nick))
         s.add(s._front(), "info", "*", f"{nick} has offered {clean} ({size} bytes)")
-        s.notify.emit(s._front(), "priv")
+        s.last_dcc = nick
+        s.notify.emit(s._front(), "dcc")         # its own card; taskbar / tray blink follow the Private column
         if self.cfg.dcc_auto == 1 and not is_program(clean):
             self.accept(t)
         if self.cfg.dcc_open_recv:

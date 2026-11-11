@@ -252,22 +252,24 @@ def test_app_icon_has_small_sizes_and_clear_corners(app):
 def test_header_logo_has_no_background_and_every_scale(app):
     from PIL import Image
     from bchat.widgets import ASSETS, header_logo
-    for h in (16, 20, 24, 28, 32, 40, 48):
+    from bchat.widgets import HEADER_PX
+    for h in HEADER_PX:
         im = Image.open(ASSETS / "header" / f"logo-{h}.png").convert("RGBA")
         assert im.height == h
         w = im.width
         for c in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
             assert im.getpixel(c)[3] < 40, (h, c)
-    big = Image.open(ASSETS / "header/logo-48.png").convert("RGBA")
+    big = Image.open(ASSETS / "header/logo-60.png").convert("RGBA")
     assert any(p[3] > 200 for p in big.getdata())
-    assert sum(p[3] < 10 for p in big.getdata()) > big.width * big.height * 0.1  # transparent around the B, no box
-    for dpr, h in ((1.0, 16), (1.25, 20), (1.5, 24), (2.0, 32), (3.0, 48)):
+    assert sum(p[3] < 10 for p in big.getdata()) > big.width * big.height * 0.05  # rounded corners + a hair of edge, no box
+    for dpr, h in ((1.0, 20), (1.25, 24), (1.5, 30), (2.0, 40), (3.0, 60)):
         pm = header_logo(dpr)
         assert pm.height() == h and pm.devicePixelRatio() == dpr
 
 
 def test_taskbar_icon_is_the_users_bold_logo():
-    """The user's current transparent set (assets/logo/beehex since 11-11: bajubesi bee hexagon) is the app, taskbar and installer icon."""
+    """The user's current transparent set (assets/logo/beehex since 11-11: bajubesi bee; since 0.5.0 the app icon is the
+    honey tile, user's pick B) is the app, taskbar and installer icon, and it fills the icon like other apps' icons do."""
     from PIL import Image, ImageChops
     from bchat.widgets import ASSETS
     root = ASSETS.parents[1] / "assets/logo/beehex/transparent"
@@ -275,7 +277,12 @@ def test_taskbar_icon_is_the_users_bold_logo():
     theirs = Image.open(root / "BChat_256.png").convert("RGBA")
     assert ImageChops.difference(shipped, theirs).getbbox() is None
     assert (ASSETS / "bchat.ico").read_bytes() == (root / "BChat.ico").read_bytes()
-    for h in (16, 20, 24, 28, 32, 40, 48):   # title bar: the small-tuned bee drawn at each size, not a shrunk big one
+    for size in (24, 32, 48, 256):           # fills ~95 % like Discord / Spotify / Apple Music (the hexagon filled 85 % wide)
+        im = Image.open(root / "BChat.ico"); im.size = (size, size)
+        box = im.convert("RGBA").getchannel("A").point(lambda v: 255 if v > 40 else 0).getbbox()
+        assert (box[2] - box[0]) / size >= 0.9 and (box[3] - box[1]) / size >= 0.9, (size, box)
+    from bchat.widgets import HEADER_PX
+    for h in HEADER_PX:                      # title bar: the small-tuned bee drawn at each size, not a shrunk big one
         assert ImageChops.difference(Image.open(ASSETS / f"header/logo-{h}.png").convert("RGBA"),
                                      Image.open(root / f"header_{h}.png").convert("RGBA")).getbbox() is None
 

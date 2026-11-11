@@ -69,6 +69,8 @@ class Buffer:
         self.modes = ""
         self.joined = kind != CHANNEL
         self.activity = 0  # 0 none, 1 data, 2 message, 3 highlight
+        self.unread = 0               # 0.5.0 tray menu: messages since you last looked at this tab
+        self.mentioned = False        # your nick was said since then
         self.marker: int | None = None
         self.history_since = 0.0      # chathistory: lines after this were asked for (0 = the latest)
         self.rejoined_at = 0.0        # last rejoin after a kick
@@ -192,6 +194,8 @@ class Session(QObject):
         self._znc_collect: tuple[str, list, float] | None = None   # between ZNC's "Buffer Playback..." and "Playback Complete."
         self.online_since = 0.0            # /online: when this connection got its welcome
         self.motd_asked = False            # /motd typed: show it even with "Skip the MOTD"
+        from .control import Control
+        self.control = Control(self)       # 0.5.0 Auto-Op / Auto-Voice / Protect
         self.services = ""                 # "anope" or "atheme", from ChanServ's VERSION answer (ChanServ Access)
         self.services_guessed = False
         self._services_wait: list = []
@@ -685,16 +689,30 @@ class Session(QObject):
         name = next((n for n in self.cfg.friends if lower(n) == key), None)
         if name is None:
             return
-        st = self.friend_state.setdefault(key, {"online": False, "seen": 0.0, "known": False})
+        st = self.friend_state.setdefault(key, {"online": False, "seen": 0.0, "known": False, "since": 0.0})
         changed = st["online"] != online or not st["known"]
         was_known = st["known"]
         st["online"], st["known"] = online, True
         if online:
             st["seen"] = time.time()
+            if changed:
+                st["since"] = time.time()          # 0.5.0 Friends List 'Online for'
         if changed and (online or was_known):
-            self.te("Notify Online" if online else "Notify Offline", self.server_buffer, INFO, (name, self.net.name))
-            if online and self.cfg.whois_on_notify:
-                self.whois(name)
+            self.last_friend = name
+            opts = self.cfg.friend_opts.get(key, {})
+            if online:
+                from .people import card_for
+                note = " ".join(((card_for(self.cfg, name) or {}).get("notes") or "").split())
+                self.te("Notify Online", self.server_buffer, INFO, (name, self.net.name, f"  Note: {note[:120]}" if note else ""))
+                self.notify.emit(self.server_buffer, "friend")
+                if opts.get("whois", self.cfg.whois_on_notify):
+                    self.whois(name)
+            else:
+                since = st.get("since", 0.0)
+                st["since"] = 0.0
+                self.te("Notify Offline", self.server_buffer, INFO,
+                        (name, self.net.name, f" Online for {duration(time.time() - since)}." if since else ""))
+                self.notify.emit(self.server_buffer, "friend_off")
         self.friends_changed.emit()
 
     def send_raw(self, line: str, secret: bool = False, quiet: bool = False) -> None:
@@ -1056,6 +1074,8 @@ class Session(QObject):
             u = b.users.get(lower(m.nick))
             if u:
                 u.account = acct
+                if acct:
+                    self.control.check(b, m.nick)       # logged in after joining: their account rule fits now
 
     def _irc_setname(self, m: Message) -> None:
         for b in self.buffers.values():
@@ -1297,6 +1317,9 @@ class Session(QObject):
     def _bump(self, b: Buffer, level: int) -> None:
         if level == 3:
             self.alert.emit(b)
+        if b is not self.current and level >= 2:
+            b.unread += 1
+            b.mentioned = b.mentioned or (level == 3 and b.kind == CHANNEL)    # a private chat shows its count
         if b is not self.current and level > b.activity:
             b.activity = level
             self.buffer_changed.emit(b)
@@ -1362,6 +1385,7 @@ class Session(QObject):
             joined.realname = m.param(2)
         b.users[lower(m.nick)] = joined
         self.users_changed.emit(b)
+        self.control.check(b, m.nick)
         if not self.cfg.hide_joinpart:
             self._bump(b, 1)
 
@@ -1410,6 +1434,7 @@ class Session(QObject):
             b.joined = False
             b.users.clear()
             self.te("You Kicked", b, PART, (b.name, m.nick, reason))
+            self.notify.emit(b, "kicked")
             self.buffer_changed.emit(b)
             now = time.time()
             if self.cfg.rejoin_on_kick and now - b.rejoined_at > 30:       # once: a kick loop can't flood the channel
@@ -1473,13 +1498,14 @@ class Session(QObject):
         b = self.buffer(target)
         if self.cfg.raw_modes:   # Advanced: "Display MODEs in raw form"
             self.add(b, INFO, "*", f"{m.nick} sets mode {' '.join(m.params[1:])}")
-            self._apply_modes(b, m.params[1:])
+            self._apply_modes(b, m.params[1:], actor=m.nick)
         else:
             self._apply_modes(b, m.params[1:], m.nick)
 
-    def _apply_modes(self, b: Buffer, params: list[str], who: str = "") -> None:
+    def _apply_modes(self, b: Buffer, params: list[str], who: str = "", actor: str = "") -> None:
         if not params:
             return
+        actor = actor or who        # who set it, even when the lines are shown raw (Protect needs it)
         letters, args = params[0], list(params[1:])
         sign = "+"
         changed = False
@@ -1497,6 +1523,11 @@ class Session(QObject):
                     elif sign == "-":
                         u.prefixes = u.prefixes.replace(pfx, "")
                     changed = True
+                    if sign == "-":
+                        self.control.mode_taken(b, actor, pfx, nick)
+                    elif pfx == "@" and lower(nick) == lower(self.nick):
+                        for other in list(b.users.values()):      # just got @: the people already here
+                            self.control.check(b, other.nick)
                 if who:
                     event = {("@", "+"): "Channel Operator", ("@", "-"): "Channel DeOp", ("+", "+"): "Channel Voice", ("+", "-"): "Channel DeVoice"}.get((pfx, sign))
                     if event:
@@ -1507,6 +1538,8 @@ class Session(QObject):
             else:
                 has_arg = c in self.modes_list or c in self.modes_key or (c in self.modes_on_set and sign == "+")
                 arg = args.pop(0) if has_arg and args else ""
+                if c == "b" and sign == "+":
+                    self.control.banned(b, actor, arg)
                 if c not in self.modes_list:
                     if sign == "+":
                         if c not in b.modes:
@@ -1554,6 +1587,7 @@ class Session(QObject):
                 self.add(b, INFO, "*", f"{m.nick} has invited {m.param(0)} to {m.param(1)}")
             return
         self.te("Invited", self._front(), INFO, (m.param(1), m.nick, m.userhost))
+        self.last_invite = (m.param(1), m.nick)
         self.notify.emit(self._front(), "invite")
         b = self.buffers.get(lower(m.param(1)))
         if self.is_channel(m.param(1)) and not (b is not None and b.joined):
