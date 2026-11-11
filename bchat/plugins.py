@@ -246,7 +246,7 @@ class PluginManager(QObject):
                 continue
             if channel is None:
                 return Context(self, s.server_buffer)
-            b = s.buffers.get(lower(channel))
+            b = s.buffers.get(s.fold(channel))
             if b is not None:
                 return Context(self, b)
         return None

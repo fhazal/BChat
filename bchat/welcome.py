@@ -266,8 +266,7 @@ def run_welcome(win, on_done=None) -> WelcomeDialog:
             s = win.connect_network(net)
             first = [c for c in net.autojoin.split(",") if c.strip()]
             if first:
-                from .protocol import lower
-                s.focus_next = lower(first[0].strip())     # #BChat in front, even if the server joins #chat first
+                s.focus_next = s.fold(first[0].strip())     # #BChat in front, even if the server joins #chat first
             else:
                 _ask_channel_when_in(win, s)
         else:

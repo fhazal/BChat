@@ -365,7 +365,7 @@ class AddressBookWindow(ToolWindow):
         best = 0.0
         where = ""
         for s in self.win.sessions.values():
-            st = s.friend_state.get(lower(c.get("nick", "")))
+            st = s.friend_state.get(s.fold(c.get("nick", "")))
             if st and st.get("seen", 0) > best:
                 best, where = st["seen"], s.net.name
         if best:

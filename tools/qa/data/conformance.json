@@ -18,7 +18,7 @@
   {"area": "Registration", "feature": "ISUPPORT: PREFIX, CHANTYPES, CHANMODES, EXTBAN, WHOX, NETWORK", "spec": "modern.ircdocs RPL_ISUPPORT", "category": "tested",
    "tests": ["tests/test_conformance.py::test_reg_isupport_is_read", "tests/test_conformance.py::test_mode_custom_prefixes_from_isupport"]},
   {"area": "Registration", "feature": "ISUPPORT CASEMAPPING (ascii / rfc1459 / strict-rfc1459)", "spec": "modern.ircdocs CASEMAPPING", "category": "tested",
-   "tests": ["tests/test_conformance.py::test_reg_casemapping_ascii_is_followed"], "finding": "FINDING-01"},
+   "tests": ["tests/test_conformance.py::test_reg_casemapping_ascii_is_followed", "tests/test_conformance.py::test_reg_casemapping_rfc1459_still_merges"]},
   {"area": "Registration", "feature": "Erroneous nick (432) handling", "spec": "RFC 2812 3.1.2", "category": "thin", "tests": [],
    "note": "handled in code (session.py 432); no conformance test yet"},
   {"area": "Capabilities", "feature": "REQ only offered + wanted, ACK sets active caps", "spec": "IRCv3 capability-negotiation", "category": "tested",
@@ -125,7 +125,7 @@
   {"area": "Unsupported", "feature": "UTF8ONLY / CHARSET handling, BOT mode (+B) display", "spec": "modern.ircdocs", "category": "unsupported", "tests": []}
  ],
  "findings": {
-  "FINDING-01": "CASEMAPPING from ISUPPORT is ignored. BChat always folds nicks and channel names rfc1459-style ([]\\~ = {}|^). On a CASEMAPPING=ascii server two different users like 'a[b' and 'a{b' become one entry in the nick list. Present since the first version.",
+  "FINDING-01": "CASEMAPPING from ISUPPORT is ignored. BChat always folds nicks and channel names rfc1459-style ([]\\~ = {}|^). On a CASEMAPPING=ascii server two different users like 'a[b' and 'a{b' become one entry in the nick list. Present since the first version. FIXED 11-11 (0.6.1): each connection folds by its server's CASEMAPPING (ascii, rfc1459, strict-rfc1459, rfc7613/rfc8265; unknown = rfc1459) and re-keys channels, nick lists, friends and whois data when 005 arrives. Saved settings (friends list, highlights, ignores, tab options, logs) keep rfc1459 folding so nothing stored changes.",
   "FINDING-02": "Friends tracking (start_friends) runs right after 001, but the server's 005 (ISUPPORT) with MONITOR/WATCH always comes after 001. So at connect BChat always polls with ISON, also on servers that offer MONITOR or WATCH (e.g. UnrealIRCd). MONITOR/WATCH only start when the friends list changes while connected. The existing friends tests start tracking after connecting, so they did not catch it. Affects the 0.6.0 batch C WATCH fallback. FIXED 11-11 (0.6.0-TEST3): tracking now starts at end of MOTD (376/422), or 5 s after 001."
  }
 }

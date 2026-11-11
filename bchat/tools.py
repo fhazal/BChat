@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QSpinBox, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
-from .protocol import lower, strip_format
+from .protocol import strip_format
 from .session import IGNORE_KINDS, IGNORE_STATS, Session
 from .widgets import FramedDialog
 
@@ -278,7 +278,7 @@ class BanListWindow(ToolWindow):
         self.view.clear()
         if self.s.state != "connected":
             return
-        self.s.ban_sinks[lower(self.channel)] = self
+        self.s.ban_sinks[self.s.fold(self.channel)] = self
         for letter, box in self.boxes.items():
             if box.isChecked() and box.isEnabled():
                 self.waiting.add(letter)
@@ -301,7 +301,7 @@ class BanListWindow(ToolWindow):
         for it in items:
             by_kind.setdefault(it.data(0, Qt.ItemDataRole.UserRole), []).append(it.text(1))
             self.view.takeTopLevelItem(self.view.indexOfTopLevelItem(it))
-        b = self.s.buffers.get(lower(self.channel))
+        b = self.s.buffers.get(self.s.fold(self.channel))
         if b is not None:
             for letter, masks in by_kind.items():
                 self.s.set_mode_for(b, "-" + letter, masks)
@@ -486,7 +486,7 @@ class FriendsWindow(ToolWindow):
             on, off = [], []
             seen = since = 0.0
             for s in self.win.sessions.values():
-                st = s.friend_state.get(lower(nick))
+                st = s.friend_state.get(s.fold(nick))
                 if st is None:
                     continue
                 (on if st["online"] else off).append(s.net.name)
@@ -531,7 +531,7 @@ class FriendsWindow(ToolWindow):
         if it is None:
             return
         nick = it.text(0)
-        online = [s for s in self.win.sessions.values() if s.friend_state.get(lower(nick), {}).get("online")]
+        online = [s for s in self.win.sessions.values() if s.friend_state.get(s.fold(nick), {}).get("online")]
         s = online[0] if online else self.win.session
         if s is not None:
             self.win.select_buffer(s.buffer(nick))

@@ -14,7 +14,7 @@ from PySide6.QtNetwork import QAbstractSocket, QHostAddress, QHostInfo, QNetwork
 
 from .config import Config, NetworkConfig, Server, random_nick
 from .textevents import EVENTS, SHORT, render
-from .protocol import Message, build_line, lower, mask_ban, parse_line, strip_format
+from .protocol import Message, build_line, folder, lower, mask_ban, parse_line, strip_format
 
 # kinds a line can have; the chat view maps them to colours
 MSG, SELF, ACTION, JOIN, PART, TOPIC, INFO, WHOIS, NOW_TALKING, HILITE, NOTICE, ERROR, CONNECT = (
@@ -99,7 +99,7 @@ class Buffer:
         if order == 4:
             return users
         by_rank = order in (0, 2)
-        users.sort(key=lambda u: (self.rank(u) if by_rank else 0, lower(u.nick)))
+        users.sort(key=lambda u: (self.rank(u) if by_rank else 0, self.session.fold(u.nick)))
         return users[::-1] if order in (2, 3) else users
 
     def counts(self) -> tuple[int, int]:
@@ -157,6 +157,8 @@ class Session(QObject):
         self.cfg = cfg
         self.server_buffer = Buffer(self, net.name, SERVER)
         self.buffers: dict[str, Buffer] = {}
+        self.casemapping = "rfc1459"   # FINDING-01: ISUPPORT CASEMAPPING; until then the IRC default
+        self.fold = lower              # this server's nick/channel folding: every key in buffers/users/... uses it
         self.nick = self._identity("nick") or random_nick()
         self.state = "disconnected"
         self.server_name = ""
@@ -283,7 +285,7 @@ class Session(QObject):
         return bool(name) and name[0] in self.chantypes
 
     def buffer(self, name: str, create: bool = True) -> Buffer | None:
-        key = lower(name)
+        key = self.fold(name)
         b = self.buffers.get(key)
         if b is None and create:
             b = Buffer(self, name, CHANNEL if self.is_channel(name) else QUERY)
@@ -294,7 +296,7 @@ class Session(QObject):
     def close_buffer(self, b: Buffer) -> None:
         if b.kind == CHANNEL and b.joined and self.state == "connected":
             self.send("PART", b.name, self.cfg.part_reason)
-        self.buffers.pop(lower(b.name), None)
+        self.buffers.pop(self.fold(b.name), None)
         self.buffer_removed.emit(b)
 
     def all_buffers(self) -> list[Buffer]:
@@ -305,7 +307,7 @@ class Session(QObject):
         line = Line(kind, left, text, ts if ts is not None else time.time(), colour=colour, msgid=msgid, reply_to=reply_to,
                     hidden=hidden)
         if b.kind == CHANNEL and kind in (MSG, SELF, HILITE) and left and left[0] not in "<>-":
-            u = b.users.get(lower(left))
+            u = b.users.get(self.fold(left))
             if u is not None:
                 from .userlist import icon_name
                 line.rank = icon_name(self.prefix_order, u.prefixes) or ""
@@ -519,7 +521,7 @@ class Session(QObject):
         self._who.stop()
         self.sock.abort()
         for b in list(self.buffers.values()):  # those channels belong to the old server
-            self.buffers.pop(lower(b.name), None)
+            self.buffers.pop(self.fold(b.name), None)
             self.buffer_removed.emit(b)
         self.net = NetworkConfig(host, [Server(host, port, ssl)], password=password, cycle=False)
         self.typed_by_hand = True
@@ -769,10 +771,10 @@ class Session(QObject):
 
     def ignored(self, prefix: str, kind: str = "") -> bool:
         """XChat's ignore_check: a mask only counts for the kinds ticked on it, and Unignore overrides the rest."""
-        low = lower(prefix)
+        low = self.fold(prefix)
         hit = False
         for mask in self.cfg.ignores:
-            if not fnmatch.fnmatchcase(low, lower(mask)):
+            if not fnmatch.fnmatchcase(low, self.fold(mask)):
                 continue
             kinds = self.cfg.ignore_kinds.get(mask, IGNORE_KINDS)
             if "U" in kinds:
@@ -789,12 +791,12 @@ class Session(QObject):
         out = []
         for nick in self.cfg.friends:
             nets = self.cfg.friend_nets.get(nick, "")
-            if not nets or lower(self.net.name) in [lower(x.strip()) for x in nets.split(",")]:
+            if not nets or self.fold(self.net.name) in [self.fold(x.strip()) for x in nets.split(",")]:
                 out.append(nick)
         return out
 
     def start_friends(self) -> None:
-        self.friend_state = {k: v for k, v in self.friend_state.items() if lower(k) in [lower(n) for n in self._friends_here()]}
+        self.friend_state = {k: v for k, v in self.friend_state.items() if self.fold(k) in [self.fold(n) for n in self._friends_here()]}
         nicks = self._friends_here()
         if self.state != "connected" or self._friends_wait:
             return
@@ -825,8 +827,8 @@ class Session(QObject):
 
     def _friend_away(self, nick: str, reason: str | None) -> None:
         """0.6.0: a friend went away (reason) or came back (None): one line in the server tab when it changes."""
-        key = lower(nick)
-        name = next((n for n in self._friends_here() if lower(n) == key), None)
+        key = self.fold(nick)
+        name = next((n for n in self._friends_here() if self.fold(n) == key), None)
         if name is None:
             return
         st = self.friend_state.setdefault(key, {"online": True, "seen": time.time(), "known": True, "since": time.time()})
@@ -840,8 +842,8 @@ class Session(QObject):
             self.add(self.server_buffer, INFO, "*", f"{name} is back.")
 
     def _friend_online(self, nick: str, online: bool) -> None:
-        key = lower(nick)
-        name = next((n for n in self.cfg.friends if lower(n) == key), None)
+        key = self.fold(nick)
+        name = next((n for n in self.cfg.friends if self.fold(n) == key), None)
         if name is None:
             return
         st = self.friend_state.setdefault(key, {"online": False, "seen": 0.0, "known": False, "since": 0.0})
@@ -893,8 +895,8 @@ class Session(QObject):
         parts = line.split(" ")
         chans = parts[1].split(",") if len(parts) > 1 else []
         keys = parts[2].split(",") if len(parts) > 2 else []
-        keep = [(c, keys[i] if i < len(keys) else "") for i, c in enumerate(chans) if lower(c) in allowed]
-        refused = [c for c in chans if lower(c) not in allowed]
+        keep = [(c, keys[i] if i < len(keys) else "") for i, c in enumerate(chans) if self.fold(c) in allowed]
+        refused = [c for c in chans if self.fold(c) not in allowed]
         if refused:
             self.add(self._front(), ERROR, "*", f"Lock: only {', '.join(allowed)} can be joined here ({', '.join(refused)} wasn't).")
         if not keep:
@@ -971,7 +973,7 @@ class Session(QObject):
         shown = self._hide_secret(line).partition(" :")[2] or text if self._SECRET_LINE.match(line) else text
         self.send("PRIVMSG", target, text)
         self.add(self._front(), SELF, f">{target}<", shown)
-        open_tab = self.buffers.get(lower(target))
+        open_tab = self.buffers.get(self.fold(target))
         if open_tab is not None and open_tab is not self._front():
             self.add(open_tab, SELF, self.nick, shown)
 
@@ -991,12 +993,12 @@ class Session(QObject):
     def whois(self, nick: str, target: Buffer | None = None) -> None:
         # asking twice with the same nick gets the idle time from the user's own server
         self._whois_target = target or self._front()
-        self._whois_nick = lower(nick)
+        self._whois_nick = self.fold(nick)
         self.send("WHOIS", nick, nick)
 
     def silent_whois(self, nick: str) -> None:
         """Fills the nick menu's info panel without printing anything, like XChat does."""
-        key = lower(nick)
+        key = self.fold(nick)
         if self.state == "connected" and key not in self._silent_whois:
             self._silent_whois[key] = {}
             self.send("WHOIS", nick)
@@ -1013,7 +1015,7 @@ class Session(QObject):
         if not pre or "a" not in types:
             self.add(b, ERROR, "*", "This server has no account bans (EXTBAN a). Use /ban nick instead.")
             return
-        u = b.users.get(lower(nick))
+        u = b.users.get(self.fold(nick))
         account = u.account if u is not None else ""
         if not account:
             self.add(b, ERROR, "*", f"BChat doesn't know {nick}'s account (not logged in, or the server doesn't say). "
@@ -1024,7 +1026,7 @@ class Session(QObject):
             self.send("KICK", b.name, nick, self.cfg.part_reason)
 
     def ban(self, b: Buffer, nick: str, kind: int, kick: bool = False) -> None:
-        u = b.users.get(lower(nick))
+        u = b.users.get(self.fold(nick))
         self.send("MODE", b.name, "+b", mask_ban(nick, u.host if u else "", kind))
         if kick:
             self.send("KICK", b.name, nick, self.cfg.part_reason)
@@ -1291,7 +1293,7 @@ class Session(QObject):
             if ts <= since or self.ignored(m.prefix, "C" if m.command == "PRIVMSG" else "N"):
                 continue
             text, nick = m.param(-1), m.nick
-            me = lower(nick) == lower(self.nick)
+            me = self.fold(nick) == self.fold(self.nick)
             if m.command == "NOTICE":
                 if text.startswith(""):
                     continue
@@ -1330,7 +1332,7 @@ class Session(QObject):
     def _irc_account(self, m: Message) -> None:
         acct = "" if m.param(0) == "*" else m.param(0)
         for b in self.buffers.values():
-            u = b.users.get(lower(m.nick))
+            u = b.users.get(self.fold(m.nick))
             if u:
                 u.account = acct
                 if acct:
@@ -1338,7 +1340,7 @@ class Session(QObject):
 
     def _irc_setname(self, m: Message) -> None:
         for b in self.buffers.values():
-            u = b.users.get(lower(m.nick))
+            u = b.users.get(self.fold(m.nick))
             if u:
                 u.realname = m.param(0)
 
@@ -1366,7 +1368,7 @@ class Session(QObject):
             if text.strip() == "Playback Complete.":
                 self._end_znc_playback()
                 return
-        if self._version_wait and lower(m.nick) == "*status" and time.time() - self._version_wait < 10:
+        if self._version_wait and self.fold(m.nick) == "*status" and time.time() - self._version_wait < 10:
             # ZNC answers 'version' with TWO lines: "ZNC 1.10.3 - https://znc.in" and its build options
             # ("IPv6: yes, SSL: yes, DNS: threads, ..."). Both are taken; anything else from *status shows as usual.
             plain = strip_format(text).strip()
@@ -1385,17 +1387,17 @@ class Session(QObject):
         if self.ignored(m.prefix, kind):
             return
         ts = self._ts(m)
-        from_me = lower(m.nick) == lower(self.nick)
+        from_me = self.fold(m.nick) == self.fold(self.nick)
         target = target.lstrip(self.statusmsg) if self.statusmsg else target
         dest = target if self.is_channel(target) else (target if from_me else m.nick)
-        if not from_me and not self.cfg.auto_dialog and not self.is_channel(target) and lower(dest) not in self.buffers \
+        if not from_me and not self.cfg.auto_dialog and not self.is_channel(target) and self.fold(dest) not in self.buffers \
                 and not (text.startswith("\x01") and not text.startswith("\x01ACTION")):
             # "Open a new tab when you receive a private message" is off: it shows where you are
             front = self._front()
             self.add(front, HILITE, f"*{m.nick}*", text.strip("\x01").removeprefix("ACTION "), ts)
             self.notify.emit(front, "priv")
             return
-        if not from_me and not self.is_channel(target) and lower(dest) not in self.buffers \
+        if not from_me and not self.is_channel(target) and self.fold(dest) not in self.buffers \
                 and not (text.startswith("\x01") and not text.startswith("\x01ACTION")) and self._query_flood(m.nick, time.time()):
             self.add(self.server_buffer, HILITE, f"*{m.nick}*", text.strip("\x01").removeprefix("ACTION "), ts)
             return
@@ -1403,7 +1405,7 @@ class Session(QObject):
             body = text.strip("\x01")
             verb, _, rest = body.partition(" ")
             if verb.upper() == "ACTION":
-                new = lower(dest) not in self.buffers
+                new = self.fold(dest) not in self.buffers
                 b = self.buffer(dest)
                 if new and not from_me:
                     self._whois_new_query(b, m.nick)
@@ -1416,15 +1418,15 @@ class Session(QObject):
                 self.last_ctcp_prefix = m.prefix          # DCC trust list checks the whole address
                 self._ctcp_request(m.nick, verb.upper(), rest)
             return
-        new = lower(dest) not in self.buffers
+        new = self.fold(dest) not in self.buffers
         b = self.buffer(dest)
         if new and not from_me:
             self._whois_new_query(b, m.nick)
-        u = b.users.get(lower(m.nick))
+        u = b.users.get(self.fold(m.nick))
         if u:
             u.last_msg = ts
         msgid = m.tags.get("msgid", "")
-        if b.typing.pop(lower(m.nick), None) is not None:
+        if b.typing.pop(self.fold(m.nick), None) is not None:
             self.typing_changed.emit(b)
         self._quote_reply(b, m.tags.get("+draft/reply") or m.tags.get("+reply", ""), ts)
         if from_me:
@@ -1473,19 +1475,19 @@ class Session(QObject):
 
     def _irc_tagmsg(self, m: Message) -> None:
         target = m.param(0)
-        if lower(m.nick) == lower(self.nick) or self.ignored(m.prefix, "C" if self.is_channel(target) else "P"):
+        if self.fold(m.nick) == self.fold(self.nick) or self.ignored(m.prefix, "C" if self.is_channel(target) else "P"):
             return
         state = m.tags.get("+typing") or m.tags.get("+draft/typing")
         if not state:
             return
         dest = target if self.is_channel(target) else m.nick
-        b = self.buffers.get(lower(dest))
+        b = self.buffers.get(self.fold(dest))
         if b is None:
             return
         if state == "active":
-            b.typing[lower(m.nick)] = (m.nick, time.time())
+            b.typing[self.fold(m.nick)] = (m.nick, time.time())
         else:
-            b.typing.pop(lower(m.nick), None)
+            b.typing.pop(self.fold(m.nick), None)
         self.typing_changed.emit(b)
 
     def typing_now(self, b: Buffer) -> list[str]:
@@ -1596,14 +1598,14 @@ class Session(QObject):
         if not ctx and text.startswith("[") and "] " in text:
             ctx = text[1:text.index("] ")]
         if ctx and self.is_channel(ctx):
-            b = self.buffers.get(lower(ctx))
+            b = self.buffers.get(self.fold(ctx))
             if b is not None and b.kind == CHANNEL and b.joined:
                 return b
         return None
 
     def _irc_notice(self, m: Message) -> None:
         target, text = m.param(0), m.param(-1)
-        if lower(m.nick) == "operserv" and "session limit" in text.lower():
+        if self.fold(m.nick) == "operserv" and "session limit" in text.lower():
             # services count kills, then auto-ban the whole IP (Anope maxsessionkill), so retrying can lock out every client on it
             self.want_connected = False
             self._reconnect.stop()
@@ -1613,7 +1615,7 @@ class Session(QObject):
             self.bouncer = "psyBNC"
         if text.startswith("\x01") and text.endswith("\x01"):
             verb, _, rest = text.strip("\x01").partition(" ")
-            if self._services_wait and lower(m.nick) == "chanserv" and verb.upper() == "VERSION":
+            if self._services_wait and self.fold(m.nick) == "chanserv" and verb.upper() == "VERSION":
                 self._services_known("atheme" if "atheme" in rest.lower() else "anope" if "anope" in rest.lower() else "")
                 return
             if self.ignored(m.prefix, "T"):
@@ -1628,25 +1630,25 @@ class Session(QObject):
         if not self._welcomed and "invalid password" in text.lower():
             self._login_refused(text)
             return
-        if self.chanserv_sink is not None and lower(m.nick) == "chanserv" and self.chanserv_sink(text):
+        if self.chanserv_sink is not None and self.fold(m.nick) == "chanserv" and self.chanserv_sink(text):
             return
         if not m.nick or "." in m.nick or self.state != "connected":
             where = self.buffer("(notices)") if self.cfg.notices_tab else self.server_buffer
             self.add(where, NOTICE, "-" + (m.nick or "server") + "-", text, self._ts(m))
             return
-        b = self.buffers.get(lower(target)) if self.is_channel(target) else (self._notice_channel(m, text) or self._front())
+        b = self.buffers.get(self.fold(target)) if self.is_channel(target) else (self._notice_channel(m, text) or self._front())
         self.add(b or self._front(), NOTICE, f"-{m.nick}-", text, self._ts(m))
         self.notify.emit(b or self._front(), "notice")
 
     def _irc_join(self, m: Message) -> None:
         chan = m.param(0)
         b = self.buffer(chan)
-        if lower(m.nick) == lower(self.nick):
+        if self.fold(m.nick) == self.fold(self.nick):
             since = next((ln.ts for ln in reversed(b.lines) if ln.kind in (MSG, SELF, HILITE, ACTION, NOTICE)), 0.0)
             b.joined = True
             b.users.clear()
             b.modes, b.mode_args = "", {}
-            self._names_fresh.discard(lower(chan))
+            self._names_fresh.discard(self.fold(chan))
             self.add(b, NOW_TALKING, "➤", f"Now talking on {b.name}")
             self.send("MODE", b.name)
             self.fetch_who(b.name)
@@ -1660,7 +1662,7 @@ class Session(QObject):
         if "extended-join" in self._cap_active and len(m.params) >= 3:
             joined.account = "" if m.param(1) == "*" else m.param(1)
             joined.realname = m.param(2)
-        b.users[lower(m.nick)] = joined
+        b.users[self.fold(m.nick)] = joined
         self.users_changed.emit(b)
         self.control.check(b, m.nick)
         if not self.cfg.hide_joinpart:
@@ -1671,14 +1673,14 @@ class Session(QObject):
         if b is None:
             return
         reason = m.param(1) if len(m.params) > 1 else ""
-        if lower(m.nick) == lower(self.nick):
+        if self.fold(m.nick) == self.fold(self.nick):
             b.joined = False
             b.users.clear()
             self.te("You Part", b, PART, (b.name,))
             self.users_changed.emit(b)
             self.buffer_changed.emit(b)
             return
-        b.users.pop(lower(m.nick), None)
+        b.users.pop(self.fold(m.nick), None)
         if not self.cfg.hide_joinpart:
             if reason:
                 self.te("Part with Reason", b, PART, (m.nick, m.userhost, b.name, reason), self._ts(m))
@@ -1689,7 +1691,7 @@ class Session(QObject):
         self.users_changed.emit(b)
 
     def _irc_quit(self, m: Message) -> None:
-        key = lower(m.nick)
+        key = self.fold(m.nick)
         for b in self.buffers.values():
             if key in b.users:
                 del b.users[key]
@@ -1706,8 +1708,8 @@ class Session(QObject):
         if b is None:
             return
         victim, reason = m.param(1), m.param(2)
-        b.users.pop(lower(victim), None)
-        if lower(victim) == lower(self.nick):
+        b.users.pop(self.fold(victim), None)
+        if self.fold(victim) == self.fold(self.nick):
             b.joined = False
             b.users.clear()
             self.te("You Kicked", b, PART, (b.name, m.nick, reason))
@@ -1724,7 +1726,7 @@ class Session(QObject):
         self.users_changed.emit(b)
 
     def _rejoin_after_kick(self, name: str, key: str) -> None:
-        b = self.buffers.get(lower(name))
+        b = self.buffers.get(self.fold(name))
         if self.state == "connected" and b is not None and not b.joined:
             self.send("JOIN", name, *([key] if key else []))
 
@@ -1744,7 +1746,7 @@ class Session(QObject):
             return False
         per = getattr(self, "_ctcp_by", {})
         self._ctcp_by = per
-        key = lower(nick)
+        key = self.fold(nick)
         mine = [t for t in per.get(key, []) if now - t < 60]
         if len(mine) >= c.flood_ctcp_person:                 # 0 = never answer anyone
             if len(mine) == c.flood_ctcp_person:
@@ -1792,24 +1794,24 @@ class Session(QObject):
 
     def _irc_nick(self, m: Message) -> None:
         old, new = m.nick, m.param(0)
-        was_me = lower(old) == lower(self.nick)
+        was_me = self.fold(old) == self.fold(self.nick)
         if was_me:
             self.nick = new
             self.state_changed.emit()
         for b in self.buffers.values():
-            u = b.users.pop(lower(old), None)
+            u = b.users.pop(self.fold(old), None)
             if u:
                 u.nick = new
-                b.users[lower(new)] = u
+                b.users[self.fold(new)] = u
                 if was_me:
                     self.te("Your Nick Changing", b, INFO, (new,))
                 else:
                     self.te("Change Nick", b, INFO, (old, new))
                 self.users_changed.emit(b)
-        q = self.buffers.pop(lower(old), None)
+        q = self.buffers.pop(self.fold(old), None)
         if q is not None:
             q.name = new
-            self.buffers[lower(new)] = q
+            self.buffers[self.fold(new)] = q
             self.te("Change Nick", q, INFO, (old, new))
             self.buffer_changed.emit(q)
         if was_me:
@@ -1848,7 +1850,7 @@ class Session(QObject):
             elif c in self.prefix_modes:
                 pfx = self.prefix_chars[self.prefix_modes.index(c)]
                 nick = args.pop(0) if args else ""
-                u = b.users.get(lower(nick))
+                u = b.users.get(self.fold(nick))
                 if u:
                     if sign == "+" and pfx not in u.prefixes:
                         u.prefixes += pfx
@@ -1857,7 +1859,7 @@ class Session(QObject):
                     changed = True
                     if sign == "-":
                         self.control.mode_taken(b, actor, pfx, nick)
-                    elif pfx == "@" and lower(nick) == lower(self.nick):
+                    elif pfx == "@" and self.fold(nick) == self.fold(self.nick):
                         for other in list(b.users.values()):      # just got @: the people already here
                             self.control.check(b, other.nick)
                 if who:
@@ -1895,10 +1897,10 @@ class Session(QObject):
             self.users_changed.emit(b)
 
     def _irc_away(self, m: Message) -> None:
-        if lower(m.nick) in {lower(n) for n in self._friends_here()}:
+        if self.fold(m.nick) in {self.fold(n) for n in self._friends_here()}:
             self._friend_away(m.nick, m.params[-1] if m.params and m.params[-1] else None)
         away = bool(m.params and m.params[-1]) and self.cfg.away_track
-        key = lower(m.nick)
+        key = self.fold(m.nick)
         for b in self.buffers.values():
             u = b.users.get(key)
             if u and u.away != away:
@@ -1906,7 +1908,7 @@ class Session(QObject):
                 self.users_changed.emit(b)
 
     def _irc_chghost(self, m: Message) -> None:
-        key = lower(m.nick)
+        key = self.fold(m.nick)
         for b in self.buffers.values():
             u = b.users.get(key)
             if u:
@@ -1915,7 +1917,7 @@ class Session(QObject):
     def _irc_invite(self, m: Message) -> None:
         if self.ignored(m.prefix, "I"):
             return
-        if lower(m.param(0)) != lower(self.nick):  # invite-notify: someone else was invited
+        if self.fold(m.param(0)) != self.fold(self.nick):  # invite-notify: someone else was invited
             b = self.buffer(m.param(1), False)
             if b is not None:
                 self.add(b, INFO, "*", f"{m.nick} has invited {m.param(0)} to {m.param(1)}")
@@ -1923,7 +1925,7 @@ class Session(QObject):
         self.te("Invited", self._front(), INFO, (m.param(1), m.nick, m.userhost))
         self.last_invite = (m.param(1), m.nick)
         self.notify.emit(self._front(), "invite")
-        b = self.buffers.get(lower(m.param(1)))
+        b = self.buffers.get(self.fold(m.param(1)))
         if self.is_channel(m.param(1)) and not (b is not None and b.joined):
             self.invited.emit(self, m.param(1), m.nick)
 
@@ -1956,10 +1958,10 @@ class Session(QObject):
                 self.list_sink.list_item(m.param(1), int(m.param(2)) if m.param(2).isdigit() else 0, m.param(3))
             elif n == 323:
                 self.list_sink.list_end()
-        elif n in (367, 348, 346) and lower(m.param(1)) in self.ban_sinks:
-            self.ban_sinks[lower(m.param(1))].ban_item({367: "b", 348: "e", 346: "I"}[n], m.param(2), m.param(3), m.param(4))
-        elif n in (368, 349, 347) and lower(m.param(1)) in self.ban_sinks:
-            self.ban_sinks[lower(m.param(1))].ban_end({368: "b", 349: "e", 347: "I"}[n])
+        elif n in (367, 348, 346) and self.fold(m.param(1)) in self.ban_sinks:
+            self.ban_sinks[self.fold(m.param(1))].ban_item({367: "b", 348: "e", 346: "I"}[n], m.param(2), m.param(3), m.param(4))
+        elif n in (368, 349, 347) and self.fold(m.param(1)) in self.ban_sinks:
+            self.ban_sinks[self.fold(m.param(1))].ban_end({368: "b", 349: "e", 347: "I"}[n])
         elif n in (302, 340) and self._local_waiting:          # USERHOST / USERIP for ourselves
             self._local_waiting -= 1
             reply = m.param(-1).strip().split()
@@ -1967,9 +1969,9 @@ class Session(QObject):
             self._local_found(host)
         elif n == 303 and self._ison_waiting:
             self._ison_waiting -= 1
-            on = {lower(x) for x in m.param(-1).split()}
+            on = {self.fold(x) for x in m.param(-1).split()}
             for nick in self._friends_here():
-                self._friend_online(nick, lower(nick) in on)
+                self._friend_online(nick, self.fold(nick) in on)
         elif n in (730, 731):
             for item in m.param(-1).split(","):
                 self._friend_online(item.split("!")[0], n == 730)
@@ -1980,7 +1982,7 @@ class Session(QObject):
             if n in (600, 604, 601, 605):
                 self._friend_online(m.param(1), n in (600, 604))
                 if n in (601, 605):
-                    self.friend_state.get(lower(m.param(1)), {}).pop("away", None)
+                    self.friend_state.get(self.fold(m.param(1)), {}).pop("away", None)
             elif n in (598, 609):
                 self._friend_online(m.param(1), True)
                 self._friend_away(m.param(1), m.param(-1) if n == 598 and len(m.params) > 5 else "")
@@ -2008,7 +2010,7 @@ class Session(QObject):
         elif n == 353:
             self._names(m)
         elif n == 366:
-            self._names_fresh.discard(lower(m.param(1)))
+            self._names_fresh.discard(self.fold(m.param(1)))
         elif n == 352:
             self._who_reply(m)
         elif n == 354:
@@ -2038,7 +2040,7 @@ class Session(QObject):
         elif n in (311, 312, 317, 318, 319, 301, 313, 320, 330, 335, 338, 344, 378, 379, 671, 276, 307, 275, 569):
             # 569 = UnrealIRCd's RPL_WHOISASN ("is connecting from AS9930 [provider]"), above 400 so named here
             self._whois_line(n, m)
-        elif len(p) >= 3 and n < 400 and lower(m.param(1)) in (self._whois_nick, *self._silent_whois):
+        elif len(p) >= 3 and n < 400 and self.fold(m.param(1)) in (self._whois_nick, *self._silent_whois):
             # servers add their own whois lines; XChat calls these "WhoIs Special"
             self._whois_line(n, m)
         elif n == 433 or n == 436:
@@ -2063,7 +2065,7 @@ class Session(QObject):
     def _topic_numeric(self, n: int, m: Message) -> None:
         # /topic #other, for a channel with no tab, shows here and must not open a tab
         name = m.param(1)
-        b = self.buffers.get(lower(name))
+        b = self.buffers.get(self.fold(name))
         target = b or self._front()
         if n == 331:
             if b is not None:
@@ -2081,6 +2083,28 @@ class Session(QObject):
                 b.topic_by = m.param(2).split("!")[0]
                 b.topic_at = float(m.param(3)) if m.param(3).isdigit() else 0.0
                 self.buffer_changed.emit(b)
+
+    def set_casemapping(self, value: str) -> None:
+        """FINDING-01: fold nicks and channels the way this server does, and re-key what we already hold."""
+        value = (value or "rfc1459").strip().lower()
+        fold = folder(value)
+        if value == self.casemapping and fold is self.fold:
+            return
+        self.casemapping, self.fold = value, fold
+        # keys made under the old folding: rebuild from the real names where we have them
+        self.buffers = {fold(b.name): b for b in self.buffers.values()}
+        for b in self.buffers.values():
+            b.users = {fold(u.nick): u for u in b.users.values()}
+            b.typing = {fold(nick): (nick, when) for nick, when in b.typing.values()}
+        self.ban_sinks = {fold(w.channel if hasattr(w, "channel") else w.b.name): w for w in self.ban_sinks.values()}
+        # these only hold folded keys; refolding is right for every mapping change seen in practice
+        self.friend_state = {fold(k): v for k, v in self.friend_state.items()}
+        self._away_seen = {fold(k): v for k, v in self._away_seen.items()}
+        self._silent_whois = {fold(k): v for k, v in self._silent_whois.items()}
+        self.whois_cache = {fold(k): v for k, v in self.whois_cache.items()}
+        self._names_fresh = {fold(x) for x in self._names_fresh}
+        self.focus_next = fold(self.focus_next)
+        self._whois_nick = fold(self._whois_nick)
 
     def _isupport(self, tokens: list[str]) -> None:
         for t in tokens:
@@ -2114,6 +2138,8 @@ class Session(QObject):
                 self.client_tag_deny = v
             elif k == "MODES" and v.isdigit() and int(v) > 0:
                 self.max_modes = int(v)
+            elif k == "CASEMAPPING":
+                self.set_casemapping(v)
             elif k == "NETWORK" and v:
                 self.network_token = v
                 self.server_buffer.name = v if not self.net.name else self.net.name
@@ -2213,11 +2239,11 @@ class Session(QObject):
             chans = self.net.autojoin.split(" ", 1)
             self.send("JOIN", *chans)
         for name in rejoin:
-            if not self.net.autojoin or lower(name) not in lower(self.net.autojoin):
+            if not self.net.autojoin or self.fold(name) not in self.fold(self.net.autojoin):
                 self.send("JOIN", name)
         for name, key in self.join_once:
-            if lower(name) not in {lower(n) for n in rejoin}:
-                self.focus_next = lower(name)
+            if self.fold(name) not in {self.fold(n) for n in rejoin}:
+                self.focus_next = self.fold(name)
                 self.send("JOIN", name, *([key] if key else []))
         self.join_once = []
 
@@ -2260,7 +2286,7 @@ class Session(QObject):
         if self.is_channel(target):
             b = self.buffer(target)
         else:
-            other = first.param(0) if lower(first.nick) == lower(self.nick) else first.nick
+            other = first.param(0) if self.fold(first.nick) == self.fold(self.nick) else first.nick
             b = self.buffer(other or target)
         n = len(msgs)
         who = self.bouncer or "the bouncer"
@@ -2300,18 +2326,18 @@ class Session(QObject):
 
     def own_rank(self, b: Buffer) -> str:
         """The prefix char for our own nick in this channel, for the light next to the nick box."""
-        u = b.users.get(lower(self.nick))
+        u = b.users.get(self.fold(self.nick))
         if u is None:
             return ""
         return next((c for c in self.prefix_order if c in u.prefixes), "")
 
     def _names(self, m: Message) -> None:
-        b = self.buffers.get(lower(m.param(2)))
+        b = self.buffers.get(self.fold(m.param(2)))
         if b is None:  # /names #other, no tab for it
             self.add(self._front(), INFO, "*", f"Names on {m.param(2)}: {m.param(-1)}")
             return
-        if lower(b.name) not in self._names_fresh:
-            self._names_fresh.add(lower(b.name))
+        if self.fold(b.name) not in self._names_fresh:
+            self._names_fresh.add(self.fold(b.name))
             # a fresh NAMES reply replaces the list, but keep what WHO already told us
             b.__dict__["_old"] = b.users
             b.users = {}
@@ -2322,17 +2348,17 @@ class Session(QObject):
                 i += 1
             pfx, full = item[:i], item[i:]
             nick, _, host = full.partition("!")
-            prev = old.get(lower(nick))
-            b.users[lower(nick)] = User(nick, pfx, host or (prev.host if prev else ""),
+            prev = old.get(self.fold(nick))
+            b.users[self.fold(nick)] = User(nick, pfx, host or (prev.host if prev else ""),
                                          prev.away if prev else False, prev.realname if prev else "")
         self.users_changed.emit(b)
 
     def _who_reply(self, m: Message) -> None:
         # :srv 352 me #chan user host server nick flags :hops real
-        b = self.buffers.get(lower(m.param(1)))
+        b = self.buffers.get(self.fold(m.param(1)))
         if b is None:
             return
-        u = b.users.get(lower(m.param(5)))
+        u = b.users.get(self.fold(m.param(5)))
         if u is None:
             return
         away = m.param(6).startswith("G") and self.cfg.away_track
@@ -2348,8 +2374,8 @@ class Session(QObject):
         if m.param(1) != "152":
             self.add(self.server_buffer, INFO, "*", " ".join(m.params[1:]))
             return
-        b = self.buffers.get(lower(m.param(2)))
-        u = b.users.get(lower(m.param(6))) if b else None
+        b = self.buffers.get(self.fold(m.param(2)))
+        u = b.users.get(self.fold(m.param(6))) if b else None
         if u is None:
             return
         away = m.param(7).startswith("G") and self.cfg.away_track
@@ -2379,7 +2405,7 @@ class Session(QObject):
         return m.param(-1).rpartition(" from ")[2] or m.param(2)
 
     def _whois_line(self, n: int, m: Message) -> None:
-        key = lower(m.param(1))
+        key = self.fold(m.param(1))
         if key in self._silent_whois and self._whois_target is None:
             info = self._silent_whois[key]
             if n == 311:
@@ -2440,7 +2466,7 @@ class Session(QObject):
             text = f"{tag} {m.param(-1)}"
             country = self._country_text(m)
             for ch in self.buffers.values():
-                u = ch.users.get(lower(m.param(1)))
+                u = ch.users.get(self.fold(m.param(1)))
                 if u:
                     u.country = country
         else:

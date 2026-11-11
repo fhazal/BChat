@@ -66,8 +66,30 @@ def build_line(command: str, *params: str) -> str:
 
 
 def lower(s: str) -> str:
-    """rfc1459 case folding, used for all nick and channel lookups."""
+    """rfc1459 case folding: the default before (or without) a server's CASEMAPPING, and for settings."""
     return s.lower().replace("[", "{").replace("]", "}").replace("\\", "|").replace("~", "^")
+
+
+_ASCII_FOLD = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+def _strict_rfc1459(s: str) -> str:
+    return s.lower().replace("[", "{").replace("]", "}").replace("\\", "|")
+
+
+# FINDING-01: ISUPPORT CASEMAPPING -> how that server folds nicks and channel names
+CASEMAPPINGS = {
+    "rfc1459": lower,
+    "strict-rfc1459": _strict_rfc1459,
+    "ascii": lambda s: s.translate(_ASCII_FOLD),
+    "rfc7613": str.lower,      # PRECIS (Ergo); Unicode lower-casing is the close, safe fit
+    "rfc8265": str.lower,
+}
+
+
+def folder(casemapping: str):
+    """The fold function for a CASEMAPPING value; unknown or empty -> rfc1459 (the IRC default)."""
+    return CASEMAPPINGS.get((casemapping or "").strip().lower(), lower)
 
 
 # --- mIRC formatting ---------------------------------------------------------

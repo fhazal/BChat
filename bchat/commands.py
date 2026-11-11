@@ -399,14 +399,14 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
     elif cmd in ("join", "j"):
         if args:
             name = args[0] if s.is_channel(args[0]) or "," in args[0] else "#" + args[0]  # as XChat does
-            existing = s.buffers.get(lower(name))
+            existing = s.buffers.get(s.fold(name))
             if existing is not None:
                 ui.select_buffer(existing)
             else:
-                s.focus_next = lower(name)
+                s.focus_next = s.fold(name)
             s.send("JOIN", name, *args[1:2])
             if b.placeholder:      # the empty tab becomes this channel
-                s.focus_next = lower(name)
+                s.focus_next = s.fold(name)
                 ui.close_buffer(b)
     elif cmd in ("part", "leave"):
         target = args[0] if args and s.is_channel(args[0]) else chan

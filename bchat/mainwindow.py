@@ -100,7 +100,7 @@ class InputBox(QLineEdit):
         if len(word) < 2 or low in (w.lower() for w in cfg.spell_words):
             return True
         b = self.fixed or self.win.buf
-        if b is not None and lower(word) in b.users:      # nicks aren't typos
+        if b is not None and b.session.fold(word) in b.users:      # nicks aren't typos
             return True
         return speller().known([low]) != set()
 
@@ -916,7 +916,7 @@ class MainWindow(FramelessWindow):
         else:
             self._file_item(b)
             # a new tab only takes the front when nothing is being read, or the user asked for it
-            asked = lower(b.name) == b.session.focus_next
+            asked = b.session.fold(b.name) == b.session.focus_next
             reading_server = self.buf is None or (self.buf.kind == SERVER and self.buf.session is b.session)
             focus = self.cfg.tab_focus
             if asked:
@@ -1235,7 +1235,7 @@ class MainWindow(FramelessWindow):
             s = self.new_server_tab()
         name = "<none>"
         n = 2
-        while lower(name) in s.buffers:
+        while s.fold(name) in s.buffers:
             name = f"<none> ({n})"
             n += 1
         b = s.buffer(name)
@@ -1831,11 +1831,11 @@ class MainWindow(FramelessWindow):
         s = self.session
         if s is None or not s.is_channel(name):
             return
-        existing = s.buffers.get(lower(name))
+        existing = s.buffers.get(s.fold(name))
         if existing is not None:
             self.select_buffer(existing)
         else:
-            s.focus_next = lower(name)
+            s.focus_next = s.fold(name)
         s.send("JOIN", name)
 
     # --- irc:// links ------------------------------------------------------------------
@@ -1861,7 +1861,7 @@ class MainWindow(FramelessWindow):
         net, s = self._network_for_host(link.host)
         chan = link.channels[0] if link.channels else ""
         if s is not None and s.state == "connected" and chan:
-            b = s.buffers.get(lower(chan))
+            b = s.buffers.get(s.fold(chan))
             if b is not None and b.joined:          # already there: just show it
                 self.select_buffer(b)
                 self.bring_to_front()
@@ -1890,7 +1890,7 @@ class MainWindow(FramelessWindow):
         s = self.session_for(net)
         if s.state == "connected":
             if chan:
-                s.focus_next = lower(chan)
+                s.focus_next = s.fold(chan)
                 s.send("JOIN", chan, *([link.key] if link.key else []))
             else:
                 self.select_buffer(s.server_buffer)
@@ -2050,7 +2050,7 @@ class MainWindow(FramelessWindow):
         s = b.session if b is not None else None
         href = chat.anchorAt(pos)
         word = chat.word_at(pos)
-        user = b.users.get(lower(word)) if b is not None and word else None
+        user = b.users.get(b.session.fold(word)) if b is not None and word else None
         msgid, _quoted = chat.line_at(pos)
         can_reply = bool(msgid) and b is not None and s is not None and b.kind in (CHANNEL, QUERY) and s.client_tag_ok("+draft/reply")
         if user is not None and not href:
@@ -2903,7 +2903,7 @@ class MainWindow(FramelessWindow):
         s = b.session
         if s is None or not (self.cfg.nick_colours or self.cfg.address_book):
             return None
-        u = b.users.get(lower(nick))
+        u = b.users.get(b.session.fold(nick))
         return people.colour_for(self.cfg, s.net.name, nick, u.host if u is not None else "")
 
     def list_colour_rule(self, s: Session, nick: str, host: str) -> str | None:
@@ -3319,7 +3319,7 @@ class MainWindow(FramelessWindow):
             return
         s = self.session_for(net)
         if s.state == "connected":
-            s.focus_next = lower(f.channel)
+            s.focus_next = s.fold(f.channel)
             s.send("JOIN", f.channel, *([f.key] if f.key else []))
             return
         s.join_once.append((f.channel, f.key))

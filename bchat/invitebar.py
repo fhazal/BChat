@@ -63,7 +63,7 @@ class InviteBar(QFrame):
         self.waiting.pop()
         s = w["s"]
         if s.state == "connected":
-            s.focus_next = lower(w["chan"])
+            s.focus_next = s.fold(w["chan"])
             s.send("JOIN", w["chan"])
         self.refresh()
 
@@ -76,7 +76,7 @@ class InviteBar(QFrame):
         now = time.time()
 
         def still_wanted(w) -> bool:
-            b = w["s"].buffers.get(lower(w["chan"]))
+            b = w["s"].buffers.get(w["s"].fold(w["chan"]))
             return now - w["ts"] < KEEP_SECONDS and w["s"].state == "connected" and not (b is not None and b.joined)
         self.waiting = [w for w in self.waiting if still_wanted(w)]
         w = self.current()

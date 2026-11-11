@@ -140,8 +140,6 @@ def test_reg_isupport_is_read(app, bchat, qa_server):
     assert (s.modes_list, s.modes_key, s.modes_on_set) == ("beI", "k", "l")
 
 
-@pytest.mark.xfail(strict=True, reason="FINDING-01: CASEMAPPING from ISUPPORT is ignored; BChat always folds nicks "
-                                       "rfc1459-style, so on a CASEMAPPING=ascii server 'a[b' and 'a{b' become one user")
 def test_reg_casemapping_ascii_is_followed(app, bchat, qa_server):
     srv = qa_server(isupport={"CASEMAPPING": "ascii"})
     _, w, s = bchat(srv)
@@ -149,6 +147,18 @@ def test_reg_casemapping_ascii_is_followed(app, bchat, qa_server):
     srv.add_ghost(CH, "a[b", announce=True)
     srv.add_ghost(CH, "a{b", announce=True)
     assert wait(app, lambda: len(s.buffers[CH].users) == 3, 4000)
+    assert s.casemapping == "ascii"
+    assert s.buffers[CH].users[s.fold("A[B")].nick == "a[b"
+
+
+def test_reg_casemapping_rfc1459_still_merges(app, bchat, qa_server):
+    """FINDING-01: on an rfc1459 server a[b and a{b are one nick, so only one of them is listed."""
+    srv = qa_server(isupport={"CASEMAPPING": "rfc1459"})
+    _, w, s = bchat(srv)
+    assert in_chan(app, s)
+    srv.add_ghost(CH, "a[b", announce=True)
+    assert wait(app, lambda: len(s.buffers[CH].users) == 2, 4000)
+    assert s.buffers[CH].users.get(s.fold("A{B")) is not None
 
 
 # ==== 3. Capability negotiation (IRCv3 capability-negotiation, cap-notify) =====================================

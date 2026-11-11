@@ -10,7 +10,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
                                QPlainTextEdit, QSpinBox, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from .protocol import lower
 from .session import Buffer, Session
 from .tools import ToolWindow, button
 from .widgets import icon
@@ -27,7 +26,7 @@ LISTS = (("b", "Bans"), ("e", "Exceptions"), ("I", "Invites"))
 
 
 def is_op(s: Session, b: Buffer) -> bool:
-    me = b.users.get(lower(s.nick))
+    me = b.users.get(b.session.fold(s.nick))
     if me is None:
         return False
     order = s.prefix_order
@@ -235,7 +234,7 @@ class ChannelCentral(ToolWindow):
             v.clear()
         if self.s.state != "connected":
             return
-        self.s.ban_sinks[lower(self.b.name)] = self
+        self.s.ban_sinks[self.s.fold(self.b.name)] = self
         for letter in self.views:
             self.waiting.add(letter)
             self.s.send("MODE", self.b.name, "+" + letter)

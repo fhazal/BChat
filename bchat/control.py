@@ -91,7 +91,7 @@ class Control:
         return bool(self.s.cfg.control_on and self.s.cfg.control_rules)
 
     def _have_op(self, b) -> bool:
-        return self.s.own_rank(b) == "@" or "@" in (b.users.get(lower(self.s.nick)).prefixes if b.users.get(lower(self.s.nick)) else "")
+        return self.s.own_rank(b) == "@" or "@" in (b.users.get(b.session.fold(self.s.nick)).prefixes if b.users.get(b.session.fold(self.s.nick)) else "")
 
     def _later(self, fn) -> None:
         lo, hi = DELAY
@@ -103,7 +103,7 @@ class Control:
         """Someone joined or logged in: give what their rule says, after the wait."""
         if not self._on() or b.kind != "channel" or lower(nick) == lower(self.s.nick):
             return
-        u = b.users.get(lower(nick))
+        u = b.users.get(b.session.fold(nick))
         if u is None or not self._have_op(b):
             return
         r = rule_for(self.s.cfg, self.s.net.name, b.name, u.nick, u.host, u.account)
@@ -113,10 +113,10 @@ class Control:
 
     def _give(self, chan: str, nick: str, r: dict, why: str) -> None:
         s = self.s
-        b = s.buffers.get(lower(chan))
+        b = s.buffers.get(s.fold(chan))
         if s.state != "connected" or b is None or not b.joined or not self._have_op(b):
             return
-        u = b.users.get(lower(nick))
+        u = b.users.get(b.session.fold(nick))
         give = r.get("give", "@")
         if u is None or give in u.prefixes or (give == "+" and "@" in u.prefixes):
             return                                      # gone, or ChanServ / another op already did it
@@ -154,7 +154,7 @@ class Control:
     def mode_taken(self, b, who: str, pfx: str, nick: str) -> None:
         if not self._on() or pfx not in MODE or not self._from_someone(who) or not self._have_op(b):
             return
-        u = b.users.get(lower(nick))
+        u = b.users.get(b.session.fold(nick))
         if u is None:
             return
         r = rule_for(self.s.cfg, self.s.net.name, b.name, u.nick, u.host, u.account)
@@ -173,7 +173,7 @@ class Control:
 
     def _unban(self, chan: str, nick: str, mask: str) -> None:
         s = self.s
-        b = s.buffers.get(lower(chan))
+        b = s.buffers.get(s.fold(chan))
         if s.state != "connected" or b is None or not b.joined or not self._have_op(b):
             return
         s.add(b, "info", "", f"{GREY}Protect: {nick} is protected, removing the ban {mask}")
