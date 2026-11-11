@@ -41,6 +41,8 @@ To join channels automatically on connect, open **Edit...** for the network in t
 ### How do I leave a channel?
 Right-click the channel in the list on the left (or its tab) and choose **Leave Channel**, or type `/part` in that channel.
 
+To leave every channel on a network at once, type `/partall` (you can add a reason: `/partall see you tomorrow`). The tabs stay open, like after a normal leave.
+
 ### How do I change my nickname?
 Type `/nick NewName`. To change it for good, open the Network List and change **Nick name:** under **User Information**, or per network in **Edit...** (untick **Use global user information** first).
 
@@ -59,6 +61,9 @@ Type `/nick NewName`. To change it for good, open the Network List and change **
 - `/away reason` and `/back`: mark yourself away and back
 - `/whois nick`: see who someone is
 - `/topic`: show the channel topic
+- `/partall`: leave every channel on this network
+- `/online`: how long you've been connected to each network
+- `/motd`: show the server's welcome message
 - `/help`: every command, with a search box (also **Help → Contents**, `F1`)
 
 ### How do I switch between tabs?
@@ -91,8 +96,20 @@ A bar appears above the input box with **Join** and **Ignore**. BChat never join
 ### What is Channel Central?
 Double-click in the channel's chat (like mIRC), right-click the channel tab and choose **Channel Central...**, or type `/channel`. It shows the topic, the channel modes, bans, exceptions and invites in one window. Channel operators can change them; everyone else can look.
 
+### How do I give someone auto-op or auto-voice?
+You need to be an operator (**@**) in the channel. Right-click their nick → **Operator Actions** → **ChanServ Access...** and pick **Auto-op @**, **Auto-voice +** or **No access**. BChat asks ChanServ what they have now, shows the exact line it will send, and ChanServ's answer appears in the channel. It works with Anope and Atheme services. The person must be registered with NickServ.
+
 ### How do I find something someone said earlier?
 **Window → Search Text...** (`Ctrl+F`) searches the tab you're in. `/lastlog word` lists every line with that word.
+
+### Can I hide the server's welcome message?
+Yes: **Settings → Preferences → General**, tick **Skip the server's welcome message (MOTD)** (off at first). Type `/motd` to read it any time.
+
+### Can join and part lines be shorter?
+**Settings → Preferences → Text box**, tick **Short join and part lines**. Then you see "Wira has joined" instead of "Wira (wira@host) has joined #chat". Hover a nick in the nick list to see the address. If you changed the wording yourself in Text Events, yours stays.
+
+### How long have I been online?
+Type `/online`: it shows how long you've been connected to each network, and how long BChat has been running. Hovering a network in the list on the left shows it too.
 
 ### What is the line across the chat?
 It's the **marker line**. It shows where you stopped reading when you left that tab. **Window → Reset Marker Line** (`Ctrl+M`) moves it. To hide it, untick **Show marker line** in **Settings → Preferences → Text box**.
@@ -146,6 +163,11 @@ Yes: **Settings → Preferences → General → Start with Windows**. Tick **Sta
 
 ---
 
+### I use a bouncer (ZNC, soju). Does BChat know?
+Yes. BChat recognises ZNC, soju and psyBNC by what they tell it, and says once in the server tab: "Connected through ZNC (a bouncer)". Hovering the network shows it too, and the quit question reminds you that you stay online there.
+
+When BChat was closed, ZNC plays back what you missed. BChat shows those lines under one grey line, "Played back by ZNC: 12 lines from while BChat was closed", with the times they were really said, and a "Now live" line after them. BChat doesn't also ask the server for history, so nothing shows twice.
+
 ### Can BChat rejoin a channel when I'm kicked?
 **Settings → Preferences → General**, tick **Rejoin a channel when I'm kicked** (off at first). In the same place, **Show who someone is when they start a private chat with me** (on at first) shows a WhoIs at the top of a new private chat.
 
@@ -172,6 +194,14 @@ Yes. In **Settings → Preferences → Colors**, click any colour to change it. 
 
 ### Where does BChat keep my passwords?
 In **Windows Credential Manager**, not in a settings file. That covers server, SASL, NickServ and proxy passwords. Your settings file (`%APPDATA%\BChat\config.json`) holds no passwords.
+
+### Can I log in without a password?
+Yes, with a certificate (SASL EXTERNAL), on networks whose services support it (Anope and Atheme do). Open the network's **Edit...** window and set **Log in with:** to **Certificate (SASL EXTERNAL)**:
+1. Click **Make New**. BChat makes a certificate on your PC (its private key never leaves your PC).
+2. Connect and log in once with your password as usual.
+3. Open **Edit...** again and click **Add to NickServ**. NickServ answers in the server tab.
+
+From then on BChat logs you in with the certificate, and no password is stored or sent. It needs an SSL server (a `+` port). You can also use your own certificate with **Choose File...**.
 
 ### BChat asked me to check a server's certificate. What should I do?
 BChat checks every encrypted server's certificate. If it can't be verified (often a small network that made its own certificate), BChat shows its details and asks:
@@ -242,7 +272,7 @@ Yes. BChat runs Python plugins written for XChat's Python interface, so most XCh
 Someone else has it. BChat tries your **Second choice** and **Third choice** nicknames from the Network List. You can also type `/nick AnotherName`.
 
 ### A network says I must identify or log in
-If you registered your nick with NickServ, put the password in the network's **Edit...** window, as **NickServ password:** or **SASL account:** and **SASL password:**. BChat sends it each time you connect, and keeps it in Windows Credential Manager.
+If you registered your nick with NickServ, put the password in the network's **Edit...** window: either **NickServ password:**, or **Log in with: Password (SASL)** with **SASL account:** and **SASL password:**. BChat sends it each time you connect, and keeps it in Windows Credential Manager. To log in without a password, see [Can I log in without a password?](#can-i-log-in-without-a-password).
 
 ### Windows says "Windows protected your PC" when I install
 The installer isn't code-signed yet, so SmartScreen warns about it. Choose **More info → Run anyway**.

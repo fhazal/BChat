@@ -18,7 +18,7 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab?logo=python&logoColor=white)
 ![Qt 6](https://img.shields.io/badge/Qt-6%20(PySide6)-41cd52?logo=qt&logoColor=white)
 [![Latest release](https://img.shields.io/github/v/release/fhazal/BChat?label=release&color=f5c2e7)](https://github.com/fhazal/BChat/releases/latest)
-[![VirusTotal: 0/70 for 0.3.0](https://img.shields.io/badge/VirusTotal-0%2F70%20clean-a6e3a1?logo=virustotal&logoColor=white)](https://www.virustotal.com/gui/file/ec85ee86fa021daa3a6183bdffd33b6e9e0612e05a7631fa41e1f424f10f0365)
+[![VirusTotal: 0/66 for 0.4.0](https://img.shields.io/badge/VirusTotal-0%2F66%20clean-a6e3a1?logo=virustotal&logoColor=white)](https://www.virustotal.com/gui/file/d4f4a7f211f40adb1a522fc0d01e15564f26eef64c0682136170ef878b1eb591)
 
 [![Website](https://img.shields.io/badge/Website-bajubesi.org-8b5cf6?style=for-the-badge)](https://bajubesi.org)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20us-ff5e5b?logo=ko-fi&logoColor=white&style=for-the-badge)](https://ko-fi.com/bajubesi)
@@ -34,17 +34,13 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 
 ---
 
-## 🆕 What's new in 0.3.0
+## 🆕 What's new in 0.4.0
 
-- 🐞 **One-click problem reports**: after a crash or a freeze BChat offers to send a report, and *Help → Report a Problem...* sends one any time. You see exactly what is sent first; nicks, channels, addresses and passwords are replaced, and chat text is never included.
-- 📚 **Daily logs and a Logs window**: a new log file every day (or month), *Window → Logs...* to read and search them in the chat's own colours, and an optional clean-up of old days. Logging stays off until you turn it on, and BChat asks how long to keep them.
-- 🎨 **Nick colours** like mIRC's: rules by nick, address or a whole host, for one network or all, in the chat and the nick list.
-- 📇 **Address Book**: one card per person with other nicks, real name, notes and colour. Its *Tell me when they come online* tick is your Friends List.
-- ⏱️ **/timer** and **/alias**: run a command later or again and again, and make your own commands with `$1`, `$2-`, `$nick`, `$chan` and `|`.
-- 🏛️ **Channel Central**: topic, modes, key, limit, bans, exceptions and invites in one window. Double-click in a channel's text, or `/channel`.
-- 💬 **Reply** and **typing**: right-click a line (or `Alt+R`) to answer it, and see *"Belon is typing…"*, on networks that support it. Showing your own typing is off until you turn it on.
-- 🖱️ Double-click a nick in the nick list opens a private chat, like mIRC.
-- 🚀 *Start with Windows* puts itself back if something removed it.
+- 🔌 **Bouncer detection**: BChat knows when it's talking to ZNC, soju or psyBNC and says so once. What ZNC plays back shows under one grey line with the times it was really said, then *Now live*, so nothing shows twice. Hover the network to see the bouncer and how long you've been online.
+- 🔑 **Log in with a certificate** (SASL EXTERNAL): no password stored or sent. *Make New* makes one on your PC, *Add to NickServ* registers it, and BChat logs in with it from then on.
+- 🛡️ **ChanServ Access** in the nick menu: give someone auto-op (@) or auto-voice (+), or take it away, without typing services commands. BChat shows what they have now and the exact line it sends (Anope and Atheme).
+- 🤫 **Skip the server's welcome message** and **short join and part lines**, both off until you turn them on.
+- ⌨️ `/partall` leaves every channel at once, `/online` shows how long you've been connected, `/motd` shows the welcome message any time.
 
 ---
 
@@ -74,7 +70,7 @@ A network tree with folders and dotted lines, a topic bar, inline chat and a nic
 <td width="50%" valign="top">
 
 ### 🌐 Networks and servers
-A Network List with auto-connect and auto-join, SSL/TLS, SASL, NickServ, ZNC bouncers and proxies. Open a quick `/server` tab and save it as a network later; the tree updates straight away. New to IRC? The welcome screen on first start has you pick a nickname and a network, and you're talking.
+A Network List with auto-connect and auto-join, SSL/TLS, SASL, certificate login, NickServ, ZNC and soju bouncers, and proxies. Open a quick `/server` tab and save it as a network later; the tree updates straight away. New to IRC? The welcome screen on first start has you pick a nickname and a network, and you're talking.
 
 </td>
 </tr>
@@ -155,6 +151,7 @@ All of them can be changed in *Settings → Advanced → Keyboard Shortcuts*.
 <td width="55%" valign="top">
 
 - **Passwords stay out of files.** Network, SASL, NickServ and proxy passwords are kept in Windows Credential Manager. Older settings move there by themselves on the next save.
+- **Log in without a password.** With a certificate (SASL EXTERNAL) nothing secret is stored or sent; its private key never leaves your PC.
 - **Certificates are checked.** A bad or changed certificate gets a clear question with its fingerprint: *Don't Connect*, *Connect Once* or *Always Trust*. If a trusted certificate ever changes, BChat warns you.
 - **Risky links ask first.** Program downloads, look-alike names and bare IP links show where they lead before they open. Normal links still open with one click.
 - **DCC tricks are stripped.** Hidden right-to-left characters that disguise `photo.exe` as a picture are removed from file names, and programs need your OK.
@@ -180,7 +177,7 @@ All of them can be changed in *Settings → Advanced → Keyboard Shortcuts*.
 
 ### Antivirus
 
-The 0.3.0 installer was checked by [VirusTotal](https://www.virustotal.com/gui/file/ec85ee86fa021daa3a6183bdffd33b6e9e0612e05a7631fa41e1f424f10f0365): none of the 70 antivirus engines that scanned it flagged it. Because the installer isn't code-signed yet, some antivirus programs may still stop it or the self-update. Either run the installer yourself, or add BChat's install folder as an exception in your antivirus.
+The 0.4.0 installer was checked by [VirusTotal](https://www.virustotal.com/gui/file/d4f4a7f211f40adb1a522fc0d01e15564f26eef64c0682136170ef878b1eb591): none of the 66 antivirus engines that scanned it flagged it. Because the installer isn't code-signed yet, some antivirus programs may still stop it or the self-update. Either run the installer yourself, or add BChat's install folder as an exception in your antivirus.
 
 ---
 
@@ -241,8 +238,7 @@ The installer is built with [PyInstaller](https://pyinstaller.org) and [Inno Set
 
 ## 🗺️ Roadmap
 
-- 🔌 Bouncer detection: BChat knows when it's on ZNC or soju and offers their commands
-- 🔑 Client certificates (SASL EXTERNAL) for networks and bouncers that use them
+- 🔌 soju: list the networks inside your bouncer in the Network List
 - 🧭 More of what veterans expect from the big clients, kept out of the newcomer's way
 - 🏷️ Nick list rank icons
 - ✍️ A code-signed installer, so Windows and antivirus programs trust it straight away
