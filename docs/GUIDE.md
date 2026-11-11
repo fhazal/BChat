@@ -90,6 +90,9 @@ Type `/nick NewName`. To change it for good, open the Network List and change **
 - `/motd`: show the server's welcome message
 - `/help`: every command, with a search box (also **Help → Contents**, `F1`)
 
+### What does // do? Is it safe for passwords? Why did //ns identify say "No channel joined"?
+Yes, in BChat 0.6.1 and newer `//` is safe for passwords: `//ns identify yourpassword`, `//oper name password` and `//whois nick` run the command the mIRC way, exactly like one slash. Nothing is said in the channel, and the raw log hides the password with stars. Older BChat (0.6.0 and before) sent a `//` line as a chat message instead: on a server tab that gave *No channel joined*, and in a channel the password would have gone to everyone, so update. To say a line that starts with `/` as chat, use `/say`, for example `/say /me is a command`.
+
 ### How do I switch between tabs?
 Click a channel in the tree on the left, or use `Alt+1` to `Alt+9`, or `Ctrl+PageUp` / `Ctrl+PageDown`. **View → Channel Switcher** chooses between the tree and tabs.
 
