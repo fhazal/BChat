@@ -33,7 +33,14 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 
 ---
 
-## 🆕 What's new in 0.6.0
+## 🆕 What's new in 0.6.1
+
+- 🔑 **`//command` works the mIRC way**: `//ns identify ...` runs the command. Before, two slashes said the line as chat, so in a channel a password could go to everyone. Passwords typed to `/ns` or `/oper` are now hidden in the raw log too. To say a line that starts with `/`, use `/say`.
+- 🧹 **Bug fixes**: nicks like `[x]` and `{x}` stay apart on servers that say so; *Add Network* on a `/server` tab no longer fails; Ergo servers are no longer called a bouncer; *IPv4 only* / *IPv6 only* now says when a server has only the other kind of address.
+- ⚡ **No freeze on a flood of lines**: thousands of lines at once (big history, busy channel) no longer stop the window.
+- 🗂️ Adding or editing a network while disconnected keeps your open channel tabs.
+
+<details><summary>0.6.0</summary>
 
 - 🌐 **More ways to connect**: several ports per server, tried in turn; secure WebSocket servers (`wss://`); STARTTLS; IPv4 or IPv6 only; and *don't connect at all if the VPN is off*. Turn single server features off per network.
 - 🔑 **Safer logins**: SCRAM-SHA-256 whenever the server offers it, so your password is never sent.
@@ -43,6 +50,8 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 - 👥 **Friends online instantly** on WATCH servers, with away and back.
 - 📁 **DCC trust list**, a richer **URL Grabber** (who, where, notes, search, kept after closing), `/ban -a` by account, start options `-s -j -n`.
 - 🐝 **A quarter smaller**: installer 34 MB instead of 46 MB.
+
+</details>
 
 <details><summary>0.5.0</summary>
 
