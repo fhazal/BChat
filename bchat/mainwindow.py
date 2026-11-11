@@ -462,6 +462,7 @@ class MainWindow(FramelessWindow):
         self.cfg = cfg
         self.cfg_dir = cfg_dir
         self.sessions: dict[str, Session] = {}
+        self.started_at = time.time()                  # /online: how long BChat has been running
         from .highlights import migrate
         migrate(cfg)                                    # XChat's highlight lists -> rules, however cfg was made
         from .nowplaying import Announcer
@@ -528,6 +529,7 @@ class MainWindow(FramelessWindow):
         self.tree.setExpandsOnDoubleClick(False)
         self.tree.itemClicked.connect(self._tree_clicked)
         self.tree.itemDoubleClicked.connect(self._tree_double_clicked)
+        self.tree.viewport().installEventFilter(self)   # a network's tooltip: bouncer + online time, fresh on each hover
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._tree_menu)
         self.tree.currentItemChanged.connect(self._tree_selected)
@@ -943,7 +945,7 @@ class MainWindow(FramelessWindow):
             it.setText(0, self._short_name(b))
             if renamed and self.cfg.tab_sort and it.parent() is not None:
                 it.parent().sortChildren(0, Qt.SortOrder.AscendingOrder)
-            it.setToolTip(0, b.name.replace("&", "&amp;").replace("<", "&lt;"))
+            it.setToolTip(0, self.buffer_tip(b))
             t = self.cfg.theme
             colour = {0: t.text, 1: t.new_data, 2: t.new_msg, 3: t.new_highlight}.get(b.activity, t.text)
             if b.kind == CHANNEL and not b.joined:
@@ -1082,7 +1084,7 @@ class MainWindow(FramelessWindow):
         for i, b in enumerate(order):
             self.tabbar.setTabText(i, self._short_name(b).replace("&", "&&"))
             self.tabbar.setTabData(i, b)
-            self.tabbar.setTabToolTip(i, b.name.replace("&", "&amp;").replace("<", "&lt;"))
+            self.tabbar.setTabToolTip(i, self.buffer_tip(b))
             colour = {0: t.text, 1: t.new_data, 2: t.new_msg, 3: t.new_highlight}.get(b.activity, t.text)
             if b.kind == CHANNEL and not b.joined:
                 colour = t.away
@@ -1519,6 +1521,13 @@ class MainWindow(FramelessWindow):
         ops.addSeparator()
         ops.addAction("Give Voice", lambda: s.set_mode_for(b, "+v", nicks))
         ops.addAction("Take Voice", lambda: s.set_mode_for(b, "-v", nicks))
+        if len(users) == 1 and b.kind == CHANNEL:      # 0.4.0: AOP / VOP through ChanServ, one person at a time
+            from .chanserv import can_manage
+            ops.addSeparator()
+            acc = ops.addAction("ChanServ Access...", lambda: self.open_chanserv_access(b, one))
+            if not can_manage(s, b) or s.state != "connected":
+                acc.setEnabled(False)
+                acc.setText(f"ChanServ Access... (you need @ in {b.name})".replace("&", "&&"))
         ops.addSeparator()
         ops.addAction("Kick", lambda: self._kick(b, nicks))
         ops.addAction("Kick with Reason...", lambda: self.kick_with_reason(b, nicks))
@@ -1541,6 +1550,11 @@ class MainWindow(FramelessWindow):
             menu.addAction("Slap!", lambda: self.slap(b, one.nick))
         self._add_popup_items(menu, nicks)
         return menu
+
+    def open_chanserv_access(self, b: Buffer, u: User) -> None:
+        from .chanserv import ChanServAccess
+        self.chanserv_window = ChanServAccess(self, b, u)
+        self.chanserv_window.show()
 
     @staticmethod
     def _prefix(u: User) -> str:
@@ -2014,7 +2028,29 @@ class MainWindow(FramelessWindow):
             ann.toggled.connect(lambda on: self.announce_here(b, on))
         return share
 
+    def buffer_tip(self, b: Buffer) -> str:
+        """Tab/tree tooltip. A network row also says which bouncer it goes through and how long it's been online."""
+        name = html.escape(b.name)
+        if b.kind != SERVER:
+            return name
+        s = b.session
+        rows = [f"<b>{name}</b>"]
+        if s.bouncer and s.state == "connected":
+            rows.append(f"Through {html.escape(s.bouncer_text())}")
+        online = s.online_text()
+        if online:
+            rows.append(f"Online {html.escape(online.split(' (')[0])}")
+        if s.bouncer and s.state == "connected":
+            rows.append(f"<span style='color:{self.cfg.theme.muted}'>You stay online when BChat closes</span>")
+        return "<qt>" + "<br>".join(rows) + "</qt>"
+
     def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.ToolTip and obj is getattr(getattr(self, "tree", None), "viewport", lambda: None)():
+            it = self.tree.itemAt(ev.pos())
+            b = it.data(0, Qt.ItemDataRole.UserRole) if it is not None else None
+            if b is not None:
+                it.setToolTip(0, self.buffer_tip(b))       # the online time moves on: fill it in now
+            return False
         if obj is getattr(self, "input", None) and ev.type() == QEvent.Type.KeyPress and ev.key() == Qt.Key.Key_Escape                 and getattr(self, "replying", None) is not None:
             self.cancel_reply()
             return True
@@ -3004,7 +3040,7 @@ class MainWindow(FramelessWindow):
             return
         live = [s for s in self.sessions.values() if s.state == "connected"]
         if live and self.cfg.ask_on_quit and not getattr(self, "skip_quit_prompt", False):
-            choice, dont_ask = QuitDialog(self, len(live)).ask()
+            choice, dont_ask = QuitDialog(self, len(live), [(s.net.name, s.bouncer) for s in live if s.bouncer]).ask()
             if choice == "cancel":
                 ev.ignore()
                 return

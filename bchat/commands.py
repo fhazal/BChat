@@ -26,7 +26,7 @@ COMMAND_NAMES = sorted(set(ALIASES) | {
     "lastlog", "leave", "list", "mdeop", "me", "mkick", "mode", "mop", "msg", "names", "nctcp", "newserver", "nick",
     "notice", "notify", "np", "op", "part", "ping", "query", "quit", "quote", "raw", "reconnect", "say", "server", "topic", "unban",
     "sysinfo", "unignore", "url", "voice", "wallchan", "wallchop", "whois", "wi",
-    "timer", "timers", "alias", "channel",
+    "timer", "timers", "alias", "channel", "partall", "online", "motd",
 })
 
 
@@ -109,6 +109,9 @@ HELP = {
     "timers": "TIMERS [OFF]: lists this network's timers, or stops them all",
     "alias": "ALIAS [<name> [<command>]]: adds or changes a command of your own ($1 $2- $nick $chan $me $network, | for more "
              "than one). /alias <name> removes it, /alias alone lists them",
+    "partall": "PARTALL [<reason>]: leaves every channel on this network (the tabs stay open)",
+    "online": "ONLINE: how long you've been connected to each network, and how long BChat has been running",
+    "motd": "MOTD: shows the server's welcome message (also when Preferences > General skips it)",
     "channel": "CHANNEL: opens Channel Central for this channel (topic, modes, bans, exceptions, invites)",
 }
 
@@ -203,6 +206,16 @@ def alias_command(ui, s: Session, b: Buffer, args: list[str], rest: str) -> None
         return
     cfg.user_commands = rows
     ui.save_config()
+
+
+def online_command(ui, b: Buffer) -> None:
+    """mIRC's Online Timer as one command: time connected per network, then how long BChat has run."""
+    from .session import duration
+    s = b.session
+    rows = [(x.net.name, x.online_text()) for x in ui.sessions.values()]
+    for name, text in rows:
+        s.add(b, INFO, "*", f"Online on {name}: {text}" if text else f"Not connected to {name}.")
+    s.add(b, INFO, "*", f"BChat running: {duration(time.time() - ui.started_at)}")
 
 
 def command_names(cfg) -> list[str]:
@@ -611,6 +624,18 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
         timers.command(ui, s, b, cmd, args, rest)
     elif cmd == "alias":
         alias_command(ui, s, b, args, rest)
+    elif cmd == "partall":
+        chans = [x.name for x in s.buffers.values() if x.kind == CHANNEL and x.joined]
+        if not chans:
+            s.add(b, INFO, "*", f"You're not in any channel on {s.net.name}.")
+        else:
+            s.add(b, INFO, "*", f"Leaving {len(chans)} channel{'' if len(chans) == 1 else 's'} on {s.net.name}: {' '.join(chans)}")
+            s.send("PART", ",".join(chans), rest or s.cfg.part_reason)
+    elif cmd == "online":
+        online_command(ui, b)
+    elif cmd == "motd":
+        s.motd_asked = True
+        s.send("MOTD", *args[:1])
     elif cmd == "channel":
         if need_channel():
             ui.open_channel_central(b)

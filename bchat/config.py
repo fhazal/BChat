@@ -185,6 +185,8 @@ class NetworkConfig:
     cert_pins: list[str] = field(default_factory=list)   # SHA-256 of certificates the user chose to trust
     cycle: bool = True
     favorite: bool = False
+    login: str = ""          # 0.4.0 "Log in with": "" = SASL password when an account is set (as before), "none", "cert"
+    cert_file: str = ""      # the certificate (+ key) shown to the server when login is "cert"
 
 
 @dataclass
@@ -335,6 +337,8 @@ class Config:
     auto_unaway: bool = False
     rejoin_on_kick: bool = False       # once, after 3 seconds
     whois_on_query: bool = True        # who someone is, at the top of a private chat they open
+    skip_motd: bool = False            # 0.4.0: don't print the server's welcome message; /motd still shows it
+    short_joins: bool = False          # 0.4.0: join/part lines without the address (only the default wording)
     # Logging
     text_replay: bool = False      # show the last session's scrollback when a tab opens
     log_all: bool = False

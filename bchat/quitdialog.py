@@ -9,7 +9,7 @@ from .widgets import FramedDialog, icon
 
 
 class QuitDialog(FramedDialog):
-    def __init__(self, parent, networks: int):
+    def __init__(self, parent, networks: int, through: list[tuple[str, str]] | None = None):
         super().__init__("Quit BChat?", parent)
         self.choice = "cancel"
         self.body.setContentsMargins(18, 16, 18, 14)
@@ -35,6 +35,14 @@ class QuitDialog(FramedDialog):
         words.addWidget(head)
         self.count = QLabel(f"You are connected to {networks} IRC network{'' if networks == 1 else 's'}.")
         words.addWidget(self.count)
+        if through:                    # 0.4.0: networks behind a bouncer stay online after BChat quits
+            kinds = {k for _n, k in through}
+            names = ", ".join(n for n, _k in through)
+            via = kinds.pop() if len(kinds) == 1 else "a bouncer"
+            self.stay = QLabel(f"{names} {'is' if len(through) == 1 else 'are'} through {via}: you stay online there.")
+            self.stay.setWordWrap(True)
+            self.stay.setStyleSheet(f"color: {t.muted};")
+            words.addWidget(self.stay)
         top.addLayout(words, 1)
         self.body.addLayout(top)
         self.dont_ask = QCheckBox("Don't ask next time")

@@ -37,6 +37,14 @@ _CODE = re.compile(r"\$(\d|t)|%([BUCOR%])")
 _CODES = {"B": "\x02", "U": "\x1f", "C": "\x03", "O": "\x0f", "R": "\x16", "%": "%"}
 
 
+# 0.4.0 "Short join and part lines": used instead of the default wording only (an edited event stays the user's)
+SHORT = {
+    "Join": "-->$t$1 has joined",
+    "Part": "<--$t$1 has left",
+    "Part with Reason": "<--$t$1 has left ($4)",
+}
+
+
 def render(fmt: str, args) -> tuple[str, str]:
     """(left column, text). One pass, so a nick containing $1 or %B stays as it is."""
     parts = re.split(r"\$t", fmt, maxsplit=1)

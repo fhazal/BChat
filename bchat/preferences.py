@@ -233,6 +233,8 @@ class PreferencesDialog(FramedDialog):
         self.colors_exact.setEnabled(not c.strip_colors)        # nothing to show when colours are stripped
         self.strip.toggled.connect(lambda on: self.colors_exact.setEnabled(not on))
         lay.addWidget(self.colors_exact)
+        self.short_joins = self._check(lay, "Short join and part lines", c.short_joins,
+                                       "Leaves out the address. Hover a nick in the nick list to see it.")
         lay.addStretch(1)
         return page
 
@@ -528,6 +530,9 @@ class PreferencesDialog(FramedDialog):
                                        "Waits 3 seconds and tries once, so a kick loop can't flood the channel")
         self.whois_query = self._check(lay, "Show who someone is when they start a private chat with me", c.whois_on_query,
                                        "A short WHOIS at the top of the new tab: their host, channels and idle time")
+        lay.addWidget(_heading("Connecting"))
+        self.skip_motd = self._check(lay, "Skip the server's welcome message (MOTD)", c.skip_motd,
+                                     "Type /motd to read it any time")
         lay.addWidget(_heading("Starting and Closing"))
         self.start_win = self._check(lay, "Start with Windows", c.start_with_windows, "Only for the installed BChat")
         self.start_min = self._check(lay, "Start minimized", c.start_minimized)
@@ -1154,6 +1159,7 @@ class PreferencesDialog(FramedDialog):
         c.away_reason = self.away_msg.text() or "I'm busy"
         c.announce_away, c.away_once, c.auto_unaway = self.announce.isChecked(), self.away_once.isChecked(), self.auto_unaway.isChecked()
         c.rejoin_on_kick, c.whois_on_query = self.rejoin_kick.isChecked(), self.whois_query.isChecked()
+        c.skip_motd, c.short_joins = self.skip_motd.isChecked(), self.short_joins.isChecked()
         c.text_replay, c.log_all = self.replay.isChecked(), self.log_all.isChecked()
         c.log_mask = self.log_mask.text().strip() or "%n-%c.log"
         from . import logs

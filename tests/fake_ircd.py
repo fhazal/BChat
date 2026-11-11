@@ -11,7 +11,7 @@ AWAY = {"J|wang", "Psycho", "BeerAddict", "Combat90", "Corumn26"}
 
 
 class FakeIrcd:
-    def __init__(self, certfile: str | None = None, keyfile: str | None = None, taken_nicks=(), caps="", sasl_ok=True, whox=False, refuse=False, history=None):
+    def __init__(self, certfile: str | None = None, keyfile: str | None = None, taken_nicks=(), caps="", sasl_ok=True, whox=False, refuse=False, history=None, client_ca=None):
         self.history = history     # [(prefix, command, text, unix time)]: a channel that keeps history (+H)
         self.refuse = refuse
         self.extra_caps = caps
@@ -27,6 +27,10 @@ class FakeIrcd:
         if certfile:
             self.ctx = ssl_mod.SSLContext(ssl_mod.PROTOCOL_TLS_SERVER)
             self.ctx.load_cert_chain(certfile, keyfile)
+            if client_ca:                        # ask for a client certificate (SASL EXTERNAL / CertFP tests)
+                self.ctx.verify_mode = ssl_mod.CERT_OPTIONAL
+                self.ctx.load_verify_locations(client_ca)
+        self.peer_der = b""
         self.taken = set(taken_nicks)
         self.received: list[str] = []
         self.nick = ""
@@ -47,6 +51,7 @@ class FakeIrcd:
             try:
                 if self.ctx:
                     conn = self.ctx.wrap_socket(conn, server_side=True)
+                    self.peer_der = conn.getpeercert(binary_form=True) or b""
             except (ssl_mod.SSLError, OSError):
                 continue
             self.client = conn
@@ -89,7 +94,7 @@ class FakeIrcd:
             self.cap_open = True
             self.send(f":srv CAP * LS :multi-prefix away-notify server-time {self.extra_caps}".rstrip())
         elif cmd == "AUTHENTICATE":
-            if word[1] == "PLAIN":
+            if word[1] in ("PLAIN", "EXTERNAL"):
                 self.send("AUTHENTICATE +")
             else:
                 self.auth_blob = word[1]

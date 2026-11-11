@@ -12,7 +12,7 @@ from PySide6.QtCore import QObject, QTimer, Signal, QCryptographicHash
 from PySide6.QtNetwork import QAbstractSocket, QHostAddress, QHostInfo, QNetworkProxy, QSslSocket, QSslCertificate
 
 from .config import Config, NetworkConfig, Server, random_nick
-from .textevents import EVENTS, render
+from .textevents import EVENTS, SHORT, render
 from .protocol import Message, build_line, lower, mask_ban, parse_line, strip_format
 
 # kinds a line can have; the chat view maps them to colours
@@ -20,6 +20,15 @@ MSG, SELF, ACTION, JOIN, PART, TOPIC, INFO, WHOIS, NOW_TALKING, HILITE, NOTICE, 
     "msg", "self", "action", "join", "part", "topic", "info", "whois", "now", "hilite", "notice", "error", "connect")
 
 SERVER, CHANNEL, QUERY = "server", "channel", "query"
+
+
+def duration(secs: float) -> str:
+    """3 h 12 min, 45 min, 20 s: /online and the network tooltip."""
+    secs = int(max(0, secs))
+    h, m = secs // 3600, secs % 3600 // 60
+    if h:
+        return f"{h} h {m} min"
+    return f"{m} min" if m else f"{secs} s"
 
 
 @dataclass
@@ -174,6 +183,19 @@ class Session(QObject):
         self.join_once: list[tuple[str, str]] = []   # (channel, key) from an irc:// link: joined after login, not saved
         self._history: dict[str, tuple[str, list]] = {}   # open history batch id -> (target, lines)
         self._sasl_state = ""
+        self._cert_loaded = False          # a client certificate is on the socket (Log in with: Certificate)
+        self.bouncer = ""                  # 0.4.0: "ZNC", "soju" or "psyBNC" when we talk to one, not the network itself
+        self.bouncer_version = ""
+        self._bouncer_said = False
+        self._version_wait = 0.0           # asked ZNC's *status for its version, quietly
+        self._playback: dict[str, tuple[str, list]] = {}   # ZNC playback batch id -> (target, lines)
+        self._znc_collect: tuple[str, list, float] | None = None   # between ZNC's "Buffer Playback..." and "Playback Complete."
+        self.online_since = 0.0            # /online: when this connection got its welcome
+        self.motd_asked = False            # /motd typed: show it even with "Skip the MOTD"
+        self.services = ""                 # "anope" or "atheme", from ChanServ's VERSION answer (ChanServ Access)
+        self.services_guessed = False
+        self._services_wait: list = []
+        self.chanserv_sink = None          # the ChanServ Access window reading ChanServ's answers
         self._cap_more: set[str] = set()
         self._cap_offered: dict[str, str] = {}
         self._cap_pending = 0
@@ -352,6 +374,11 @@ class Session(QObject):
         self._cap_pending = 0
         self.server_name = ""
         self.network_token = ""
+        self.bouncer, self.bouncer_version, self._bouncer_said, self._version_wait = "", "", False, 0.0
+        self._playback, self._znc_collect = {}, None
+        self.online_since, self.motd_asked = 0.0, False
+        self.services, self.services_guessed, self._services_wait = "", False, []
+        self._cert_loaded = False
         host, port, tls = s.host, s.port, s.ssl
         policy = self.cfg.sts.get(host.lower())
         self._sts_enforced = bool(policy and policy.get("expires", 0) > time.time())
@@ -364,6 +391,10 @@ class Session(QObject):
             # and Connect Once must not carry over to the next connection
             self._new_socket()
             self._apply_network_settings()
+            self._use_client_cert()
+        elif self.net.login == "cert":
+            self.add(self.server_buffer, ERROR, "*", "Certificate login needs an SSL server (+port in Edit Network). "
+                                                     "Connecting without it.")
         self.add(self.server_buffer, CONNECT, "*", f"Connecting to {host} ({'SSL ' if tls else ''}port {port})...")
         if tls:
             self.sock.connectToHostEncrypted(host, port)
@@ -427,6 +458,20 @@ class Session(QObject):
     def _set_state(self, st: str) -> None:
         self.state = st
         self.state_changed.emit()
+
+    def _use_client_cert(self) -> None:
+        """Log in with: Certificate. The certificate goes in the SSL handshake; the key stays on this PC."""
+        if self.net.login != "cert":
+            return
+        from . import certs
+        pair = certs.load(self.net.cert_file)
+        if pair is None:
+            self.add(self.server_buffer, ERROR, "*", "Certificate login: BChat couldn't read the certificate file. "
+                                                     "Edit Network > Make New or Choose File.")
+            return
+        self.sock.setLocalCertificate(pair[0])
+        self.sock.setPrivateKey(pair[1])
+        self._cert_loaded = True
 
     def _on_tcp(self) -> None:
         self.add(self.server_buffer, CONNECT, "*", "Connected. Now logging in..." if not self._tls_now else "Connected. Starting SSL...")
@@ -543,6 +588,7 @@ class Session(QObject):
             return
         self._keepalive.stop()
         self._who.stop()
+        self.online_since = 0.0
         self._set_state("disconnected")
         for b in self.all_buffers():
             self.add(b, INFO, "*", "Disconnected.")
@@ -558,6 +604,8 @@ class Session(QObject):
             self._reconnect.start(delay * 1000)
 
     def _tick(self) -> None:
+        if self._znc_collect is not None and time.time() - self._znc_collect[2] > 10:
+            self._end_znc_playback()           # "Playback Complete." never came: show what arrived
         if self.state in ("connected", "registering"):
             if time.time() - self._last_rx > 240:
                 self.add(self.server_buffer, ERROR, "*", "Server stopped responding.")
@@ -795,6 +843,13 @@ class Session(QObject):
         if bid and bid in self._history and m.command in ("PRIVMSG", "NOTICE"):
             self._history[bid][1].append(m)      # history: kept until the batch ends, then put above the join
             return
+        if bid and bid in self._playback and m.command in ("PRIVMSG", "NOTICE"):
+            if m.nick != "***":                  # ZNC's own "Buffer Playback..." markers: the header replaces them
+                self._playback[bid][1].append(m)     # ZNC playback: shown under one header when the batch ends
+            return
+        if self._znc_collect is not None and m.command in ("PRIVMSG", "NOTICE") and m.nick != "***":
+            self._znc_collect[1].append(m)
+            return
         handler = getattr(self, "_irc_" + m.command.lower(), None) if m.command.isalpha() else None
         if handler:
             handler(m)
@@ -825,8 +880,21 @@ class Session(QObject):
             offered, self._cap_more = self._cap_more, set()
             if "sts" in offered and self._sts_policy(self._cap_offered["sts"]):
                 return
+            self._spot_bouncer(offered)
             wanted = offered & self.WANTED_CAPS
-            if "sasl" in offered and self.net.sasl_user and "PLAIN" in (self._cap_offered["sasl"].upper() or "PLAIN"):
+            mechs = [x for x in self._cap_offered.get("sasl", "").upper().split(",") if x]
+            if self.net.login == "cert":
+                if not self._cert_loaded:
+                    pass                          # said already: no SSL, or the file couldn't be read
+                elif "sasl" not in offered:
+                    self.add(self.server_buffer, INFO, "*", "This server has no SASL login: NickServ may still know your certificate.")
+                elif mechs and "EXTERNAL" not in mechs:
+                    self.add(self.server_buffer, ERROR, "*", "This server doesn't take certificate logins (SASL EXTERNAL).")
+                else:
+                    wanted.add("sasl")
+            elif self.net.login == "none":
+                pass
+            elif "sasl" in offered and self.net.sasl_user and (not mechs or "PLAIN" in mechs):
                 if self._tls_now:
                     wanted.add("sasl")
                 else:
@@ -850,8 +918,13 @@ class Session(QObject):
                 return
             self._cap_pending = max(0, self._cap_pending - 1)
             if sub == "ACK" and "sasl" in m.params[-1].split() and not self._welcomed:
-                self._sasl_state = "plain"
-                self.send_raw("AUTHENTICATE PLAIN")
+                if self.net.login == "cert":
+                    self._sasl_state = "external"
+                    self.add(self.server_buffer, INFO, "*", "Logging in with your certificate (SASL EXTERNAL)...")
+                    self.send_raw("AUTHENTICATE EXTERNAL")
+                else:
+                    self._sasl_state = "plain"
+                    self.send_raw("AUTHENTICATE PLAIN")
             elif not self._welcomed and not self._sasl_state:
                 self.send_raw("CAP END")
 
@@ -881,6 +954,9 @@ class Session(QObject):
         return False
 
     def _irc_authenticate(self, m: Message) -> None:
+        if self._sasl_state == "external" and m.param(0) == "+":
+            self.send_raw("AUTHENTICATE +")       # the server takes the account from the certificate
+            return
         if self._sasl_state != "plain" or m.param(0) != "+":
             return
         blob = f"{self.net.sasl_user}\0{self.net.sasl_user}\0{self.net.sasl_password}".encode()
@@ -902,6 +978,12 @@ class Session(QObject):
         ref = m.param(0)
         if ref.startswith("+") and m.param(1).lower() in ("chathistory", "draft/chathistory") and len(m.params) >= 3:
             self._history[ref[1:]] = (m.param(2), [])
+        elif ref.startswith("+") and m.param(1).lower() == "znc.in/playback" and len(m.params) >= 3:
+            self._playback[ref[1:]] = (m.param(2), [])
+            self.bouncer = self.bouncer or "ZNC"
+        elif ref.startswith("-") and ref[1:] in self._playback:
+            target, msgs = self._playback.pop(ref[1:])
+            self._show_playback(target, msgs)
         elif ref.startswith("-") and ref[1:] in self._history:
             target, msgs = self._history.pop(ref[1:])
             self._history_done(target, msgs)
@@ -995,6 +1077,29 @@ class Session(QObject):
 
     def _irc_privmsg(self, m: Message) -> None:
         target, text = m.param(0), m.param(-1)
+        if m.nick == "***" and m.prefix.endswith("@znc.in"):
+            if text.strip() == "Buffer Playback...":
+                if self._znc_collect is not None:
+                    self._end_znc_playback()
+                self._znc_collect = (target, [], time.time())
+                self.bouncer = self.bouncer or "ZNC"
+                return
+            if text.strip() == "Playback Complete.":
+                self._end_znc_playback()
+                return
+        if self._version_wait and lower(m.nick) == "*status" and time.time() - self._version_wait < 10:
+            # ZNC answers 'version' with TWO lines: "ZNC 1.10.3 - https://znc.in" and its build options
+            # ("IPv6: yes, SSL: yes, DNS: threads, ..."). Both are taken; anything else from *status shows as usual.
+            plain = strip_format(text).strip()
+            found = re.search(r"\bZNC[ -]?v?(\d+(?:\.\d+)+)", plain)
+            if found and not self.bouncer_version:
+                self.bouncer_version = found.group(1)
+                if self._bouncer_said:
+                    self.state_changed.emit()      # the line went out without it: the tooltip still learns it
+                self._say_bouncer()
+                return
+            if re.match(r"^IPv6: \w+, SSL: \w+", plain):
+                return
         ctcp = text.startswith("\x01") and not text.startswith("\x01ACTION")
         dcc = text.startswith("\x01DCC")
         kind = "D" if dcc else "T" if ctcp else "C" if self.is_channel(target) else "P"
@@ -1128,7 +1233,10 @@ class Session(QObject):
         """Prints a Text Event with the user's format."""
         if self.print_hook is not None and self.print_hook(event, args):
             return
-        left, text = render(self.cfg.text_events.get(event) or EVENTS[event][0], args)
+        fmt = self.cfg.text_events.get(event)
+        if not fmt and self.cfg.short_joins and event in SHORT:
+            fmt = SHORT[event]                 # only the default wording: the user's own Text Events stay as they are
+        left, text = render(fmt or EVENTS[event][0], args)
         self.add(b, kind, left, text, ts)
 
     def _ctcp_reply_list(self) -> list:
@@ -1201,8 +1309,13 @@ class Session(QObject):
             self._reconnect.stop()
             self.add(self.server_buffer, ERROR, "*", f"-OperServ- {text} BChat will not retry: repeated attempts can get this IP banned.")
             return
+        if not self._welcomed and not self.bouncer and "psybnc" in (m.prefix + " " + text).lower():
+            self.bouncer = "psyBNC"
         if text.startswith("\x01") and text.endswith("\x01"):
             verb, _, rest = text.strip("\x01").partition(" ")
+            if self._services_wait and lower(m.nick) == "chanserv" and verb.upper() == "VERSION":
+                self._services_known("atheme" if "atheme" in rest.lower() else "anope" if "anope" in rest.lower() else "")
+                return
             if self.ignored(m.prefix, "T"):
                 return
             if verb.upper() == "PING" and rest.isdigit():
@@ -1214,6 +1327,8 @@ class Session(QObject):
             return
         if not self._welcomed and "invalid password" in text.lower():
             self._login_refused(text)
+            return
+        if self.chanserv_sink is not None and lower(m.nick) == "chanserv" and self.chanserv_sink(text):
             return
         if not m.nick or "." in m.nick or self.state != "connected":
             where = self.buffer("(notices)") if self.cfg.notices_tab else self.server_buffer
@@ -1313,6 +1428,8 @@ class Session(QObject):
 
     def _whois_new_query(self, b: Buffer, nick: str) -> None:
         """Someone opened a private chat with us: who they are goes at the top of the new tab."""
+        if nick.startswith("*"):
+            return            # ZNC's own *status, *controlpanel...: not people, a WHOIS only says 'No such nick'
         if self.cfg.whois_on_query and self.state == "connected" and b.kind == QUERY:
             self.whois(nick, b)
 
@@ -1445,12 +1562,18 @@ class Session(QObject):
     # numerics --------------------------------------------------------------------
 
     def _numeric(self, n: int, m: Message) -> None:
+        if n in (372, 375, 376, 422):
+            if self.cfg.skip_motd and not self.motd_asked:
+                return                             # Preferences > General: skip the welcome message (/motd shows it)
+            if n == 422:
+                self.motd_asked = False
         p = m.params
         rest = " ".join(p[1:])
         if n == 1:
             self.nick = m.param(0)
             self.server_name = m.prefix
             self._welcomed = True
+            self.online_since = time.time()
             self._set_state("connected")
             self.notify.emit(self.server_buffer, "connect")
             self._who.start()
@@ -1512,7 +1635,10 @@ class Session(QObject):
         elif n == 903:
             self._sasl_done(True, "SASL login successful.")
         elif n in (902, 904, 905, 906, 907, 908):
-            if n != 908:
+            if n != 908 and self._sasl_state == "external":
+                self._sasl_done(False, "Certificate login failed: NickServ doesn't know this certificate yet. Log in once with "
+                                       "your password, then Edit Network > Add to NickServ.")
+            elif n != 908:
                 self._sasl_done(False, f"SASL login failed: {m.param(-1)}")
         elif n in (464, 465):
             self._login_refused(m.param(-1))
@@ -1540,6 +1666,9 @@ class Session(QObject):
                 self._nick_taken()
         elif 400 <= n < 600:
             self.add(self._front(), ERROR, "*", " ".join(p[1:]))
+        elif n == 376 and self.motd_asked:
+            self.motd_asked = False
+            self.add(self.server_buffer, INFO, "*", rest)
         elif n in (372, 375):
             # MOTD body: the server's own "- " becomes the dim marker, like XChat/AdiIRC
             self.add(self.server_buffer, INFO, "-", rest[2:] if rest.startswith("- ") else rest.lstrip("-"))
@@ -1676,6 +1805,12 @@ class Session(QObject):
 
     def _after_welcome(self) -> None:
         self._tick()            # first lag reading now, not after the 15 s keepalive
+        if self.bouncer == "ZNC":
+            self._version_wait = time.time()       # one quiet question; the answer is taken, not shown
+            self.send_raw("PRIVMSG *status :version", quiet=True)
+            QTimer.singleShot(4000, self._say_bouncer)
+        elif self.bouncer:
+            self._say_bouncer()
         self.start_friends()
         if self.cfg.local_find:              # the address others can reach us on, for DCC offers
             self.find_local()
@@ -1695,6 +1830,83 @@ class Session(QObject):
                 self.focus_next = lower(name)
                 self.send("JOIN", name, *([key] if key else []))
         self.join_once = []
+
+    # --- bouncers (0.4.0) ------------------------------------------------------------------
+
+    def _spot_bouncer(self, offered) -> None:
+        """By what the bouncer says it can do, never by its name: ZNC's znc.in/ and soju's soju.im/ capabilities."""
+        if any(c.startswith("soju.im/") for c in offered):
+            self.bouncer = "soju"
+        elif any(c.startswith("znc.in/") for c in offered):
+            self.bouncer = "ZNC"
+
+    def bouncer_text(self) -> str:
+        return f"{self.bouncer} {self.bouncer_version}".strip()
+
+    def _say_bouncer(self) -> None:
+        """One line in the server tab, once per connection."""
+        if self._bouncer_said or not self.bouncer or self.state != "connected":
+            return
+        self._bouncer_said = True
+        self.add(self.server_buffer, INFO, "*", f"\x02Connected through {self.bouncer_text()}\x02 (a bouncer). It keeps you "
+                                                f"online on {self.net.name} when BChat is closed.")
+        if not self.history_on():
+            self.add(self.server_buffer, INFO, "*", f"\x0314History comes from {self.bouncer}'s own playback, so BChat won't "
+                                                    "also ask the server: nothing shows twice.")
+        self.state_changed.emit()
+
+    def _end_znc_playback(self) -> None:
+        if self._znc_collect is None:
+            return
+        target, msgs, _t = self._znc_collect
+        self._znc_collect = None
+        self._show_playback(target, msgs)
+
+    def _show_playback(self, target: str, msgs: list) -> None:
+        """The bouncer's saved lines under one grey header, then 'Now live'. Times are the ones the lines carry."""
+        if not msgs:
+            return
+        first = msgs[0]
+        if self.is_channel(target):
+            b = self.buffer(target)
+        else:
+            other = first.param(0) if lower(first.nick) == lower(self.nick) else first.nick
+            b = self.buffer(other or target)
+        n = len(msgs)
+        who = self.bouncer or "the bouncer"
+        self.add(b, INFO, "", f"\x0314──── Played back by {who}: {n} line{'' if n == 1 else 's'} from while BChat was closed ────",
+                 self._ts(first))
+        for m in msgs:
+            m.tags.pop("batch", None)
+            self._handle(m)
+        self.add(b, INFO, "", "\x0314──── Now live ────", self._ts(msgs[-1]))
+
+    def online_text(self) -> str:
+        """'3 h 12 min (since 17:50)' for /online and the network tooltip; '' when not connected."""
+        if not self.online_since:
+            return ""
+        return f"{duration(time.time() - self.online_since)} (since {time.strftime('%H:%M', time.localtime(self.online_since))})"
+
+    # --- services (ChanServ Access) ----------------------------------------------------------
+
+    def ask_services(self, done) -> None:
+        """Which services run here: ChanServ's answer to a quiet CTCP VERSION (Anope or Atheme). Calls done() once known."""
+        if self.services:
+            done()
+            return
+        self._services_wait.append(done)
+        if len(self._services_wait) == 1:
+            self.send_raw("PRIVMSG ChanServ :\x01VERSION\x01", quiet=True)
+            QTimer.singleShot(4000, lambda: self._services_known(""))
+
+    def _services_known(self, kind: str) -> None:
+        if not self._services_wait:
+            return
+        self.services = kind or "anope"         # no answer: Anope, what most UnrealIRCd networks run
+        self.services_guessed = not kind
+        waiting, self._services_wait = self._services_wait, []
+        for done in waiting:
+            done()
 
     def own_rank(self, b: Buffer) -> str:
         """The prefix char for our own nick in this channel, for the light next to the nick box."""

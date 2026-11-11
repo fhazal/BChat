@@ -3,13 +3,26 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+from pathlib import Path
+
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QWidget, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout)
 
 from . import config
 from .config import NetworkConfig, Server
 from .widgets import FramedDialog, icon
 from .xchat_import import parse_server
+
+
+def _esc(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _muted(w) -> str:
+    """The theme's quiet text colour, when the window knows the theme."""
+    win = getattr(w.parent(), "win", w.parent())
+    cfg = getattr(win, "cfg", None)
+    return cfg.theme.muted if cfg is not None else "#a6adc8"
 
 
 def ask_save(parent, name: str) -> str:
@@ -50,12 +63,22 @@ class NetworkEditDialog(FramedDialog):
         self.sasl_user = QLineEdit(net.sasl_user, self)
         self.sasl_password = QLineEdit(net.sasl_password, self)
         self.sasl_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.login = QComboBox(self)               # 0.4.0: how BChat logs in to services
+        self.login.addItems(["Nothing", "Password (SASL)", "Certificate (SASL EXTERNAL)"])
+        self.login.setCurrentIndex(2 if net.login == "cert" else 0 if net.login == "none" or not net.sasl_user else 1)
+        self.cert_path = net.cert_file
+        self.cert_box = self._cert_row()
+        self.nickserv_row = self._nickserv_row()
         for label, w in (("Auto-join channels:", self.autojoin), ("Connect commands:", self.commands),
                          ("Nick name:", self.nick), ("Second choice:", self.nick2), ("User name:", self.username),
                          ("Real name:", self.realname), ("Server password:", self.password), ("NickServ password:", self.nickserv),
-                         ("SASL account:", self.sasl_user), ("SASL password:", self.sasl_password)):
+                         ("Log in with:", self.login), ("SASL account:", self.sasl_user), ("SASL password:", self.sasl_password),
+                         ("Certificate:", self.cert_box), ("", self.nickserv_row)):
             form.addRow(label, w)
+        self.form = form
         self.body.addLayout(form)
+        self.login.currentIndexChanged.connect(self._login_rows)
+        self._login_rows()
         self.use_global = QCheckBox("Use global user information", self)
         self.use_global.setChecked(net.use_global)
         self.auto = QCheckBox("Auto connect to this network at startup", self)
@@ -79,8 +102,133 @@ class NetworkEditDialog(FramedDialog):
         self.body.addLayout(row)
         self._start = self._state()
 
+    # --- Log in with: password or certificate ----------------------------------------------
+
+    def _win(self):
+        return getattr(self.parent(), "win", self.parent())
+
+    def _session(self):
+        win = self._win()
+        s = getattr(win, "sessions", {}).get(self.net.name)
+        return s if s is not None and s.state == "connected" else None
+
+    def _cert_row(self) -> QWidget:
+        w = QWidget(self)
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        self.cert_label = QLabel(w)
+        self.cert_label.setTextFormat(Qt.TextFormat.RichText)
+        self.cert_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        lay.addWidget(self.cert_label)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.cert_new = QPushButton(icon("new"), "Make New", w)
+        self.cert_new.clicked.connect(self._make_cert)
+        self.cert_pick = QPushButton(icon("open"), "Choose File...", w)
+        self.cert_pick.clicked.connect(self._choose_cert)
+        self.cert_copy = QPushButton(icon("copy"), "Copy", w)
+        self.cert_copy.setToolTip("Copies the certificate's fingerprint (SHA-256)")
+        self.cert_copy.clicked.connect(self._copy_fingerprint)
+        for b in (self.cert_new, self.cert_pick, self.cert_copy):
+            b.setAutoDefault(False)
+            row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        return w
+
+    def _nickserv_row(self) -> QWidget:
+        w = QWidget(self)
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.cert_add = QPushButton(icon("send"), "Add to NickServ", w)
+        self.cert_add.setAutoDefault(False)
+        self.cert_add.clicked.connect(self._add_to_nickserv)
+        lay.addWidget(self.cert_add)
+        self.cert_hint = QLabel("once, while you're logged in", w)
+        self.cert_hint.setStyleSheet(f"color: {_muted(self)};")
+        lay.addWidget(self.cert_hint)
+        lay.addStretch(1)
+        return w
+
+    def _login_rows(self, *_) -> None:
+        """Only the rows the chosen way needs (zen): account + password, or the certificate."""
+        i = self.login.currentIndex()
+        for w in (self.sasl_user, self.sasl_password):
+            self.form.setRowVisible(w, i == 1)
+        for w in (self.cert_box, self.nickserv_row):
+            self.form.setRowVisible(w, i == 2)
+        self._show_cert()
+
+    def _fingerprint(self) -> str:
+        from . import certs
+        info = certs.describe(self.cert_path)
+        return info[2] if info else ""
+
+    def _show_cert(self) -> None:
+        from . import certs
+        info = certs.describe(self.cert_path)
+        muted = _muted(self)
+        if info is None:
+            text = ("No certificate yet: Make New makes one on this PC." if not self.cert_path
+                    else "BChat can't read this file (it needs the certificate and its private key).")
+            self.cert_label.setText(f"<span style='color:{muted}'>{text}</span>")
+        else:
+            name, made, fp = info
+            self.cert_label.setText(f"<b>{_esc(name)}</b> <span style='color:{muted}'>· made {made}</span><br>"
+                                    f"<span style='color:{muted}; font-family: Consolas'>SHA-256 {certs.short(fp)}</span>")
+        self.cert_copy.setEnabled(info is not None)
+        live = self._session() is not None
+        self.cert_add.setEnabled(info is not None and live)
+        self.cert_hint.setText("once, while you're logged in" if live else "connect first, then log in once with your password")
+
+    def _make_cert(self) -> None:
+        from . import certs
+        win = self._win()
+        folder = Path(getattr(win, "cfg_dir", Path.home() / ".bchat")) / "certs"
+        path = folder / f"{certs.safe_name(self.name.text().strip() or self.net.name)}.pem"
+        if path.exists() and QMessageBox.question(
+                self, "BChat", f"Make a new certificate? It replaces {path.name}, so NickServ will need the new one "
+                               "(Add to NickServ again).") != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            certs.make(path, self.nick.text().strip() or "BChat")
+        except Exception as e:                  # disk full, no rights: say so, keep the old one
+            QMessageBox.warning(self, "BChat", f"Couldn't make the certificate: {e}")
+            return
+        self.cert_path = str(path)
+        self._show_cert()
+
+    def _choose_cert(self) -> None:
+        from . import certs
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a certificate", self.cert_path or str(Path.home()),
+                                              "Certificates (*.pem *.crt);;All files (*)")
+        if not path:
+            return
+        if certs.load(path) is None:
+            QMessageBox.warning(self, "BChat", "That file has no certificate with its private key. Use a .pem with both, "
+                                               "or a .crt with a .key of the same name next to it.")
+            return
+        self.cert_path = path
+        self._show_cert()
+
+    def _copy_fingerprint(self) -> None:
+        fp = self._fingerprint()
+        if fp:
+            QApplication.clipboard().setText(fp.replace(":", ""))
+
+    def _add_to_nickserv(self) -> None:
+        """NickServ CERT ADD <fingerprint> (Anope and Atheme): the next login needs no password."""
+        s = self._session()
+        fp = self._fingerprint().replace(":", "")
+        if s is None or not fp:
+            return
+        s.send_raw(f"PRIVMSG NickServ :CERT ADD {fp}")
+        s.add(s.server_buffer, "info", "*", f"\x0314BChat sent: /msg NickServ CERT ADD {fp}")
+        self.cert_hint.setText("sent: NickServ's answer is in the server tab")
+
     def _state(self) -> tuple:
-        return (self.name.text(), self.servers.toPlainText(), self.autojoin.text(), self.commands.text(), self.nick.text(),
+        return (self.login.currentIndex(), self.cert_path, self.name.text(), self.servers.toPlainText(), self.autojoin.text(), self.commands.text(), self.nick.text(),
                 self.nick2.text(), self.username.text(), self.realname.text(), self.password.text(), self.nickserv.text(),
                 self.sasl_user.text(), self.sasl_password.text(), self.use_global.isChecked(), self.auto.isChecked(),
                 self.cycle.isChecked(), self.invalid.isChecked())
@@ -111,6 +259,8 @@ class NetworkEditDialog(FramedDialog):
         n.username, n.realname = self.username.text().strip(), self.realname.text().strip()
         n.password, n.nickserv = self.password.text(), self.nickserv.text()
         n.sasl_user, n.sasl_password = self.sasl_user.text().strip(), self.sasl_password.text()
+        n.login = {0: "none", 1: "", 2: "cert"}[self.login.currentIndex()]
+        n.cert_file = self.cert_path
         n.use_global = self.use_global.isChecked()
         n.autoconnect = self.auto.isChecked()
         n.cycle = not self.cycle.isChecked()
