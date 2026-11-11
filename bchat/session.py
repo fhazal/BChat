@@ -830,13 +830,21 @@ class Session(QObject):
     # --- sending ------------------------------------------------------------
 
     # passwords typed to services must not reach the raw log or the chat
-    _SECRET_LINE = re.compile(r"(?i)^(PRIVMSG\s+\S*serv\S*\s+:?\s*(?:IDENTIFY|GHOST|RECOVER|REGISTER|LOGIN|AUTH)\s+).*")
+    _SECRET_LINE = re.compile(r"(?i)^(PRIVMSG\s+\S*serv\S*\s+:?\s*(?:IDENTIFY|ID|GHOST|RECOVER|REGISTER|LOGIN|AUTH)\s+).*")
+    # 0.6.1: '/ns identify pw' goes out as the server's own alias 'NS IDENTIFY pw', '/oper name pw' as OPER: hide those too
+    _SECRET_ALIAS = re.compile(r"(?i)^((?:NS|CS|MS|OS|HS|BS|\S*SERV)\s+:?\s*(?:IDENTIFY|ID|GHOST|RECOVER|REGISTER|LOGIN|AUTH)\s+).*"
+                               r"|^(OPER\s+\S+\s+).*")
 
     @classmethod
     def _hide_secret(cls, line: str) -> str:
         if line.upper().startswith(("PASS ", "AUTHENTICATE ")):
             return line.split(" ", 1)[0] + " ****"
-        return cls._SECRET_LINE.sub(lambda m: m.group(1) + "****", line)
+        line = cls._SECRET_LINE.sub(lambda m: m.group(1) + "****", line)
+        return cls._SECRET_ALIAS.sub(lambda m: (m.group(1) or m.group(2)) + "****", line)
+
+    @classmethod
+    def is_secret(cls, line: str) -> bool:
+        return bool(cls._SECRET_LINE.match(line) or cls._SECRET_ALIAS.match(line)) or             line.upper().startswith(("PASS ", "AUTHENTICATE "))
 
     def ignored(self, prefix: str, kind: str = "") -> bool:
         """XChat's ignore_check: a mask only counts for the kinds ticked on it, and Unignore overrides the rest."""
@@ -950,7 +958,7 @@ class Session(QObject):
             line = self._lock_join(line)
             if not line:
                 return
-        secret = secret or bool(self._SECRET_LINE.match(line))
+        secret = secret or self.is_secret(line)
         self.sock.write(line.encode("utf-8", "replace") + b"\r\n")
         if not quiet:
             self.raw_line.emit(self._hide_secret(line) if secret else line, True)

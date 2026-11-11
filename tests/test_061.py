@@ -267,3 +267,39 @@ def test_lines_still_queued_are_handled_before_disconnected(app):
     s._on_disconnected()
     texts = [l.text for l in s.buffers["#c"].lines]
     assert texts.index("late line") < texts.index("Disconnected.") and not s._rx
+
+
+# --- 0.6.1: passwords typed with // or as /ns, /oper ------------------------------------------------------
+
+def test_double_slash_password_lines_are_never_sent_as_chat(app, tmp_path):
+    from test_live import live_with, type_cmd, wait
+    srv, win, net, s = live_with(app, tmp_path)
+    assert wait(app, lambda: s.state == "connected", 5000)
+    srv.send(f":{s.nick}!u@h JOIN #c")
+    assert wait(app, lambda: "#c" in s.buffers, 3000)
+    b = s.buffers["#c"]
+    win.select_buffer(b)
+    for line in ("//ns identify Belon hunter22", "//oper Belon hunter22", "//msg NickServ IDENTIFY hunter22"):
+        type_cmd(win, line)
+    type_cmd(win, "//me is a command, said as text")          # the normal use of // still works
+    assert wait(app, lambda: any("/me is a command" in x for x in srv.received), 3000)
+    assert not any("hunter22" in x for x in srv.received)
+    assert sum("Not sent: with //" in l.text for l in b.lines) == 3
+    assert not any("hunter22" in l.text for l in b.lines)
+    win.close(); srv.stop()
+
+
+def test_ns_and_oper_passwords_stay_out_of_the_raw_log(app, tmp_path):
+    from test_live import live_with, type_cmd, wait
+    srv, win, net, s = live_with(app, tmp_path)
+    assert wait(app, lambda: s.state == "connected", 5000)
+    shown = []
+    s.raw_line.connect(lambda line, out: out and shown.append(line))
+    win.select_buffer(s.server_buffer)
+    type_cmd(win, "/ns identify Belon hunter22")
+    type_cmd(win, "/oper Belon hunter22")
+    assert wait(app, lambda: any(x.upper().startswith("OPER BELON") for x in srv.received), 3000)
+    assert any(x.upper().startswith("NS IDENTIFY") and "hunter22" in x for x in srv.received)   # the server still gets it
+    assert any(x.upper() == "NS IDENTIFY ****" for x in shown) and any(x.upper() == "OPER BELON ****" for x in shown)
+    assert not any("hunter22" in x for x in shown)
+    win.close(); srv.stop()
