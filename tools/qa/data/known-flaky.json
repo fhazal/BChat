@@ -1,8 +1,15 @@
 {
  "_about": "Tests known to fail now and then for timing reasons. The QA runner never retries them; a failure is still a failure, it is only labelled. Remove an entry once the test is made reliable.",
  "tests": [
-  {"test": "tests/test_040.py::test_skip_motd_and_motd_command",
+  {
+   "test": "tests/test_040.py::test_skip_motd_and_motd_command",
    "why": "waits for the MOTD with a fixed timeout; fails when the PC is busy (e.g. a packaged-app check running at the same time); passes when run alone",
-   "seen": "2026-11-11"}
+   "seen": "2026-11-11"
+  },
+  {
+   "test": "tests/test_qa_runner.py::test_known_flaky_failure_is_labelled_not_retried",
+   "why": "QA self-test: its inner pytest run came back with an empty test id once inside a full 'all' run (PC busy with packaged checks); passed 5/5 alone right after. Cause not found yet.",
+   "seen": "2026-11-11"
+  }
  ]
 }
