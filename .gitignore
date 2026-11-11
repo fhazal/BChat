@@ -4,5 +4,7 @@ __pycache__/
 build/
 dist/
 *.spec
+!packaging/BChat.spec
 *.egg-info/
 bchat/assets/version.txt
+qa-reports/
