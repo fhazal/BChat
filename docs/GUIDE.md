@@ -17,7 +17,7 @@ No. BChat is made for **Windows 10 and 11**. There is no Mac or Linux version.
 ### What happens the first time I open BChat?
 If BChat finds no networks, it shows the **Welcome** window: type a nickname, pick where to start, and click **Connect**.
 - **BajuBesi Community** (recommended) connects to irc.bajubesi.org and joins **#BChat** (help and chat about BChat) and **#chat**.
-- **Libera.Chat** and **OFTC** are big open-source networks. After you connect, BChat asks which channel to join.
+- **Libera.Chat** is the big home of open-source communities. **Wixchat** (chat.bajubesi.org) is Malaysia's largest chat community; say hi in **#kampung**. After you connect to either, BChat asks which channel to join.
 - **I'll Set Up My Own...** opens the Network List instead.
 
 The Welcome window appears only once. If you used XChat 2 or XChat-SE before, BChat imports your networks and nick instead and skips it.

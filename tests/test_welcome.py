@@ -70,10 +70,11 @@ def test_window_defaults_and_nick_check(app, fresh):
     assert d.windowTitle() == "Welcome to BChat" and not d.bee.pixmap().isNull()
     assert welcome.nick_problem(d.nick.text()) == "" and d.connect_btn.isEnabled() and d.connect_btn.isDefault()
     assert not d.connect_btn.icon().isNull() and not d.own_btn.icon().isNull()     # same icons as the Network List
-    assert [c.choice[0] for c in d.cards] == ["BajuBesi Community", "Libera.Chat", "OFTC"]
+    assert [c.choice[0] for c in d.cards] == ["BajuBesi Community", "Libera.Chat", "Wixchat"]
     assert d.chosen()[0] == "BajuBesi Community" and d.cards[0].radio.isChecked()
     assert d.chosen()[3] == "#BChat,#chat" and "joins #BChat and #chat" in d.chosen()[4]
-    assert all(c.choice[2] == 6697 for c in d.cards)                 # every choice is an encrypted port
+    assert [c.choice[2] for c in d.cards] == [6697, 6697, 9999]       # encrypted ports (Wixchat: +9999)
+    assert all(":" not in c.choice[4] and str(c.choice[2]) not in c.choice[4] for c in d.cards)   # no port shown
     d.nick.setText("4 bad")
     assert not d.connect_btn.isEnabled() and "spaces" in d.hint.text()
     d.connect_btn.click()
@@ -81,7 +82,7 @@ def test_window_defaults_and_nick_check(app, fresh):
     d.nick.setText("Kestrel")
     assert d.connect_btn.isEnabled() and "/nick" in d.hint.text()
     QTest.mouseClick(d.cards[2], Qt.MouseButton.LeftButton, pos=QPoint(200, 10))   # click anywhere on a card
-    assert d.chosen()[0] == "OFTC" and not d.cards[0].radio.isChecked()
+    assert d.chosen()[0] == "Wixchat" and not d.cards[0].radio.isChecked()
     d.reject()
 
 
@@ -183,3 +184,14 @@ def test_welcome_nick_change_moves_the_spare_nicks_along(app, fresh, local):
     d.nick.setText("Kestrel")
     d.connect_btn.click()
     assert (fresh.cfg.nick, fresh.cfg.nick2, fresh.cfg.nick3) == ("Kestrel", "Kestrel_", "Kestrel__")
+
+
+def test_wixchat_card_uses_encrypted_9999(app, fresh, monkeypatch):
+    made = []
+    monkeypatch.setattr(welcome, "Server", lambda host, port, ssl: made.append((host, port, ssl)) or Server("127.0.0.1", 1, False))
+    monkeypatch.setattr(type(fresh), "connect_network", lambda self, net: None)
+    d = welcome.run_welcome(fresh)
+    d.cards[2].radio.setChecked(True)
+    assert d.cards[2].choice[5] == "Malaysia's largest chat community. Come say hi at #kampung."
+    d.connect_btn.click()
+    assert made == [("chat.bajubesi.org", 9999, True)] and fresh.cfg.networks[0].name == "Wixchat"

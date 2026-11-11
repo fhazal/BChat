@@ -25,8 +25,8 @@ CHOICES = [
      "BChat's home network: friendly help and chat with other BChat users."),
     ("Libera.Chat", "irc.libera.chat", 6697, "", "irc.libera.chat · pick channels after",
      "The big home of open-source and tech communities."),
-    ("OFTC", "irc.oftc.net", 6697, "", "irc.oftc.net · pick channels after",
-     "Free software projects and their people."),
+    ("Wixchat", "chat.bajubesi.org", 9999, "", "chat.bajubesi.org · pick channels after",
+     "Malaysia's largest chat community. Come say hi at #kampung."),
 ]
 
 

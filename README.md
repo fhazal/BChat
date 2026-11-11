@@ -33,13 +33,26 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 
 ---
 
-## 🆕 What's new in 0.5.0
+## 🆕 What's new in 0.6.0
+
+- 🌐 **More ways to connect**: several ports per server, tried in turn; secure WebSocket servers (`wss://`); STARTTLS; IPv4 or IPv6 only; and *don't connect at all if the VPN is off*. Turn single server features off per network.
+- 🔑 **Safer logins**: SCRAM-SHA-256 whenever the server offers it, so your password is never sent.
+- 🗂️ **Settings for each tab**: timestamps, nick colours, join and part lines, beep, flash, pop-up cards and logging, per channel or chat.
+- 🌊 **Flood settings**: how fast BChat sends, and limits for CTCP, new private chats and WhoIs.
+- 🔒 **Lock BChat** with a password (only chosen channels, no private chats or files) and a **portable mode**.
+- 👥 **Friends online instantly** on WATCH servers, with away and back.
+- 📁 **DCC trust list**, a richer **URL Grabber** (who, where, notes, search, kept after closing), `/ban -a` by account, start options `-s -j -n`.
+- 🐝 **A quarter smaller**: installer 34 MB instead of 46 MB.
+
+<details><summary>0.5.0</summary>
 
 - 🛡️ **Auto-Op, Auto-Voice & Protect**: give @ or + to people by their NickServ account or address, even without ChanServ. Protect gives it back if someone takes it, and lifts bans on them. It never kicks, waits its turn behind ChanServ, and stops by itself before an op war.
 - 🗂️ **Tray menu with your chats**: right-click the tray icon to see every channel and private chat, with unread counts, and jump straight in. An Away tick for every network, and BChat can now **start in the tray**.
 - 🔔 **More notification cards, with a soft sound**: when you're kicked, a network drops, a friend comes online, someone invites you or offers a file. One quiet chime (or a bee buzz), at most every 10 seconds and never while you game. Choose how long cards stay.
 - 👥 **Friends List extras**: how long each friend has been online, a note per friend (shared with the Address Book), and their own pop-up, sound and WhoIs.
 - 🐝 **A bigger icon**: the honey tile now fills the taskbar and tray like other apps, and the title bar logo is bigger.
+
+</details>
 
 <details><summary>0.4.0</summary>
 
