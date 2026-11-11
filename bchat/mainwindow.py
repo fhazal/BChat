@@ -2784,7 +2784,8 @@ class MainWindow(FramelessWindow):
         while lower(name) in taken:
             i += 1
             name = f"{base}({i})"
-        chans = [b.name for b in s.buffers.values() if b.kind == CHANNEL and b.joined]
+        online = s.state == "connected"            # connected: the channels we're in; offline: the channel tabs still open
+        chans = [b.name for b in s.buffers.values() if b.kind == CHANNEL and (b.joined or not online)]
         net = NetworkConfig(name, [dataclasses.replace(sv, more_ports=list(sv.more_ports)) for sv in s.net.servers],
                             password=s.net.password, autojoin=",".join(chans),
                             allow_invalid_cert=s.net.allow_invalid_cert, cert_pins=list(s.net.cert_pins))   # a certificate trusted on this tab stays trusted
@@ -2801,9 +2802,9 @@ class MainWindow(FramelessWindow):
         if not getattr(self, "skip_dialogs", False):
             from .networklist import NetworkListDialog
             d = NetworkListDialog(self)
-            for row in range(d.list.count()):
-                if d.list.item(row).data(Qt.ItemDataRole.UserRole) is net:
-                    d.list.setCurrentRow(row)
+            for it in d.list.mine():                       # BR-3: a tree since 0.2.0, data() needs the column
+                if it.data(0, Qt.ItemDataRole.UserRole) is net:
+                    d.list.setCurrentItem(it)
             d.exec()
         return net
 
