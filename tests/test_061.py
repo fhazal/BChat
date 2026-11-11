@@ -1,4 +1,5 @@
 """0.6.1: FINDING-01, nicks and channel names folded the way each server says (ISUPPORT CASEMAPPING)."""
+import time
 from bchat.config import Config, NetworkConfig, Server
 from bchat.protocol import folder, lower, parse_line
 from bchat.session import Session
@@ -111,3 +112,158 @@ def test_add_and_edit_network_while_disconnected(app, tmp_path, monkeypatch):
     win.edit_network(saved)                        # Edit Network while still disconnected
     assert len(edited) == 1
     win.close()
+
+
+# --- 0.6.1: Ergo is not a bouncer (known since 0.4.0) ------------------------------------------------
+
+ERGO_CAPS = ("cap-notify chghost draft/chathistory draft/persistence echo-message ergo.chat/nope extended-join "
+             "message-tags multi-prefix server-time soju.im/webpush znc.in/playback znc.in/self-message")
+
+
+def test_soju_webpush_alone_is_not_soju(app):
+    s = session(app)
+    s._spot_bouncer({"soju.im/webpush", "draft/chathistory"})
+    assert s.bouncer == ""
+    s._spot_bouncer({"soju.im/bouncer-networks", "soju.im/webpush"})
+    assert s.bouncer == "soju"
+
+
+def test_znc_caps_from_a_server_without_status_are_not_a_bouncer(app):
+    s = session(app)
+    s._spot_bouncer(set(ERGO_CAPS.split()))
+    assert s.bouncer == "ZNC" and s._znc_guess          # only a guess until *status answers
+    s._version_wait = 1.0
+    errs = len(s.server_buffer.lines)
+    feed(s, ":ergo.test 401 me *status :No such nick")
+    assert s.bouncer == "" and not s._znc_guess
+    assert len(s.server_buffer.lines) == errs           # the quiet question's answer stays quiet
+
+
+def test_401_for_status_from_a_real_znc_guess_only(app):
+    s = session(app)
+    feed(s, ":srv 401 me *status :No such nick")         # no guess: shown as usual, nothing changes
+    assert s.bouncer == "" and any("No such nick" in l.text for l in s.server_buffer.lines)
+
+
+def test_ergo_caps_live_say_no_bouncer_but_real_znc_still_does(app, tmp_path):
+    from test_live import live_with, wait
+    srv, win, net, s = live_with(app, tmp_path, caps=ERGO_CAPS)
+    assert wait(app, lambda: any("PRIVMSG *status :version" in x for x in srv.received), 5000)
+    srv.send(f":fake.server 401 {s.nick} *status :No such nick")
+    assert wait(app, lambda: s.bouncer == "", 3000)
+    t = time.time()
+    while time.time() - t < 4.6:                          # past the 4 s 'no version answer' fallback
+        app.processEvents(); time.sleep(0.02)
+    lines = [l.text for l in s.server_buffer.lines]
+    assert not any("Connected through" in x for x in lines) and not any("*status" in x for x in lines)
+    assert "Through" not in win.buffer_tip(s.server_buffer)
+    win.close(); srv.stop()
+    srv, win, net, s = live_with(app, tmp_path, caps="znc.in/self-message")
+    assert wait(app, lambda: any("PRIVMSG *status :version" in x for x in srv.received), 5000)
+    srv.send(f":*status!znc@h PRIVMSG {s.nick} :ZNC 1.10.3 - https://znc.in")
+    assert wait(app, lambda: any("Connected through ZNC 1.10.3" in l.text.replace("\x02", "") for l in s.server_buffer.lines), 3000)
+    win.close(); srv.stop()
+
+
+# --- 0.6.1: 'Host not found' when only the other kind of address exists --------------------------------
+
+def _info(name, *addrs):
+    from PySide6.QtNetwork import QHostAddress, QHostInfo
+    i = QHostInfo()
+    i.setHostName(name)
+    i.setAddresses([QHostAddress(a) for a in addrs])
+    return i
+
+
+def _errors(s):
+    return [l.text for l in s.server_buffer.lines]
+
+
+def test_ipv6_only_says_the_server_has_no_ipv6_address(app):
+    s = session(app)
+    s.cfg.ip_mode = "ipv6"
+    s.want_connected = True
+    s._family_asked = ("irc.example.org", False)
+    s._family_found(_info("irc.example.org", "203.0.113.5"))
+    assert any("irc.example.org has no IPv6 address, only IPv4" in t and "Network setup" in t for t in _errors(s))
+    assert s.want_connected                              # a saved network keeps retrying, as before
+
+
+def test_ipv4_only_and_a_typed_name_stops_retrying(app):
+    s = session(app)
+    s.cfg.ip_mode = "ipv4"
+    s.want_connected = True
+    s._family_asked = ("v6.example.org", True)
+    s._family_found(_info("v6.example.org", "2001:db8::1"))
+    assert any("has no IPv4 address, only IPv6" in t for t in _errors(s)) and not s.want_connected
+
+
+def test_a_name_with_no_address_at_all_is_still_a_typo(app):
+    s = session(app)
+    s.cfg.ip_mode = "ipv6"
+    s.want_connected = True
+    s._family_asked = ("irc.exmaple.org", True)
+    s._family_found(_info("irc.exmaple.org"))
+    assert any("wasn't found, so BChat will not retry" in t for t in _errors(s)) and not s.want_connected
+    assert not any("has no" in t for t in _errors(s))
+
+
+def test_an_answer_for_another_name_or_one_that_now_fits_says_nothing(app):
+    s = session(app)
+    s.cfg.ip_mode = "ipv6"
+    s._family_asked = ("a.example.org", False)
+    s._family_found(_info("b.example.org", "203.0.113.5"))
+    s._family_found(_info("a.example.org", "2001:db8::1"))
+    assert not any("has no" in t for t in _errors(s))
+
+
+def test_ipv6_only_on_an_ipv4_only_name_live(app, tmp_path):
+    """The real path: socket error -> the line. 127.0.0.1 is an address, so no second lookup is needed."""
+    from test_live import make_win, wait
+    win, net = make_win(tmp_path, 1)
+    win.cfg.ip_mode = "ipv6"
+    s = win.connect_network(net)
+    assert wait(app, lambda: any("127.0.0.1 is an IPv4 address. BChat is set to IPv6 only" in t for t in _errors(s)), 8000)
+    win.close()
+
+
+# --- 0.6.1: a burst of lines no longer freezes the window ----------------------------------------------
+
+def test_a_burst_is_handled_in_slices_in_order(app, tmp_path):
+    from PySide6.QtCore import QEventLoop, QTimer
+    from test_live import live_with, wait
+    srv, win, net, s = live_with(app, tmp_path)
+    assert wait(app, lambda: s.state == "connected", 5000)
+    srv.send(f":{s.nick}!u@h JOIN #burst")
+    assert wait(app, lambda: "#burst" in s.buffers, 3000)
+    b = s.buffers["#burst"]
+    slices, gaps, last = [], [], [time.perf_counter()]
+    orig = s._drain
+
+    def counted(everything=False):
+        slices.append(len(s._rx))
+        orig(everything)
+    s._drain = counted
+    tick = QTimer(); tick.setInterval(20)
+    tick.timeout.connect(lambda: (gaps.append(time.perf_counter() - last[0]), last.__setitem__(0, time.perf_counter())))
+    srv.client.sendall(b"".join(f":Wira!w@h PRIVMSG #burst :line {i}\r\n".encode() for i in range(3000)) + b":Wira!w@h PRIVMSG #burst :END\r\n")
+    loop = QEventLoop(); chk = QTimer(); chk.setInterval(5)
+    chk.timeout.connect(lambda: b.lines and b.lines[-1].text == "END" and loop.quit())
+    last[0] = time.perf_counter(); tick.start(); chk.start()
+    QTimer.singleShot(30000, loop.quit); loop.exec()
+    tick.stop(); chk.stop()
+    said = [l.text for l in b.lines if l.text.startswith("line ") or l.text == "END"]
+    assert said == [f"line {i}" for i in range(3000)] + ["END"]          # nothing lost, nothing out of order
+    assert len(slices) > 3                                                # worked through in turns, not in one go
+    assert max(gaps) < 0.5, max(gaps)                                     # the window got turns too (was seconds)
+    win.close(); srv.stop()
+
+
+def test_lines_still_queued_are_handled_before_disconnected(app):
+    s = session(app)
+    feed(s, ":me!u@h JOIN #c")
+    s._rx.extend([b":srv NOTICE me :last words\r", b":a!u@h PRIVMSG #c :late line\r"])
+    s.state = "connected"
+    s._on_disconnected()
+    texts = [l.text for l in s.buffers["#c"].lines]
+    assert texts.index("late line") < texts.index("Disconnected.") and not s._rx

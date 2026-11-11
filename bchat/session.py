@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fnmatch
+from collections import deque
 import random
 import re
 import time
@@ -128,6 +129,7 @@ class Session(QObject):
     cert_question = Signal(object)    # a certificate BChat can't verify: the window asks the user
     pins_changed = Signal()
     host_info = Signal(object)    # QHostInfo for our own address (Network > Local), back on the GUI thread
+    family_info = Signal(object)  # 0.6.1: QHostInfo for a server name that IPv4/IPv6 only couldn't find
     notify = Signal(object, str)  # buffer, event: chan priv hilight join part kick notice invite connect disconnect
     lines_inserted = Signal(object)  # history went in above existing lines: the tab is drawn again
     invited = Signal(object, str, str)   # session, channel, who: the window offers Join / Ignore (never joins by itself)
@@ -191,6 +193,8 @@ class Session(QObject):
         self.whois_cache: dict[str, dict] = {}
         self._names_fresh: set[str] = set()
         self._buf = b""
+        self._rx: deque[bytes] = deque()    # 0.6.1: lines read, not handled yet (see _drain)
+        self._drain_queued = False
         self.lag_ms: int | None = None
         self._ping_sent = 0.0
         self._last_rx = 0.0
@@ -211,6 +215,7 @@ class Session(QObject):
         self.bouncer_version = ""
         self._bouncer_said = False
         self._version_wait = 0.0           # asked ZNC's *status for its version, quietly
+        self._znc_guess = False            # 0.6.1: ZNC only by its caps so far; a 401 for *status means it's the server
         self._playback: dict[str, tuple[str, list]] = {}   # ZNC playback batch id -> (target, lines)
         self._znc_collect: tuple[str, list, float] | None = None   # between ZNC's "Buffer Playback..." and "Playback Complete."
         self.online_since = 0.0            # /online: when this connection got its welcome
@@ -427,6 +432,7 @@ class Session(QObject):
         self._ws_path = s.ws_path
         self._set_state("connecting")
         self._buf = b""
+        self._rx.clear()
         self._welcomed = False
         self._friends_wait = 0
         self._cap_active = set()
@@ -456,6 +462,7 @@ class Session(QObject):
         self.server_name = ""
         self.network_token = ""
         self.bouncer, self.bouncer_version, self._bouncer_said, self._version_wait = "", "", False, 0.0
+        self._znc_guess = False
         self._playback, self._znc_collect = {}, None
         self.online_since, self.motd_asked = 0.0, False
         self.services, self.services_guessed, self._services_wait = "", False, []
@@ -500,6 +507,7 @@ class Session(QObject):
                  "ipv6": QAbstractSocket.NetworkLayerProtocol.IPv6Protocol}.get(
             self.cfg.ip_mode, QAbstractSocket.NetworkLayerProtocol.AnyIPProtocol)
         mode = QAbstractSocket.OpenModeFlag.ReadWrite
+        self._dial_host = host
         if tls:
             self.sock.connectToHostEncrypted(host, port, mode, proto)
         else:
@@ -689,10 +697,29 @@ class Session(QObject):
         self.send("NICK", self.nick)
         self.send("USER", self._identity("user"), "0", "*", self._identity("real"))
 
+    READ_SLICE_S = 0.03     # 0.6.1: work through incoming lines 30 ms at a time, so a burst doesn't freeze the window
+
     def _on_read(self) -> None:
         self._buf += bytes(self.sock.readAll())
         *lines, self._buf = self._buf.split(b"\n")
-        for raw in lines:
+        self._rx.extend(lines)
+        if not self._drain_queued:             # a slice is already booked: new lines just join the queue
+            self._drain()
+
+    def _drain(self, everything: bool = False) -> None:
+        """Lines in arrival order. After READ_SLICE_S the rest waits for the next turn of the event loop (paint,
+        typing, other networks), so 5000 lines at once no longer stop the whole window. Nested calls (a handler
+        that runs the event loop) carry on from the same queue, so order is kept."""
+        self._drain_queued = False
+        end = time.perf_counter() + self.READ_SLICE_S
+        rx = self._rx
+        while rx:
+            if not everything and time.perf_counter() > end:
+                if not self._drain_queued:
+                    self._drain_queued = True
+                    QTimer.singleShot(1, self, self._drain)      # 1 ms, not 0: Windows starves other timers on 0; self as context: no call once the session is gone
+                return
+            raw = rx.popleft()
             try:
                 text = raw.decode("utf-8")
             except UnicodeDecodeError:
@@ -710,15 +737,57 @@ class Session(QObject):
         if err == QAbstractSocket.SocketError.RemoteHostClosedError:
             return
         self.add(self.server_buffer, ERROR, "*", f"Connection failed: {self.sock.errorString()}")
-        if err == QAbstractSocket.SocketError.HostNotFoundError and self.typed_by_hand:
-            # probably a typo, so retrying won't help. Saved networks do retry: their name resolved before, and DNS can blip
-            self.want_connected = False
-            self._reconnect.stop()
-            self.add(self.server_buffer, ERROR, "*", "That server name wasn't found, so BChat will not retry. Check the spelling and use /server again.")
+        host = getattr(self, "_dial_host", "")
+        if err == QAbstractSocket.SocketError.HostNotFoundError and self.cfg.ip_mode in ("ipv4", "ipv6") and host:
+            # 0.6.1: 'Host not found' also means 'no address of the one kind we may use'. Ask again for any kind
+            # of address, then say which it is (and only then call it a typo).
+            if not getattr(self, "_family_wired", False):
+                self.family_info.connect(self._family_found)
+                self._family_wired = True
+            self._family_asked = (host, self.typed_by_hand)
+            literal = QHostAddress(host)
+            if not literal.isNull():                     # an address typed in: its kind is plain to see
+                info = QHostInfo()
+                info.setHostName(host)
+                info.setAddresses([literal])
+                self._family_found(info)
+            else:
+                QHostInfo.lookupHost(host, self.family_info.emit)
+        elif err == QAbstractSocket.SocketError.HostNotFoundError and self.typed_by_hand:
+            self._typo_stop()
         if self.sock.state() == QAbstractSocket.SocketState.UnconnectedState:
             self._on_disconnected()
 
+    def _typo_stop(self) -> None:
+        # probably a typo, so retrying won't help. Saved networks do retry: their name resolved before, and DNS can blip
+        self.want_connected = False
+        self._reconnect.stop()
+        self.add(self.server_buffer, ERROR, "*", "That server name wasn't found, so BChat will not retry. Check the spelling and use /server again.")
+
+    def _family_found(self, info) -> None:
+        host, by_hand = getattr(self, "_family_asked", ("", False))
+        if not host or info.hostName().lower() != host.lower():
+            return
+        self._family_asked = ("", False)
+        v6 = QAbstractSocket.NetworkLayerProtocol.IPv6Protocol
+        kinds = {"IPv6" if a.protocol() == v6 else "IPv4" for a in info.addresses()}
+        want = "IPv6" if self.cfg.ip_mode == "ipv6" else "IPv4"
+        if not kinds:
+            if by_hand:
+                self._typo_stop()
+            return
+        if want in kinds:
+            return                        # it has one now (DNS blip): the normal retry will do
+        other = "IPv4" if want == "IPv6" else "IPv6"
+        what = f"{host} is an {other} address" if not QHostAddress(host).isNull() else f"{host} has no {want} address, only {other}"
+        self.add(self.server_buffer, ERROR, "*", f"{what}. BChat is set to {want} only (Preferences > Network setup > Internet).")
+        if by_hand:
+            self.want_connected = False   # retrying can't find what isn't there
+            self._reconnect.stop()
+
     def _on_disconnected(self) -> None:
+        if self._rx:
+            self._drain(everything=True)       # the server's last words (ERROR :Closing link) before 'Disconnected.'
         if self.state == "disconnected":
             return
         self._keepalive.stop()
@@ -1259,7 +1328,7 @@ class Session(QObject):
             self._history[ref[1:]] = (m.param(2), [])
         elif ref.startswith("+") and m.param(1).lower() == "znc.in/playback" and len(m.params) >= 3:
             self._playback[ref[1:]] = (m.param(2), [])
-            self.bouncer = self.bouncer or "ZNC"
+            self.bouncer, self._znc_guess = self.bouncer or "ZNC", False
         elif ref.startswith("-") and ref[1:] in self._playback:
             target, msgs = self._playback.pop(ref[1:])
             self._show_playback(target, msgs)
@@ -1363,12 +1432,13 @@ class Session(QObject):
                 if self._znc_collect is not None:
                     self._end_znc_playback()
                 self._znc_collect = (target, [], time.time())
-                self.bouncer = self.bouncer or "ZNC"
+                self.bouncer, self._znc_guess = self.bouncer or "ZNC", False
                 return
             if text.strip() == "Playback Complete.":
                 self._end_znc_playback()
                 return
         if self._version_wait and self.fold(m.nick) == "*status" and time.time() - self._version_wait < 10:
+            self._znc_guess = False                # someone answers as *status: a real ZNC
             # ZNC answers 'version' with TWO lines: "ZNC 1.10.3 - https://znc.in" and its build options
             # ("IPv6: yes, SSL: yes, DNS: threads, ..."). Both are taken; anything else from *status shows as usual.
             plain = strip_format(text).strip()
@@ -1941,6 +2011,11 @@ class Session(QObject):
                 return                             # Preferences > General: skip the welcome message (/motd shows it)
             if n == 422:
                 self.motd_asked = False
+        if n == 401 and self._znc_guess and self.fold(m.param(1)) == "*status":
+            # 0.6.1: no *status here, so the znc.in/ caps came from the server itself (Ergo): not a bouncer
+            self.bouncer, self._znc_guess, self._version_wait = "", False, 0.0
+            self.state_changed.emit()
+            return
         p = m.params
         rest = " ".join(p[1:])
         if n == 1:
@@ -2250,11 +2325,14 @@ class Session(QObject):
     # --- bouncers (0.4.0) ------------------------------------------------------------------
 
     def _spot_bouncer(self, offered) -> None:
-        """By what the bouncer says it can do, never by its name: ZNC's znc.in/ and soju's soju.im/ capabilities."""
-        if any(c.startswith("soju.im/") for c in offered):
+        """By what the bouncer says it can do, never by its name. 0.6.1: servers borrow bouncer capabilities too
+        (Ergo offers soju.im/webpush, znc.in/playback and znc.in/self-message), so soju needs its own
+        soju.im/bouncer-networks, and znc.in/ caps only make ZNC a guess until *status answers (or isn't there)."""
+        if "soju.im/bouncer-networks" in offered:
             self.bouncer = "soju"
         elif any(c.startswith("znc.in/") for c in offered):
             self.bouncer = "ZNC"
+            self._znc_guess = True
 
     def bouncer_text(self) -> str:
         return f"{self.bouncer} {self.bouncer_version}".strip()
