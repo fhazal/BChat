@@ -3,7 +3,62 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.6.0-TEST2 (11 Nov 2026)
+## Current baseline: 0.6.0 release (11 Nov 2026)
+
+Released as `v0.6.0` from commit `ce6af76`, slim packaging (the candidate below, approved
+and made the normal build in commit `a63e07f`). Numbers from QA run `20261111-230044`
+(`tools/qa.py all --perf-quick`) and the release checks.
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.6.0` (`version_info` 0.6.0.0) |
+| Build configuration | `packaging/BChat.spec` (slim filter, 126 files left out); PyInstaller 6.22.3 one-folder, no UPX, windowed; Inno Setup lzma2 solid; Python 3.12.10, PySide6 6.12.0 |
+| Installer | `BChat-0.6.0-setup.exe`, 35,812,376 bytes (34.2 MiB) |
+| Installer SHA-256 | `a159a0b4d24684292ab91a6b17111457d78e360903324515a57c403b779cb3f5` |
+| `BChat.exe` SHA-256 | `54ca04340e36ba5ab454bd80adf65b041b4e98f6ed485ea246fad69d62dcd8f1` |
+| Installed size | not re-measured for the release (slim TEST2 was 99,010,555 bytes, 209 files) |
+
+### Performance (`perf_bench.py --perf-quick`, one run)
+
+Quick mode: 2 start-ups instead of 5, 0.5-minute soak instead of 5. Same build PC as below.
+
+| Measure | 0.6.0 | 0.6.0-TEST2 (full run) |
+| --- | --- | --- |
+| Start to visible main window | 0.64 s | 0.64 s |
+| Start to joined channel | 0.73 s | 0.74 s |
+| Quit | 0.10 s | 0.09 s |
+| Idle, 3 networks: CPU / working set | 1.1 % / 108.7 MB | 1.6 % / 106.1 MB |
+| Load 300 msg/s: CPU / working set | 53 % / 117.2 MB | 57 % / 138.9 MB |
+| Load: marker latency / worst UI stall | 9 ms / 47 ms | 8 ms / 47 ms |
+| Burst of 5000 messages: time / worst UI stall | 5.7 s / 0.86 s | 10.4 s / 8.4 s |
+| History 10k to 20k lines | 136.9 to 137.0 MB | 152.2 to 152.3 MB |
+| All 15 tabs full | 244.3 MB | 247.3 MB |
+| Soak growth | 0.0 MB/min (0.5 min) | -0.8 MB/min (5 min) |
+
+All 13 perf checks passed (every message counted, clean quit). The burst gain is not explained
+by a code change aimed at it; treat it as "not worse" until a full run repeats it.
+`tools/qa/data/perf-baseline.json` still holds the TEST2 full run.
+
+### Test results
+
+| Check | Result |
+| --- | --- |
+| `pytest` (source) | 618: 617 passed + 1 known deviation (FINDING-01 CASEMAPPING, strict xfail) |
+| Protocol | 86/87 + 1 known deviation; conformance table 63 OK |
+| `build_check.py` / `bundle_check.py` | 8/8 / 23/23 |
+| `frozen_features.py` / `frozen_reports.py` | 60/60 / 19/19 |
+| `frozen_check.py` | 19/19 on re-run alone (18/19 in the full run: a stray key landed in the test window) |
+| `frozen_extra.py` | 59/59 on re-run (57/59 in the full run, same stray key) |
+| `full_button_check.py` | 673 controls, no problems |
+| Secret scan | pass |
+| Update manifest | signature OK; tampered SHA/version refused; 0.3.0, 0.4.0, 0.5.0 and 0.6.0-TEST3 are offered 0.6.0 |
+| VirusTotal installer | 0 / 70 |
+| VirusTotal `BChat.exe` | 1 / 71 (APEX, seen on every BChat build; judged a false positive) |
+
+Known limitations listed under 0.6.0-TEST2 below still apply, except that FINDING-02
+(friends tracking started before the server's feature list) is fixed in 0.6.0.
+
+## Previous baseline: 0.6.0-TEST2 (11 Nov 2026)
 
 This is a **test build**, not a release. It is the newest build that passed every check below,
 including a real-server run on servers the owner authorised (the owner's own manual test of
@@ -64,9 +119,9 @@ shutdown time, connection time to real servers (real-server lag over 5 minutes: 
   environments are only tested by the owner.
 - `pyproject.toml` version is out of date (0.1.0); the build uses `version_info.txt`.
 
-## Candidate under review: slim packaging (same 0.6.0-TEST2 code)
+## Slim packaging check (same 0.6.0-TEST2 code)
 
-Validated 11 Nov 2026, **not yet approved**. Leaves out unused Qt parts (Quick/QML,
+Validated 11 Nov 2026, approved and used from 0.6.0-TEST3 on. Leaves out unused Qt parts (Quick/QML,
 Qt6OpenGL, PDF, Virtual Keyboard, software OpenGL, translations).
 
 | Item | Baseline | Slim |
@@ -83,7 +138,7 @@ Qt6OpenGL, PDF, Virtual Keyboard, software OpenGL, translations).
 
 Start time and CPU differences are within run-to-run noise.
 
-## Last release: 0.5.0 (11 Nov 2026)
+## Earlier release: 0.5.0 (11 Nov 2026)
 
 | Item | Value |
 | --- | --- |
@@ -97,3 +152,4 @@ Start time and CPU differences are within run-to-run noise.
 | Date | Build | Change to the baseline |
 | --- | --- | --- |
 | 2026-11-11 | 0.6.0-TEST2 | First recorded baseline |
+| 2026-11-11 | 0.6.0 | Release; slim packaging; quick perf run |

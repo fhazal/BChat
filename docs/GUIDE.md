@@ -36,6 +36,27 @@ In the Network List, click **Add**, give it a name, then **Edit...** and type it
 
 You can also type `/server irc.example.org +6697` in any tab. To keep that server, right-click it in the tree and choose **Add Network**.
 
+
+### Can a server have more than one port?
+Yes. In the network's **Edit...** window, write the ports after the host with commas: `irc.example.org/+6697,7000`. BChat picks one at random and tries the next if it fails. Each server line can have its own ports.
+
+### What are wss:// servers?
+Some networks also let you in through a secure web connection. Write the server in **Edit...** as `wss://host/path` (the network tells you the address). Only secure `wss://` works; plain `ws://` is refused.
+
+### What is STARTTLS?
+A way to switch a plain port to an encrypted one after connecting. Write the port with `*` in **Edit...**, for example `irc.example.org/*6667`. If the server can't switch, BChat stops instead of carrying on unencrypted.
+
+### Can I make BChat use only IPv4 or IPv6?
+Yes: **Settings → Preferences → Network setup → Internet:** Automatic, IPv4 only or IPv6 only. On the same page, **Use IPv6 for file transfers and direct chats when you have it** lets DCC offers use IPv6 too.
+
+### Can BChat stay offline when my VPN is off?
+Yes. In **Settings → Preferences → Network setup**, type your VPN address in **Bind to:** and tick **If this address is gone (VPN off), don't connect at all**. When the VPN is off, BChat says so in the server tab and doesn't connect.
+
+### A server gets one IRC feature wrong. Can I turn it off?
+Yes, for that network only: **Edit...** → **Server features: Choose...** and untick the feature. **Back to Normal** turns them all on again. Leave them all on unless a server really misbehaves.
+
+### Can I start BChat with a server, channel or nick?
+Yes, from a shortcut or the command line: `BChat.exe -s irc.example.org/+6697 -j #channel -n MyNick`. `-s` also takes a saved network's name. These are used once and not saved.
 ### How do I join a channel?
 Type `/join #channelname` and press Enter, or use **Server → Join a Channel...**. To see every channel on a network, use **Server → List of Channels...** (or `/list`).
 
@@ -119,6 +140,15 @@ Yes: **Settings → Preferences → General**, tick **Skip the server's welcome 
 ### Can join and part lines be shorter?
 **Settings → Preferences → Text box**, tick **Short join and part lines**. Then you see "Wira has joined" instead of "Wira (wira@host) has joined #chat". Hover a nick in the nick list to see the address. If you changed the wording yourself in Text Events, yours stays.
 
+
+### Can one channel have its own settings?
+Yes. Right-click the channel in the channel list and choose **Settings for #channel**: timestamps, coloured nick names, join and part lines (show, short or hide), beep, flash, pop-up cards and **Log to Disk**, for that tab only. A setting that differs from Preferences shows in bold. **Use the defaults again** clears them.
+
+### How do I keep all the links people post?
+**Window → URL Grabber...** lists every link, newest on top (new ones in bold), with who posted it, where and when. Search it, add a **Note...**, or **Send to Channel**. Tick **Keep the list after BChat closes** to keep the links (never the chat around them) and **Also catch email addresses** to collect those too.
+
+### How do I ban someone by their account?
+Type `/ban -a nick` (or `/kickban -a nick`). BChat bans their NickServ account instead of their address, so changing nick or address doesn't get them back in. It works when the network supports account bans and BChat knows the person's account.
 ### How long have I been online?
 Type `/online`: it shows how long you've been connected to each network, and how long BChat has been running. Hovering a network in the list on the left shows it too.
 
@@ -250,6 +280,18 @@ No. BChat has no ads, no accounts and no tracking. It connects only to the IRC n
 
 ---
 
+
+### What does SCRAM-SHA-256 mean?
+A safer way to log in with SASL. When a network offers it, BChat uses it by itself: your password is never sent, not even on a plain port, and the server has to prove it knows your password too. The server tab says **Logged in as ... with SCRAM-SHA-256**.
+
+### How do I stop BChat flooding or being flooded?
+**Settings → Preferences → Flood**. **Pace** sets how fast BChat sends (Careful for slow servers, Fast for your own server or bouncer); your own messages always go before automatic ones. Below that are limits on how often BChat answers CTCP requests (in total and from one person), how many new private chats open a tab, and how many get a WhoIs (0 = never). When a limit is hit, BChat says so once in the server tab. **Back to Normal** resets it.
+
+### Can I lock BChat on a shared or family PC?
+Yes: **Settings → Preferences → Lock → Set Password...**. Then BChat asks for the password when it starts, and you can limit it: **No file transfers or direct chats**, **No new private chats** (they show in the server tab), and **Only these channels**. Changing the lock needs the password. Forgot it? Delete `lock.json` in BChat's settings folder: the lock is a house rule, not a safe.
+
+### Can I run BChat from a USB stick?
+Yes, in portable mode: start `BChat.exe -portable`, or put an empty file named `portable.txt` next to `BChat.exe`. Settings, logs and downloads then go into a **BChat-data** folder next to the program. Passwords aren't stored in Windows; with a Lock password they are sealed with it, otherwise BChat doesn't keep them.
 ## Files and direct chats (DCC)
 
 ### How do I send someone a file?
@@ -261,6 +303,9 @@ When someone offers a file, it appears in **Window → File Transfers...**. Sele
 ### Why does BChat warn me about some files?
 Programs (`.exe`, `.msi`, scripts and similar) can harm your PC, so BChat asks **Accept this file?** first, and never accepts them by itself. Hidden tricks that disguise a program as a picture are removed from the file name. Received files are marked as coming from the internet, so Windows checks them before they run.
 
+
+### Can BChat accept files from people I trust?
+Yes. Right-click someone → **Trust for Files and Chats**, then set **Settings → Preferences → File transfers → Auto accept file offers:** to **From trusted people only**. Their whole address must match (a nick alone never does), and programs still always ask. The trusted list is on the same page.
 ### My antivirus blocked BChat after I received a program. Why?
 Some antivirus programs (Bitdefender, for example) treat "a new app received a program over the internet" as suspicious, even when the app is BChat. See [antivirus](#my-antivirus-blocked-or-removed-bchat) below. If you only want to see the warning, click **Cancel** at **Accept this file?**: nothing is downloaded then.
 
