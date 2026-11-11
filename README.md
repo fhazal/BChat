@@ -18,7 +18,7 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab?logo=python&logoColor=white)
 ![Qt 6](https://img.shields.io/badge/Qt-6%20(PySide6)-41cd52?logo=qt&logoColor=white)
 [![Latest release](https://img.shields.io/github/v/release/fhazal/BChat?label=release&color=f5c2e7)](https://github.com/fhazal/BChat/releases/latest)
-[![VirusTotal: 0/66 for 0.4.0](https://img.shields.io/badge/VirusTotal-0%2F66%20clean-a6e3a1?logo=virustotal&logoColor=white)](https://www.virustotal.com/gui/file/d4f4a7f211f40adb1a522fc0d01e15564f26eef64c0682136170ef878b1eb591)
+[![VirusTotal: 67 of 68 clean for 0.5.0](https://img.shields.io/badge/VirusTotal-67%2F68%20clean-f9e2af?logo=virustotal&logoColor=white)](https://www.virustotal.com/gui/file/fa3cda46dbbb5a63272eee66ab380d6d72c23f4c97831a036abdbae471897a5f)
 
 [![Website](https://img.shields.io/badge/Website-bajubesi.org-8b5cf6?style=for-the-badge)](https://bajubesi.org)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20us-ff5e5b?logo=ko-fi&logoColor=white&style=for-the-badge)](https://ko-fi.com/bajubesi)
@@ -186,7 +186,7 @@ All of them can be changed in *Settings → Advanced → Keyboard Shortcuts*.
 
 ### Antivirus
 
-The 0.4.0 installer was checked by [VirusTotal](https://www.virustotal.com/gui/file/d4f4a7f211f40adb1a522fc0d01e15564f26eef64c0682136170ef878b1eb591): none of the 66 antivirus engines that scanned it flagged it. Because the installer isn't code-signed yet, some antivirus programs may still stop it or the self-update. Either run the installer yourself, or add BChat's install folder as an exception in your antivirus.
+The 0.5.0 installer was checked by [VirusTotal](https://www.virustotal.com/gui/file/fa3cda46dbbb5a63272eee66ab380d6d72c23f4c97831a036abdbae471897a5f): 67 of the 68 antivirus engines that scanned it found nothing. One, DeepInstinct (an AI engine that judges files by their shape), flagged it; it passed 0.4.0, nothing in BChat's packaging changed, and we've reported it to Deep Instinct as a false alarm. This line will be updated when they answer. Because the installer isn't code-signed yet, some antivirus programs may still stop it or the self-update. Either run the installer yourself, or add BChat's install folder as an exception in your antivirus.
 
 ---
 
