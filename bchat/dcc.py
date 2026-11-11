@@ -39,6 +39,33 @@ def int_to_ip(n: int) -> str:
     return socket.inet_ntoa(struct.pack(">I", n & 0xFFFFFFFF))
 
 
+def plain_v4(ip: str) -> str:
+    """'::ffff:1.2.3.4' (an IPv4 address on a dual-stack socket) -> '1.2.3.4'; anything else as it is."""
+    low = ip.lower()
+    return ip[7:] if low.startswith("::ffff:") and "." in ip else ip
+
+
+def is_v6(ip: str) -> bool:
+    return ":" in plain_v4(ip)
+
+
+def address_field(ip: str) -> str:
+    """The address as a DCC offer carries it: IPv4 as one big number (classic), IPv6 as it is written."""
+    ip = plain_v4(ip)
+    return ip if ":" in ip else str(ip_to_int(ip))
+
+
+def peer_ip(field: str, ipv6_ok: bool) -> str:
+    """The address in someone's DCC offer: a number (IPv4) or an IPv6 address. Anything else is refused."""
+    if field.isdigit():
+        return int_to_ip(int(field))
+    if ipv6_ok and ":" in field:
+        a = QHostAddress(field)
+        if a.protocol() == QAbstractSocket.NetworkLayerProtocol.IPv6Protocol:
+            return a.toString()
+    raise ValueError(field)
+
+
 def parse_offer(rest: str) -> tuple[str, list[str]] | None:
     """'SEND "a b.txt" 123 45 67 [token]' -> ("SEND", ["a b.txt", "123", "45", "67"]). None if it doesn't fit."""
     verb, _, tail = rest.strip().partition(" ")
@@ -52,7 +79,9 @@ def parse_offer(rest: str) -> tuple[str, list[str]] | None:
         # an unquoted name with spaces: the numbers at the end tell where it stops. The last one may be a passive token
         most = {"SEND": 4, "RESUME": 3, "ACCEPT": 3, "CHAT": 2}.get(verb.upper(), len(words) - 1)
         numbers = 0
-        while numbers < most and numbers < len(words) - 1 and words[-1 - numbers].isdigit():
+        def numeric(w: str) -> bool:      # a number, or an IPv6 address in the address place (0.6.0)
+            return w.isdigit() or (":" in w and all(c in "0123456789abcdefABCDEF:." for c in w))
+        while numbers < most and numbers < len(words) - 1 and numeric(words[-1 - numbers]):
             numbers += 1
         keep = len(words) - numbers
         first, others = " ".join(words[:keep]), words[keep:]
@@ -100,7 +129,8 @@ class Transfer(QObject):
         first, last = cfg.dcc_first_port, cfg.dcc_last_port
         ports = range(first, max(first, last) + 1) if first else [0]
         for p in ports:
-            if self.server.listen(QHostAddress(QHostAddress.SpecialAddress.AnyIPv4), p):
+            if self.server.listen(QHostAddress(QHostAddress.SpecialAddress.Any if cfg.dcc_ipv6
+                                               else QHostAddress.SpecialAddress.AnyIPv4), p):
                 self.port = self.server.serverPort()
                 return True
         self.fail(f"No free port between {first} and {last}")
@@ -390,11 +420,26 @@ class DccManager(QObject):
             return c.dcc_ip.strip()
         if s.external_ip:                    # Network > Local found it (this PC, the server or a website)
             return s.external_ip
-        return s.sock.localAddress().toString() or "127.0.0.1"
+        return plain_v4(s.sock.localAddress().toString()) or "127.0.0.1"
+
+    def offer_address(self, s) -> str | None:
+        """What goes in our DCC offer. An IPv6 address only with Preferences > Network setup's IPv6 tick on."""
+        ip = self.my_address(s)
+        if is_v6(ip) and not self.cfg.dcc_ipv6:
+            s.add(s._front(), "error", "*", "Your connection is IPv6 only and IPv6 for file transfers is off "
+                                            "(Preferences > Network setup), so this can't be offered.")
+            return None
+        try:
+            return address_field(ip)
+        except OSError:
+            s.add(s._front(), "error", "*", f"Couldn't use the address {ip} for a file transfer.")
+            return None
 
     # --- sending ------------------------------------------------------------------------
 
     def send_file(self, s, nick: str, path: str, passive: bool = False) -> Transfer | None:
+        if self.locked(s):
+            return None
         p = Path(path)
         if not p.is_file():
             s.add(s._front(), "error", "*", f"Cannot access {path}")
@@ -403,14 +448,20 @@ class DccManager(QObject):
         t = self._add(Transfer(self, s, "send", nick, name, p.stat().st_size))
         t.path = str(p)
         quoted = f'"{name}"' if " " in name else name
+        addr = self.offer_address(s)
+        if addr is None:
+            if t in self.items:
+                self.items.remove(t)
+            self.updated.emit()
+            return None
         if passive:
             t.passive = True
             t.token = str(int(time.time() * 1000) % 1000000)
-            s.send("PRIVMSG", nick, f"\x01DCC SEND {quoted} {ip_to_int(self.my_address(s))} 0 {t.size} {t.token}\x01")
+            s.send("PRIVMSG", nick, f"\x01DCC SEND {quoted} {addr} 0 {t.size} {t.token}\x01")
         else:
             if not t.listen():
                 return t
-            s.send("PRIVMSG", nick, f"\x01DCC SEND {quoted} {ip_to_int(self.my_address(s))} {t.port} {t.size}\x01")
+            s.send("PRIVMSG", nick, f"\x01DCC SEND {quoted} {addr} {t.port} {t.size}\x01")
         s.add(s._front(), "info", "*", f"Offering {name} ({t.size} bytes) to {nick}")
         if self.cfg.dcc_open_send:
             self.win.open_transfers()
@@ -418,16 +469,25 @@ class DccManager(QObject):
 
     # --- what the other side sends ------------------------------------------------------
 
+    def locked(self, s) -> bool:
+        """0.6.0 Lock 'No file transfers or direct chats'."""
+        if (getattr(self.cfg, "lock_limits", None) or {}).get("no_dcc"):
+            s.add(s._front(), "info", "*", "Lock: file transfers and direct chats are off on this PC.")
+            return True
+        return False
+
     def incoming(self, s, nick: str, rest: str) -> None:
         offer = parse_offer(rest)
         if offer is None:
             return
+        if offer[0] in ("SEND", "CHAT") and self.locked(s):
+            return
         verb, a = offer
         try:
             if verb == "SEND" and len(a) >= 4:
-                self._offer_file(s, nick, a[0], int(a[1]), int(a[2]), int(a[3]), a[4] if len(a) > 4 else "")
+                self._offer_file(s, nick, a[0], peer_ip(a[1], self.cfg.dcc_ipv6), int(a[2]), int(a[3]), a[4] if len(a) > 4 else "")
             elif verb == "CHAT" and len(a) >= 3:
-                self._offer_chat(s, nick, int(a[1]), int(a[2]))
+                self._offer_chat(s, nick, peer_ip(a[1], self.cfg.dcc_ipv6), int(a[2]))
             elif verb == "RESUME" and len(a) >= 3:
                 self._resume_asked(s, nick, a[0], int(a[1]), int(a[2]))
             elif verb == "ACCEPT" and len(a) >= 3:
@@ -446,12 +506,12 @@ class DccManager(QObject):
         if token:
             for t in self.items:
                 if t.kind == "send" and t.passive and t.token == token and lower_eq(t.nick, nick) and t.state == "queued":
-                    t.ip, t.port = int_to_ip(ip), port
+                    t.ip, t.port = ip, port
                     t.connect_out()
                     return
         clean = safe_name(name)
         t = self._add(Transfer(self, s, "recv", nick, clean, size))
-        t.ip, t.port, t.token, t.passive = int_to_ip(ip), port, token, port == 0
+        t.ip, t.port, t.token, t.passive = ip, port, token, port == 0
         t.path = str(self.target_path(clean, nick))
         s.add(s._front(), "info", "*", f"{nick} has offered {clean} ({size} bytes)")
         s.last_dcc = nick
@@ -497,7 +557,7 @@ class DccManager(QObject):
             if t.listen():
                 s = t.session
                 quoted = f'"{t.name}"' if " " in t.name else t.name
-                s.send("PRIVMSG", t.nick, f"\x01DCC SEND {quoted} {ip_to_int(self.my_address(s))} {t.port} {t.size} {t.token}\x01")
+                s.send("PRIVMSG", t.nick, f"\x01DCC SEND {quoted} {self.offer_address(s) or 0} {t.port} {t.size} {t.token}\x01")
         else:
             t.connect_out()
 
@@ -548,7 +608,7 @@ class DccManager(QObject):
 
     def _offer_chat(self, s, nick, ip, port) -> None:
         t = self._add(Transfer(self, s, "chat", nick, "chat"))
-        t.ip, t.port = int_to_ip(ip), port
+        t.ip, t.port = ip, port
         s.add(s._front(), "info", "*", f"Received a DCC CHAT offer from {nick}")
         s.notify.emit(s._front(), "priv")
         if self.cfg.dcc_auto in (1, 2) and self.trusted(s, nick):
@@ -558,13 +618,15 @@ class DccManager(QObject):
             self.win.open_chats()
 
     def start_chat(self, s, nick: str) -> Transfer | None:
+        if self.locked(s):
+            return None
         for t in self.items:
             if t.kind == "chat" and t.active and lower_eq(t.nick, nick) and t.session is s:
                 s.add(s._front(), "error", "*", f"Already in a DCC chat with {nick}")
                 return t
         t = self._add(Transfer(self, s, "chat", nick, "chat"))
         if t.listen():
-            s.send("PRIVMSG", nick, f"\x01DCC CHAT chat {ip_to_int(self.my_address(s))} {t.port}\x01")
+            s.send("PRIVMSG", nick, f"\x01DCC CHAT chat {self.offer_address(s) or 0} {t.port}\x01")
             s.add(s._front(), "info", "*", f"Offering DCC CHAT to {nick}")
         if self.cfg.dcc_open_chat:
             self.win.open_chats()

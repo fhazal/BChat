@@ -4,6 +4,7 @@ Pages and options follow XChat 2.8.8's src/fe-gtk/setup.c. Every page works. Not
 """
 from __future__ import annotations
 
+import time
 from dataclasses import fields
 
 from PySide6.QtCore import Qt
@@ -18,8 +19,8 @@ from .widgets import FramedDialog, icon
 CATEGORIES = {"Interface": ["Text box", "Input box", "User list", "Channel switcher", "Colors"],
               "Chatting": ["Alerts", "Highlights", "General", "Logging", "Sound", "Now Playing", "Advanced"],
               "Network": ["Network setup", "Flood", "Local", "File transfers"],
-              "BChat": ["Updates"]}
-BUILT = ("Flood", "Text box", "Input box", "User list", "Channel switcher", "Colors", "Alerts", "Highlights", "General", "Logging", "Sound", "Now Playing", "Advanced", "Network setup", "Local", "File transfers", "Updates")
+              "BChat": ["Updates", "Lock"]}
+BUILT = ("Flood", "Text box", "Input box", "User list", "Channel switcher", "Colors", "Alerts", "Highlights", "General", "Logging", "Sound", "Now Playing", "Advanced", "Network setup", "Local", "File transfers", "Updates", "Lock")
 SWITCHER_POS = ("Left", "Right", "Top", "Bottom", "Hidden")
 SORTS = ("A-Z, Ops first", "A-Z", "Z-A, Ops last", "Z-A", "Unsorted")
 # Sound page: session notify event -> the name XChat's Sound page uses
@@ -120,7 +121,7 @@ class PreferencesDialog(FramedDialog):
         self.page_of["Colors"] = self.pages.addWidget(self._colors_page())
         for name, build in (("File transfers", self._files_page), ("Channel switcher", self._switcher_page), ("Input box", self._input_page), ("User list", self._userlist_page), ("Alerts", self._alerts_page), ("Highlights", self._highlights_page),
                             ("General", self._general_page), ("Logging", self._logging_page), ("Sound", self._sound_page), ("Now Playing", self._np_page),
-                            ("Advanced", self._advanced_page), ("Network setup", self._network_page), ("Flood", self._flood_page), ("Local", self._local_page), ("Updates", self._updates_page)):
+                            ("Advanced", self._advanced_page), ("Network setup", self._network_page), ("Flood", self._flood_page), ("Local", self._local_page), ("Updates", self._updates_page), ("Lock", self._lock_page)):
             self.page_of[name] = self.pages.addWidget(build())
         row.addWidget(self.tree)
         row.addWidget(right, 1)
@@ -589,6 +590,110 @@ class PreferencesDialog(FramedDialog):
         return page
 
     # --- Updates (BChat > Updates) -------------------------------------------------------
+
+    # --- Lock (0.6.0) -------------------------------------------------------------------------
+
+    def _lock_page(self) -> QWidget:
+        from . import lock
+        c = self.cfg
+        page, lay = self._new_page()
+        self.lock_d = lock.read(self.win.cfg_dir)
+        self.lock_open = self.lock_d is None          # an existing lock needs its password before changes
+        self.lock_new_pw = ""
+        lay.addWidget(_heading("Start"))
+        self.lock_on = self._check(lay, "Ask for a password when BChat starts", self.lock_d is not None)
+        self.lock_on.toggled.connect(self._lock_toggled)
+        row = QHBoxLayout()
+        self.lock_pw_btn = QPushButton(icon("edit"), "Set Password...")
+        self.lock_pw_btn.setAutoDefault(False)
+        self.lock_pw_btn.clicked.connect(self._lock_set_password)
+        self.lock_unlock_btn = QPushButton(icon("preferences"), "Change Lock Settings...")
+        self.lock_unlock_btn.setAutoDefault(False)
+        self.lock_unlock_btn.clicked.connect(self._lock_unlock)
+        row.addWidget(self.lock_pw_btn)
+        row.addWidget(self.lock_unlock_btn)
+        row.addStretch(1)
+        lay.addLayout(row)
+        lay.addWidget(_heading("Limits while Lock is on"))
+        d = self.lock_d or {}
+        self.lock_no_dcc = self._check(lay, "No file transfers or direct chats", bool(d.get("no_dcc")))
+        self.lock_no_priv = self._check(lay, "No new private chats (they show in the server tab)", bool(d.get("no_private")))
+        g = QGridLayout()
+        self.lock_only = QCheckBox("Only these channels:")
+        self.lock_only.setChecked(bool(d.get("only_channels")))
+        self.lock_chans = QLineEdit(d.get("only_channels", ""))
+        self.lock_chans.setPlaceholderText("#chat, #BChat")
+        g.addWidget(self.lock_only, 0, 0)
+        g.addWidget(self.lock_chans, 0, 1)
+        g.setColumnStretch(1, 1)
+        lay.addLayout(g)
+        note = QLabel("For a shared or family PC. With a lock, this page needs the password to change. Forgot it? "
+                      "Delete lock.json in BChat's settings folder (anyone with the PC can, so it is a house rule, not a safe).")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {c.theme.muted};")
+        lay.addWidget(note)
+        self.lock_removed = QLabel("")
+        self.lock_removed.setWordWrap(True)
+        if c.lock_removed_at and self.lock_d is None:
+            when = time.strftime("%d-%m at %H:%M", time.localtime(c.lock_removed_at))
+            self.lock_removed.setText(f"The lock was removed on {when} (lock.json was deleted).")
+            self.lock_removed.setStyleSheet(f"color: {c.theme.status_lag};")
+        lay.addWidget(self.lock_removed)
+        lay.addStretch(1)
+        self._lock_state()
+        return page
+
+    def _lock_state(self) -> None:
+        editable = self.lock_open
+        for w in (self.lock_on, self.lock_no_dcc, self.lock_no_priv, self.lock_only, self.lock_chans):
+            w.setEnabled(editable)
+        self.lock_pw_btn.setEnabled(editable and self.lock_on.isChecked())
+        self.lock_unlock_btn.setVisible(not editable)
+
+    def _lock_unlock(self) -> None:
+        from . import lock
+        key = lock.ask_password(self, self.win.cfg_dir, self.lock_d, "BChat: Lock Settings",
+                                "Password to change the Lock settings:", "&Cancel")
+        if key is not None:
+            self.lock_open = True
+            self.lock_key = key
+            self._lock_state()
+
+    def _lock_toggled(self, on: bool) -> None:
+        if on and self.lock_d is None and not self.lock_new_pw:
+            self._lock_set_password()
+            if not self.lock_new_pw:
+                self.lock_on.setChecked(False)
+        self._lock_state()
+
+    def _lock_set_password(self, pw: str | None = None) -> None:
+        if pw is None:
+            pw = new_password(self)
+        if pw:
+            self.lock_new_pw = pw
+
+    def _apply_lock(self) -> None:
+        from . import config as config_mod, lock
+        if not self.lock_open:
+            return
+        c = self.cfg
+        limits = {"no_dcc": self.lock_no_dcc.isChecked(), "no_private": self.lock_no_priv.isChecked(),
+                  "only_channels": self.lock_chans.text().strip() if self.lock_only.isChecked() else ""}
+        if self.lock_on.isChecked() and (self.lock_new_pw or self.lock_d is not None):
+            if self.lock_new_pw:
+                d, key = lock.make(self.lock_new_pw, limits)
+                config_mod.LOCK_KEY = key
+            else:
+                d = dict(self.lock_d)
+                d.update(lock.limits_only(limits))
+            lock.write(self.win.cfg_dir, d)
+            c.lock_was_on, c.lock_removed_at = True, 0.0
+            c.lock_limits = lock.limits_only(d)
+        else:
+            lock.remove(self.win.cfg_dir)
+            c.lock_was_on, c.lock_removed_at = False, 0.0
+            c.lock_limits = None
+            config_mod.LOCK_KEY = None
 
     def _updates_page(self) -> QWidget:
         from .updatepage import updates_page
@@ -1144,8 +1249,14 @@ class PreferencesDialog(FramedDialog):
         lay.addWidget(_heading("Your Address"))
         g = QGridLayout()
         self.bind = self._entry(g, 0, "Bind to:", c.bind_host)
+        modes = ("auto", "ipv4", "ipv6")
+        self.ip_mode = self._menu(g, 1, "Internet:", ("Automatic", "IPv4 only", "IPv6 only"),
+                                  modes.index(c.ip_mode) if c.ip_mode in modes else 0)
         lay.addLayout(g)
-        lay.addWidget(QLabel("Only useful for computers with multiple addresses."))
+        self.bind_strict = self._check(lay, "If this address is gone (VPN off), don't connect at all", c.bind_strict)
+        self.dcc_ipv6 = self._check(lay, "Use IPv6 for file transfers and direct chats when you have it", c.dcc_ipv6)
+        lay.addWidget(QLabel("Only useful for computers with multiple addresses. Without the tick BChat uses\n"
+                             "your normal address when the bind address is missing."))
         lay.addWidget(_heading("Proxy Server"))
         g = QGridLayout()
         self.proxy_host = self._entry(g, 0, "Hostname:", c.proxy_host)
@@ -1390,6 +1501,9 @@ class PreferencesDialog(FramedDialog):
         c.url_limit, c.opacity = self.url_limit.value(), self.opacity.value()
         c.raw_modes, c.hide_joinpart = self.raw_modes.isChecked(), self.hide_jp.isChecked()
         c.bind_host, c.proxy_host = self.bind.text().strip(), self.proxy_host.text().strip()
+        self._apply_lock()
+        c.ip_mode = ("auto", "ipv4", "ipv6")[self.ip_mode.currentIndex()]
+        c.bind_strict, c.dcc_ipv6 = self.bind_strict.isChecked(), self.dcc_ipv6.isChecked()
         c.proxy_port = self.proxy_port.value()
         c.proxy_type = ("none", "socks5", "http")[self.proxy_type.currentIndex()]
         c.proxy_auth, c.proxy_user, c.proxy_password = self.proxy_auth.isChecked(), self.proxy_user.text().strip(), self.proxy_pass.text()
@@ -1397,3 +1511,39 @@ class PreferencesDialog(FramedDialog):
             setattr(c.theme, f.name, list(self.theme.palette) if f.name == "palette" else getattr(self.theme, f.name))
         self.win.apply_preferences()
         super().accept()
+
+
+def new_password(parent) -> str:
+    """Lock > Set Password: typed twice, at least 4 characters. '' = cancelled."""
+    from .widgets import FramedDialog
+    dlg = FramedDialog("BChat: Lock Password", parent)
+    g = QGridLayout()
+    one, two = QLineEdit(), QLineEdit()
+    for i, (label, e) in enumerate((("Password:", one), ("Again:", two))):
+        e.setEchoMode(QLineEdit.EchoMode.Password)
+        g.addWidget(QLabel(label), i, 0, Qt.AlignmentFlag.AlignRight)
+        g.addWidget(e, i, 1)
+    dlg.body.addLayout(g)
+    why = QLabel("")
+    dlg.body.addWidget(why)
+    row = QHBoxLayout()
+    row.addStretch(1)
+    cancel = QPushButton(icon("close-light"), "&Cancel")
+    cancel.setAutoDefault(False)
+    cancel.clicked.connect(dlg.reject)
+    ok = QPushButton(icon("save"), "&OK")
+    ok.setDefault(True)
+    ok.clicked.connect(dlg.accept)
+    row.addWidget(cancel)
+    row.addWidget(ok)
+    dlg.body.addLayout(row)
+
+    def check():
+        good = len(one.text()) >= 4 and one.text() == two.text()
+        ok.setEnabled(good)
+        why.setText("" if good or not one.text() else "At least 4 characters, the same twice.")
+    one.textChanged.connect(lambda _: check())
+    two.textChanged.connect(lambda _: check())
+    check()
+    dlg.resize(320, 0)
+    return one.text() if dlg.exec() else ""

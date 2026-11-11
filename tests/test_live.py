@@ -1755,7 +1755,7 @@ def test_url_grabber_window(live, tmp_path):
     assert w.view.topLevelItemCount() == 2
     srv.send(":Belon!b@h PRIVMSG #skinhead :new ftp://f.org/x")
     assert wait(app, lambda: w.view.topLevelItemCount() == 3)
-    w.view.setCurrentItem(w.view.topLevelItem(2))
+    w.view.setCurrentItem(w.view.topLevelItem(0))          # 0.6.0: newest on top
     QTest.mouseClick(w.copy_btn, Qt.MouseButton.LeftButton)
     assert QApplication.clipboard().text() == "ftp://f.org/x"
     out = tmp_path / "u.txt"

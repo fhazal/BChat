@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fnmatch
+import random
 import re
 import time
 import base64
@@ -138,7 +139,15 @@ class Session(QObject):
     WANTED_CAPS = {"multi-prefix", "away-notify", "userhost-in-names", "server-time", "znc.in/server-time-iso",
                    "znc.in/self-message", "chghost", "cap-notify", "account-notify", "account-tag", "extended-join",
                    "invite-notify", "message-tags", "setname", "batch", "draft/chathistory", "chathistory",
-                   "labeled-response"}
+                   "labeled-response", "extended-monitor"}
+    # 0.6.0 Edit Network > Server Features: what the user sees -> the capabilities behind it (all on by default)
+    SERVER_FEATURES = (("Typing notices and replies", ("message-tags",)),
+                       ("Message history", ("draft/chathistory", "chathistory")),
+                       ("Away notices", ("away-notify",)),
+                       ("Account names", ("account-notify", "account-tag", "extended-join")),
+                       ("Answers in the right tab", ("labeled-response",)),
+                       ("Server time on lines", ("server-time", "znc.in/server-time-iso")),
+                       ("Friends' away status", ("extended-monitor",)))
     PACE = {"careful": 1.5, "normal": 1.0, "fast": 0.5}   # Preferences > Network > Flood: how quickly lines go out
     HISTORY_LINES = 50     # asked for on join when the server keeps channel history (IRCv3 chathistory)
 
@@ -164,6 +173,10 @@ class Session(QObject):
         self.max_modes = 3
         self.away = False
         self.server_index = -1
+        self._ports_left: list[int] = []     # 0.6.0 host/+6697,7000: the ports of this server not tried yet
+        self._cur_port = 0
+        self._repeat = False                 # the next connect goes to the same server and port again
+        self._ws_path = ""                   # 0.6.0: the current server is a WebSocket one (wss://host/path)
         self.want_connected = False
         self.nick_attempt = 0
         self._welcomed = False
@@ -232,9 +245,12 @@ class Session(QObject):
         self.friend_state: dict[str, dict] = {}
         self._ison_waiting = 0
         self._monitor = False
+        self._watch = False          # 0.6.0: no MONITOR but WATCH (UnrealIRCd and others): Friends List uses it
+        self.extban = ("", "")       # 0.6.0: ISUPPORT EXTBAN=~,a... -> ("~", "a..."): /ban -a account bans
         self._trust_once = ""      # a certificate fingerprint the user said Connect Once to
         self._friends_timer = QTimer(self)
         self._friends_timer.timeout.connect(self.poll_friends)
+        self._friends_wait = 0       # 0.6.0: >0 = waiting for 005 (end of MOTD) before Friends tracking picks MONITOR/WATCH/ISON
         self._new_socket()
 
         self._reconnect = QTimer(self, singleShot=True)
@@ -329,7 +345,11 @@ class Session(QObject):
             old.blockSignals(True)
             old.abort()
             old.deleteLater()
-        self.sock = QSslSocket(self)
+        if self._ws_path:
+            from .wsock import WsSocket
+            self.sock = WsSocket(self, self._ws_path)
+        else:
+            self.sock = QSslSocket(self)
         self.sock.connected.connect(self._on_tcp)
         self.sock.encrypted.connect(self._on_tls)
         self.sock.readyRead.connect(self._on_read)
@@ -337,8 +357,9 @@ class Session(QObject):
         self.sock.errorOccurred.connect(self._on_socket_error)
         self.sock.sslErrors.connect(self._on_ssl_errors)
 
-    def _apply_network_settings(self) -> None:
-        """Preferences > Network setup. A failed bind is reported, and the connection still goes out normally."""
+    def _apply_network_settings(self) -> bool:
+        """Preferences > Network setup. A failed bind is reported, and the connection still goes out normally,
+        unless 'If this address is gone, don't connect at all' is ticked (VPN users): then False = don't connect."""
         c = self.cfg
         kinds = {"socks5": QNetworkProxy.ProxyType.Socks5Proxy, "http": QNetworkProxy.ProxyType.HttpProxy}
         use_proxy = c.proxy_type in kinds and bool(c.proxy_host)
@@ -354,32 +375,64 @@ class Session(QObject):
             self.sock.setProxy(p)
             if c.bind_host:
                 self.add(self.server_buffer, INFO, "*", f"Using the proxy, so the address {c.bind_host} isn't used.")
-            return
+            return True
         self.sock.setProxy(QNetworkProxy(QNetworkProxy.ProxyType.NoProxy))
         if c.bind_host and not self.sock.bind(QHostAddress(c.bind_host)):
+            if c.bind_strict:
+                self.add(self.server_buffer, ERROR, "*", f"Your bind address {c.bind_host} is gone (VPN off?): "
+                                                          "not connecting, as you asked (Preferences > Network setup).")
+                return False
             self.add(self.server_buffer, ERROR, "*", f"Couldn't use the address {c.bind_host}: {self.sock.errorString()}")
             self._new_socket()
             self.sock.setProxy(QNetworkProxy(QNetworkProxy.ProxyType.NoProxy))
+        return True
 
     def connect_to_network(self) -> None:
         self.want_connected = True
         self.server_index = -1
+        self._ports_left, self._repeat = [], False
         self._connect_next()
+
+    def _pick_server(self) -> tuple[Server, int]:
+        """The server and port for this try: the same again after _repeat, else the next untried port of this
+        server (host/+6697,7000 tries them in random order), else the next server in the list."""
+        if self._repeat and 0 <= self.server_index < len(self.net.servers):
+            self._repeat = False
+            return self.net.servers[self.server_index], self._cur_port
+        self._repeat = False
+        if self._ports_left and 0 <= self.server_index < len(self.net.servers):
+            self._cur_port = self._ports_left.pop(0)
+            return self.net.servers[self.server_index], self._cur_port
+        self.server_index = (self.server_index + 1) % len(self.net.servers) if self.net.cycle else 0
+        s = self.net.servers[self.server_index]
+        ports = [s.port] + [p for p in s.more_ports if p != s.port]
+        if len(ports) > 1:
+            random.shuffle(ports)
+        self._cur_port, self._ports_left = ports[0], ports[1:]
+        return s, self._cur_port
 
     def _connect_next(self) -> None:
         if not self.net.servers:
             self.want_connected = False
             self.add(self.server_buffer, ERROR, "*", "This tab has no server yet. Type /server <host> [port or +port for SSL].")
             return
-        self.server_index = (self.server_index + 1) % len(self.net.servers) if self.net.cycle else 0
-        s = self.net.servers[self.server_index]
+        s, picked = self._pick_server()
+        if s.ws_plain:
+            self.want_connected = False
+            self.add(self.server_buffer, ERROR, "*", f"ws://{s.host} isn't encrypted, so BChat won't connect to it. "
+                                                     "Use wss:// in Edit Network.")
+            return
+        self._ws_path = s.ws_path
         self._set_state("connecting")
         self._buf = b""
         self._welcomed = False
+        self._friends_wait = 0
         self._cap_active = set()
         self.nick_attempt = 0
         self.nick = self._identity("nick") or random_nick()
-        self._apply_network_settings()
+        self._new_socket()                        # a WebSocket server and a normal one need different sockets
+        if not self._apply_network_settings():
+            return self._stop_bind()
         self._queue.clear()
         self._next_send = 0.0
         self.lag_ms = None
@@ -388,6 +441,7 @@ class Session(QObject):
         self.whox = False
         self.userip = False
         self.statusmsg = ""
+        self._monitor, self._watch, self.extban = False, False, ("", "")
         self.chathistory_max = -1
         self._history = {}
         self.prefix_modes, self.prefix_chars = "ohv", "@%+"
@@ -410,8 +464,8 @@ class Session(QObject):
         self._labels: dict[str, tuple] = {}     # label -> (buffer, when): labeled-response
         self._label_batches: dict[str, object] = {}
         self._route = None
-        host, port, tls = s.host, s.port, s.ssl
-        policy = self.cfg.sts.get(host.lower())
+        host, port, tls = s.host, picked, s.ssl
+        policy = self.cfg.sts.get(host.lower()) if not s.ws_path else None
         self._sts_enforced = bool(policy and policy.get("expires", 0) > time.time())
         if self._sts_enforced and not tls:
             port, tls = int(policy["port"]), True
@@ -419,23 +473,39 @@ class Session(QObject):
         self._tls_now = tls
         if self._starttls and not self._sts_enforced:
             self._new_socket()                    # SSL settings start clean, the switch happens after STARTTLS
-            self._apply_network_settings()
+            if not self._apply_network_settings():
+                return self._stop_bind()
         elif self._starttls:
             self._starttls = ""                   # STS already moved us to a real SSL port
         if tls:
             # a fresh socket: Qt keeps an "ignore certificate errors" from an earlier connection on the old one,
             # and Connect Once must not carry over to the next connection
             self._new_socket()
-            self._apply_network_settings()
+            if not self._apply_network_settings():
+                return self._stop_bind()
             self._use_client_cert()
         elif self.net.login == "cert":
             self.add(self.server_buffer, ERROR, "*", "Certificate login needs an SSL server (+port in Edit Network). "
                                                      "Connecting without it.")
-        self.add(self.server_buffer, CONNECT, "*", f"Connecting to {host} ({'SSL ' if tls else ''}port {port})...")
-        if tls:
-            self.sock.connectToHostEncrypted(host, port)
+        if s.ws_path:
+            shown = f"wss://{host}{'' if port == 443 else f':{port}'}{s.ws_path}"
+            self.add(self.server_buffer, CONNECT, "*", f"Connecting to {shown} (WebSocket over SSL)...")
         else:
-            self.sock.connectToHost(host, port)
+            many = [s.port] + list(s.more_ports)
+            picked_from = f", picked from {', '.join(map(str, many))}" if len(many) > 1 else ""
+            self.add(self.server_buffer, CONNECT, "*", f"Connecting to {host} ({'SSL ' if tls else ''}port {port}{picked_from})...")
+        proto = {"ipv4": QAbstractSocket.NetworkLayerProtocol.IPv4Protocol,
+                 "ipv6": QAbstractSocket.NetworkLayerProtocol.IPv6Protocol}.get(
+            self.cfg.ip_mode, QAbstractSocket.NetworkLayerProtocol.AnyIPProtocol)
+        mode = QAbstractSocket.OpenModeFlag.ReadWrite
+        if tls:
+            self.sock.connectToHostEncrypted(host, port, mode, proto)
+        else:
+            self.sock.connectToHost(host, port, mode, proto)
+
+    def _stop_bind(self) -> None:
+        self.want_connected = False
+        self._set_state("disconnected")
 
     def connect_manual(self, host: str, port: int, ssl: bool, password: str = "") -> None:
         """/server: leave whatever this tab was doing and go to this server, with the global nick and no saved login."""
@@ -481,7 +551,7 @@ class Session(QObject):
         self.want_connected = True
         if was_live:
             self.sock.abort()
-        self.server_index = max(-1, self.server_index - 1)
+        self._repeat = self.server_index >= 0 and self._cur_port > 0
         self._connect_next()
 
     def current_lag_ms(self) -> int | None:
@@ -604,7 +674,7 @@ class Session(QObject):
         else:
             self._trust_once = fp
         self.want_connected = True
-        self.server_index -= 1                   # the same server again, not the next in the list
+        self._repeat = True                      # the same server and port again, not the next in the list
         self._connect_next()
 
     def _login(self) -> None:
@@ -726,22 +796,48 @@ class Session(QObject):
     def start_friends(self) -> None:
         self.friend_state = {k: v for k, v in self.friend_state.items() if lower(k) in [lower(n) for n in self._friends_here()]}
         nicks = self._friends_here()
-        if self.state != "connected":
+        if self.state != "connected" or self._friends_wait:
             return
         if self._monitor:
             self.send_raw("MONITOR C", quiet=True)
             if nicks:
                 self.send_raw("MONITOR + " + ",".join(nicks), quiet=True)
             self.send_raw("MONITOR S", quiet=True)
+        elif self._watch:
+            self.send_raw("WATCH C", quiet=True)            # 0.6.0: instant online/offline/away where WATCH exists
+            for i in range(0, len(nicks), 20):
+                self.send_raw("WATCH " + " ".join("+" + n for n in nicks[i:i + 20]), quiet=True)
         else:
             self._friends_timer.start(max(10, self.cfg.notify_timeout) * 1000)
             self.poll_friends()
 
+    def _friends_after_005(self, ticket: int = 0) -> None:
+        """0.6.0: start Friends tracking once the server's feature list (005) is in: end of MOTD, or 5 s after 001."""
+        if self._friends_wait and (not ticket or ticket == self._friends_wait):
+            self._friends_wait = 0
+            self.start_friends()
+
     def poll_friends(self) -> None:
         nicks = self._friends_here()
-        if self.state == "connected" and nicks and not self._monitor:
+        if self.state == "connected" and nicks and not self._monitor and not self._watch:
             self._ison_waiting += 1
             self.send_raw("ISON " + " ".join(nicks), quiet=True)
+
+    def _friend_away(self, nick: str, reason: str | None) -> None:
+        """0.6.0: a friend went away (reason) or came back (None): one line in the server tab when it changes."""
+        key = lower(nick)
+        name = next((n for n in self._friends_here() if lower(n) == key), None)
+        if name is None:
+            return
+        st = self.friend_state.setdefault(key, {"online": True, "seen": time.time(), "known": True, "since": time.time()})
+        before = st.get("away")
+        st["away"] = reason
+        if reason == before or (before is None and reason is None):
+            return
+        if reason is not None:
+            self.add(self.server_buffer, INFO, "*", f"{name} is away" + (f": {reason}" if reason else "."))
+        else:
+            self.add(self.server_buffer, INFO, "*", f"{name} is back.")
 
     def _friend_online(self, nick: str, online: bool) -> None:
         key = lower(nick)
@@ -779,10 +875,34 @@ class Session(QObject):
             return
         # a line break inside user text would otherwise become a second IRC command
         line = line.replace("\r", " ").replace("\n", " ").replace("\0", "")
+        if line[:5].upper() == "JOIN " and getattr(self.cfg, "lock_limits", None):
+            line = self._lock_join(line)
+            if not line:
+                return
         secret = secret or bool(self._SECRET_LINE.match(line))
         self.sock.write(line.encode("utf-8", "replace") + b"\r\n")
         if not quiet:
             self.raw_line.emit(self._hide_secret(line) if secret else line, True)
+
+    def _lock_join(self, line: str) -> str:
+        """0.6.0 Lock 'Only these channels': a JOIN keeps only the allowed channels (keys stay with theirs)."""
+        from .lock import allowed_channels
+        allowed = allowed_channels(self.cfg.lock_limits)
+        if not allowed:
+            return line
+        parts = line.split(" ")
+        chans = parts[1].split(",") if len(parts) > 1 else []
+        keys = parts[2].split(",") if len(parts) > 2 else []
+        keep = [(c, keys[i] if i < len(keys) else "") for i, c in enumerate(chans) if lower(c) in allowed]
+        refused = [c for c in chans if lower(c) not in allowed]
+        if refused:
+            self.add(self._front(), ERROR, "*", f"Lock: only {', '.join(allowed)} can be joined here ({', '.join(refused)} wasn't).")
+        if not keep:
+            return ""
+        out = "JOIN " + ",".join(c for c, _ in keep)
+        if any(k for _, k in keep):
+            out += " " + ",".join(k or "x" for _, k in keep)
+        return out
 
     def send(self, command: str, *params: str) -> None:
         line = build_line(command, *params)
@@ -887,6 +1007,22 @@ class Session(QObject):
             part = nicks[i:i + self.max_modes]
             self.send("MODE", b.name, sign_mode[0] + sign_mode[1] * len(part), *part)
 
+    def account_ban(self, b: Buffer, nick: str, kick: bool = False) -> None:
+        """0.6.0 /ban -a nick: ban the account, not the host (EXTBAN ~a: or $a:, whatever the server offers)."""
+        pre, types = self.extban
+        if not pre or "a" not in types:
+            self.add(b, ERROR, "*", "This server has no account bans (EXTBAN a). Use /ban nick instead.")
+            return
+        u = b.users.get(lower(nick))
+        account = u.account if u is not None else ""
+        if not account:
+            self.add(b, ERROR, "*", f"BChat doesn't know {nick}'s account (not logged in, or the server doesn't say). "
+                                    "Use /ban nick instead.")
+            return
+        self.send("MODE", b.name, "+b", f"{pre}a:{account}")
+        if kick:
+            self.send("KICK", b.name, nick, self.cfg.part_reason)
+
     def ban(self, b: Buffer, nick: str, kind: int, kick: bool = False) -> None:
         u = b.users.get(lower(nick))
         self.send("MODE", b.name, "+b", mask_ban(nick, u.host if u else "", kind))
@@ -981,7 +1117,7 @@ class Session(QObject):
             if "sts" in offered and self._sts_policy(self._cap_offered["sts"]):
                 return
             self._spot_bouncer(offered)
-            wanted = offered & self.WANTED_CAPS
+            wanted = offered & self.WANTED_CAPS - set(self.net.caps_off)
             mechs = [x for x in self._cap_offered.get("sasl", "").upper().split(",") if x]
             if self.net.login == "cert":
                 if not self._cert_loaded:
@@ -1047,7 +1183,7 @@ class Session(QObject):
             if port.isdigit():
                 self.add(self.server_buffer, INFO, "*", f"Server requires SSL (STS), reconnecting on port {port}")
                 self.cfg.sts[host] = {"port": int(port), "expires": time.time() + 3600}
-                self.server_index -= 1
+                self._repeat = True
                 self._set_state("disconnected")
                 self._keepalive.stop()
                 self.sock.abort()
@@ -1453,6 +1589,18 @@ class Session(QObject):
             b.activity = level
             self.buffer_changed.emit(b)
 
+    def _notice_channel(self, m: Message, text: str):
+        """0.6.0: a private notice about a channel (+draft/channel-context tag, or services' '[#chan] text')
+        goes to that channel's tab while we're in it."""
+        ctx = m.tags.get("+draft/channel-context") or m.tags.get("+channel-context") or ""
+        if not ctx and text.startswith("[") and "] " in text:
+            ctx = text[1:text.index("] ")]
+        if ctx and self.is_channel(ctx):
+            b = self.buffers.get(lower(ctx))
+            if b is not None and b.kind == CHANNEL and b.joined:
+                return b
+        return None
+
     def _irc_notice(self, m: Message) -> None:
         target, text = m.param(0), m.param(-1)
         if lower(m.nick) == "operserv" and "session limit" in text.lower():
@@ -1486,7 +1634,7 @@ class Session(QObject):
             where = self.buffer("(notices)") if self.cfg.notices_tab else self.server_buffer
             self.add(where, NOTICE, "-" + (m.nick or "server") + "-", text, self._ts(m))
             return
-        b = self.buffers.get(lower(target)) if self.is_channel(target) else self._front()
+        b = self.buffers.get(lower(target)) if self.is_channel(target) else (self._notice_channel(m, text) or self._front())
         self.add(b or self._front(), NOTICE, f"-{m.nick}-", text, self._ts(m))
         self.notify.emit(b or self._front(), "notice")
 
@@ -1611,6 +1759,12 @@ class Session(QObject):
 
     def _query_flood(self, nick: str, now: float) -> bool:
         """True = too many new private chats this minute: show it in the server tab instead of a new tab."""
+        limits = getattr(self.cfg, "lock_limits", None)
+        if limits and limits.get("no_private"):        # 0.6.0 Lock: no new private chats
+            if not getattr(self, "_lock_priv_said", False):
+                self._lock_priv_said = True
+                self.add(self.server_buffer, INFO, "*", "Lock: new private chats show here instead of new tabs.")
+            return True
         limit = self.cfg.flood_queries
         times = [t for t in getattr(self, "_new_queries", []) if now - t < 60]
         self._new_queries = times
@@ -1741,6 +1895,8 @@ class Session(QObject):
             self.users_changed.emit(b)
 
     def _irc_away(self, m: Message) -> None:
+        if lower(m.nick) in {lower(n) for n in self._friends_here()}:
+            self._friend_away(m.nick, m.params[-1] if m.params and m.params[-1] else None)
         away = bool(m.params and m.params[-1]) and self.cfg.away_track
         key = lower(m.nick)
         for b in self.buffers.values():
@@ -1776,6 +1932,8 @@ class Session(QObject):
     def _numeric(self, n: int, m: Message) -> None:
         if self._starttls == "waiting" and self._starttls_answer(n, m):
             return
+        if n in (376, 422) and self._friends_wait:
+            self._friends_after_005()
         if n in (372, 375, 376, 422):
             if self.cfg.skip_motd and not self.motd_asked:
                 return                             # Preferences > General: skip the welcome message (/motd shows it)
@@ -1817,6 +1975,17 @@ class Session(QObject):
                 self._friend_online(item.split("!")[0], n == 730)
         elif n in (732, 733, 734):
             pass
+        elif n in (600, 601, 604, 605, 602, 603, 606, 607, 598, 599, 609):
+            # WATCH: :srv 604 me nick user host ts :is online / 600 logged on / 601 off / 605 offline / 598 away / 599 back
+            if n in (600, 604, 601, 605):
+                self._friend_online(m.param(1), n in (600, 604))
+                if n in (601, 605):
+                    self.friend_state.get(lower(m.param(1)), {}).pop("away", None)
+            elif n in (598, 609):
+                self._friend_online(m.param(1), True)
+                self._friend_away(m.param(1), m.param(-1) if n == 598 and len(m.params) > 5 else "")
+            elif n == 599:
+                self._friend_away(m.param(1), None)
         elif n == 5:
             self._isupport(p[1:-1])
             self.add(self.server_buffer, INFO, "*", " ".join(p[1:]))
@@ -1922,6 +2091,11 @@ class Session(QObject):
                     self.prefix_modes, self.prefix_chars = modes, chars
             elif k == "MONITOR":
                 self._monitor = True
+            elif k == "WATCH":
+                self._watch = True
+            elif k == "EXTBAN" and "," in v:
+                pre, _, types = v.partition(",")
+                self.extban = (pre, types)
             elif k == "CHANTYPES" and v:
                 self.chantypes = v
             elif k == "STATUSMSG":
@@ -2025,7 +2199,9 @@ class Session(QObject):
             QTimer.singleShot(4000, self._say_bouncer)
         elif self.bouncer:
             self._say_bouncer()
-        self.start_friends()
+        self._friends_wait = int(time.time() * 1000) or 1     # FINDING-02: 005 (MONITOR/WATCH) comes after 001
+        ticket = self._friends_wait
+        QTimer.singleShot(5000, lambda: self._friends_after_005(ticket))
         if self.cfg.local_find:              # the address others can reach us on, for DCC offers
             self.find_local()
         if self.net.nickserv:

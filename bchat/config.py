@@ -164,6 +164,19 @@ class Server:
     port: int = 6667
     ssl: bool = False
     starttls: bool = False         # 0.6.0: /*port = a plain port switched to SSL first (never falls back)
+    more_ports: list = field(default_factory=list)   # 0.6.0: host/+6697,7000: one picked at random, the next if it fails
+    ws_path: str = ""              # 0.6.0: a WebSocket server (wss://host/path); "" = a normal IRC server
+    ws_plain: bool = False         # ws:// was typed: kept so the user sees it, but never connected (not encrypted)
+
+
+def server_text(s: "Server") -> str:
+    """One line of Edit Network's server box."""
+    if s.ws_path or s.ws_plain:
+        port = "" if s.port == (443 if not s.ws_plain else 80) else f":{s.port}"
+        host = f"[{s.host}]" if ":" in s.host else s.host
+        return f"{'ws' if s.ws_plain else 'wss'}://{host}{port}{s.ws_path or '/'}"
+    ports = ",".join(str(p) for p in [s.port] + list(s.more_ports))
+    return f"{s.host}/{'+' if s.ssl else '*' if s.starttls else ''}{ports}"
 
 
 @dataclass
@@ -188,6 +201,7 @@ class NetworkConfig:
     favorite: bool = False
     login: str = ""          # 0.4.0 "Log in with": "" = SASL password when an account is set (as before), "none", "cert"
     cert_file: str = ""      # the certificate (+ key) shown to the server when login is "cert"
+    caps_off: list = field(default_factory=list)   # 0.6.0 Server Features: IRCv3 capabilities never asked for here
 
 
 @dataclass
@@ -367,6 +381,9 @@ class Config:
     sounds: dict = field(default_factory=dict)
     # Network setup
     bind_host: str = ""
+    bind_strict: bool = False      # 0.6.0: bind address missing (VPN off) -> don't connect at all
+    ip_mode: str = "auto"          # 0.6.0: auto | ipv4 | ipv6 (Preferences > Network setup > Internet)
+    dcc_ipv6: bool = True          # 0.6.0: file transfers and direct chats over IPv6 when the IRC connection is IPv6
     proxy_type: str = "none"       # none | socks5 | http
     proxy_host: str = ""
     proxy_port: int = 0
@@ -459,6 +476,8 @@ class Config:
     notify_timeout: int = 120
     url_grabber: bool = True
     url_limit: int = 100
+    url_keep: bool = False         # 0.6.0: the URL Grabber list survives a restart (urls.json, links only)
+    url_emails: bool = False       # 0.6.0: catch email addresses too
     # Advanced
     reconnect_delay: int = 10
     raw_modes: bool = False
@@ -483,6 +502,12 @@ class Config:
     sts: dict = field(default_factory=dict)  # host -> {port, expires}
     imported: bool = False
     welcome_done: bool = False   # the first-start welcome window was answered (only shown with no networks)
+    lock_was_on: bool = False    # 0.6.0 Lock: lock.json existed last time (gone now = someone removed it)
+    lock_removed_at: float = 0.0 # 0.6.0 Lock: when BChat found lock.json gone (shown on the Lock page)
+
+
+PORTABLE = False        # 0.6.0: settings in BChat-data next to BChat.exe; passwords never go to Windows' vault
+LOCK_KEY: bytes | None = None   # 0.6.0: from the Lock password; seals portable passwords (lock.seal)
 
 
 def default_dir() -> Path:
@@ -541,6 +566,10 @@ def load(directory: Path) -> Config:
             path.replace(path.with_suffix(".broken.json"))
             print(f"BChat: settings could not be read, saved aside: {e}")
             return fresh_config()
+        if d.get("secrets") == "locked":
+            cfg.secret_box = d.get("secret_box", "")      # opened after the Lock password (open_locked)
+            if LOCK_KEY is not None:
+                open_locked(cfg, LOCK_KEY)
         if d.get("secrets") == "vault":
             from . import vault
             text = vault.get(directory)
@@ -554,6 +583,26 @@ def load(directory: Path) -> Config:
                 cfg.proxy_password = s.get("proxy_password", "")
         return cfg
     return fresh_config()
+
+
+def _fill_secrets(cfg: Config, s: dict) -> None:
+    for key, n in zip(_net_keys(cfg.networks), cfg.networks):
+        for f in SECRET_FIELDS:
+            setattr(n, f, s.get("networks", {}).get(key, {}).get(f, ""))
+    cfg.proxy_password = s.get("proxy_password", "")
+
+
+def open_locked(cfg: Config, key: bytes) -> bool:
+    """Portable BChat: the network passwords sealed with the Lock password."""
+    from . import lock
+    text = lock.open_box(key, getattr(cfg, "secret_box", "") or "")
+    if text is None:
+        return False
+    try:
+        _fill_secrets(cfg, json.loads(text))
+    except ValueError:
+        return False
+    return True
 
 
 def random_nick() -> str:
@@ -578,7 +627,19 @@ def save(cfg: Config, directory: Path) -> None:
         found = {f: n.get(f, "") for f in SECRET_FIELDS if n.get(f)}
         if found:
             secrets["networks"][key] = found
-    if not secrets["networks"] and not secrets["proxy_password"]:
+    if PORTABLE:
+        # another PC's vault is no place for them: sealed with the Lock password, or not kept at all
+        if LOCK_KEY is not None and (secrets["networks"] or secrets["proxy_password"]):
+            from . import lock
+            d["secret_box"] = lock.seal(LOCK_KEY, json.dumps(secrets))
+            d["secrets"] = "locked"
+        else:
+            d["secrets"] = "none"
+        for n in d["networks"]:
+            for f in SECRET_FIELDS:
+                n[f] = ""
+        d["proxy_password"] = ""
+    elif not secrets["networks"] and not secrets["proxy_password"]:
         vault.clear(directory)              # nothing secret: no empty entry left in Credential Manager
         d["secrets"] = "none"
     elif vault.put(directory, json.dumps(secrets)):

@@ -44,7 +44,7 @@ HELP = {
     "allserv": "ALLSERV <cmd>: runs a command on every server",
     "away": "AWAY [<reason>]: marks you away",
     "back": "BACK: marks you back",
-    "ban": "BAN <mask or nick> [<type>]: bans someone from the channel. Types 0-3 pick how wide the mask is",
+    "ban": "BAN <mask or nick> [<type>]: bans someone from the channel. Types 0-3 pick how wide the mask is. BAN -a <nick> bans their account",
     "clear": "CLEAR [ALL|HISTORY|<lines>]: clears this tab, every tab, the input history, or the last lines",
     "close": "CLOSE: closes this tab",
     "ctcp": "CTCP <nick> <message>: sends a CTCP",
@@ -66,7 +66,7 @@ HELP = {
     "invite": "INVITE <nick> [<channel>]: invites someone",
     "join": "JOIN <channel> [<key>]: joins a channel",
     "kick": "KICK <nick> [<reason>]: kicks someone",
-    "kickban": "KICKBAN <nick> [<type>]: bans, then kicks",
+    "kickban": "KICKBAN <nick> [<type>]: bans, then kicks. KICKBAN -a <nick> bans their account",
     "lastlog": "LASTLOG <text>: finds text in this tab",
     "list": "LIST [<options>]: opens the Channel List and fetches it",
     "mdeop": "MDEOP: takes ops from everyone else here",
@@ -455,13 +455,19 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
             s.send("KICK", chan, args[0], rest.partition(" ")[2] or s.cfg.part_reason)
     elif cmd == "ban":
         if need_channel() and args:
-            if "!" in args[0] or "@" in args[0]:  # already a mask
+            if args[0].lower() == "-a":            # 0.6.0: ban the account, not the host
+                if len(args) > 1:
+                    s.account_ban(b, args[1])
+            elif "!" in args[0] or "@" in args[0]:  # already a mask
                 s.send("MODE", chan, "+b", args[0])
             else:
                 kind = int(args[1]) if len(args) > 1 and args[1].isdigit() else 0
                 s.ban(b, args[0], kind)
     elif cmd == "kickban":
-        if need_channel() and args:
+        if need_channel() and args and args[0].lower() == "-a":
+            if len(args) > 1:
+                s.account_ban(b, args[1], kick=True)
+        elif need_channel() and args:
             kind = int(args[1]) if len(args) > 1 and args[1].isdigit() else 0
             s.ban(b, args[0], kind, kick=True)
     elif cmd == "mode":

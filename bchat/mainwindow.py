@@ -1,6 +1,7 @@
 """BChat main window, classic XChat 2 layout, dark."""
 from __future__ import annotations
 
+import dataclasses
 import html
 import fnmatch
 import json
@@ -18,7 +19,7 @@ from . import __version__, commands, config
 from .chatview import ChatView
 from .config import Config, NetworkConfig, Server
 from .protocol import URL_RE, lower, strip_format
-from .session import CHANNEL, INFO, QUERY, SERVER, Buffer, Line, Session, User
+from .session import ACTION, CHANNEL, HILITE, INFO, MSG, NOTICE, QUERY, SELF, SERVER, Buffer, Line, Session, User
 from .countries import country_of
 from .userlist import UserList, icon_name, light_pixmap
 from .widgets import ASSETS, FramedDialog, FramelessWindow, add_menu_title, icon, install_button_look, set_icon_theme, set_light_palette, stylesheet
@@ -488,6 +489,12 @@ class MainWindow(FramelessWindow):
         self._replayed: set[int] = set()
         self.tools: dict = {}
         self.urls: list[str] = []
+        self.url_info: dict[str, dict] = {}     # 0.6.0: url -> {nick, where, ts, note, new}
+        self._urls_save = QTimer(self)
+        self._urls_save.setSingleShot(True)
+        self._urls_save.setInterval(2000)
+        self._urls_save.timeout.connect(self._write_urls)
+        self._load_urls()
         self.detached: dict = {}
         self.dcc = DccManager(self)
         self.plugins = PluginManager(self)
@@ -2778,7 +2785,7 @@ class MainWindow(FramelessWindow):
             i += 1
             name = f"{base}({i})"
         chans = [b.name for b in s.buffers.values() if b.kind == CHANNEL and b.joined]
-        net = NetworkConfig(name, [Server(sv.host, sv.port, sv.ssl) for sv in s.net.servers],
+        net = NetworkConfig(name, [dataclasses.replace(sv, more_ports=list(sv.more_ports)) for sv in s.net.servers],
                             password=s.net.password, autojoin=",".join(chans),
                             allow_invalid_cert=s.net.allow_invalid_cert, cert_pins=list(s.net.cert_pins))   # a certificate trusted on this tab stays trusted
         if s.nick and lower(s.nick) != lower(self.cfg.nick):
@@ -3341,21 +3348,71 @@ class MainWindow(FramelessWindow):
         if w is not None and w.isVisible():
             w.fill()
 
+    EMAIL_RE = re.compile(r"(?<![\w.@!+-])[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![\w@])")
+
     def _grab_urls(self, b: Buffer, ln) -> None:
-        """XChat's url_check_line: every link anyone shows, newest last, no repeats."""
+        """XChat's url_check_line: every link anyone shows, newest last, no repeats.
+        0.6.0: also who, where and when; email addresses only in chat lines and only with the tick."""
         if not self.cfg.url_grabber or "." not in ln.text:
             return
+        text = strip_format(ln.text)
+        found = [m.group(0).rstrip(".,);:!?'\"") for m in URL_RE.finditer(text)]
+        if self.cfg.url_emails and ln.kind in (MSG, SELF, ACTION, HILITE, NOTICE):
+            found += [m.group(0) for m in self.EMAIL_RE.finditer(text) if not any(m.group(0) in u for u in found)]
         changed = False
-        for m in URL_RE.finditer(strip_format(ln.text)):
-            url = m.group(0).rstrip(".,);:!?'\"")
+        nick = (ln.left or "").strip("<>-*@+ ")
+        if ln.kind == SELF and b.session is not None:
+            nick = b.session.nick
+        for url in found:
             if url in self.urls:
                 continue
             self.urls.append(url)
+            self.url_info[url] = {"nick": nick, "where": b.name, "ts": ln.ts or time.time(), "note": "", "new": True}
+            for old in self.urls[:-max(1, self.cfg.url_limit)]:
+                self.url_info.pop(old, None)
             del self.urls[:-max(1, self.cfg.url_limit)]
             changed = True
+        if changed:
+            self.save_urls()
         w = self.tools.get("urls")
         if changed and w is not None and w.isVisible():
             w.fill()
+
+    # --- 0.6.0: the URL Grabber list kept after a restart (urls.json: links only, never the chat around them)
+
+    def _urls_path(self) -> Path:
+        return Path(self.cfg_dir) / "urls.json"
+
+    def _load_urls(self) -> None:
+        if not self.cfg.url_keep:
+            return
+        try:
+            rows = json.loads(self._urls_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        for r in rows if isinstance(rows, list) else []:
+            if isinstance(r, dict) and isinstance(r.get("url"), str) and r["url"] not in self.urls:
+                self.urls.append(r["url"])
+                self.url_info[r["url"]] = {"nick": str(r.get("nick", "")), "where": str(r.get("where", "")),
+                                           "ts": float(r.get("ts", 0) or 0), "note": str(r.get("note", "")), "new": False}
+        del self.urls[:-max(1, self.cfg.url_limit)]
+
+    def save_urls(self) -> None:
+        self._urls_save.start()
+
+    def _write_urls(self) -> None:
+        path = self._urls_path()
+        try:
+            if not self.cfg.url_keep:
+                if path.exists():
+                    path.unlink()
+                return
+            rows = [{"url": u, **{k: v for k, v in self.url_info.get(u, {}).items() if k != "new"}} for u in self.urls]
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(rows, indent=1), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            pass
 
     def open_network_list(self) -> None:
         from .networklist import NetworkListDialog

@@ -26,10 +26,23 @@ def _read(path: Path) -> list[str]:
 
 
 def parse_server(entry: str, net_ssl: bool) -> Server:
+    """host/port, host/+port (SSL), host/*port (STARTTLS), host/+6697,7000 (several ports), wss://host[:port]/path."""
+    low = entry.lower()
+    if low.startswith(("wss://", "ws://")):
+        plain = low.startswith("ws://")
+        rest = entry.split("://", 1)[1]
+        hostport, slash, path = rest.partition("/")
+        if hostport.startswith("["):                     # [2001:db8::1]:8097
+            host, _, after = hostport[1:].partition("]")
+            port = after.lstrip(":")
+        else:
+            host, _, port = hostport.partition(":")
+        return Server(host, int(port) if port.isdigit() else (80 if plain else 443), not plain, False, [],
+                      "/" + path if slash else "/", plain)
     host, _, rest = entry.partition("/")
     ssl = net_ssl
     starttls = False
-    port = 0
+    ports: list[int] = []
     if rest:
         if rest.startswith("+"):
             ssl = True
@@ -37,9 +50,12 @@ def parse_server(entry: str, net_ssl: bool) -> Server:
         elif rest.startswith("*"):               # a plain port, switched to SSL first (STARTTLS)
             ssl, starttls = False, True
             rest = rest[1:]
-        if rest.isdigit():
-            port = int(rest)
-    return Server(host, port or (6697 if ssl else 6667), ssl, starttls)
+        for part in rest.split(","):
+            part = part.strip()
+            if part.isdigit() and 0 < int(part) < 65536 and int(part) not in ports:
+                ports.append(int(part))
+    port = ports[0] if ports else (6697 if ssl else 6667)
+    return Server(host, port, ssl, starttls, ports[1:])
 
 
 def parse_servlist(lines: list[str]) -> list[NetworkConfig]:

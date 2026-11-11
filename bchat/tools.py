@@ -540,37 +540,141 @@ class FriendsWindow(ToolWindow):
 # --- URL Grabber ---------------------------------------------------------------------------
 
 class UrlGrabberWindow(ToolWindow):
+    """Every link anyone shows. 0.6.0: who sent it, where, when, a note; new ones bold; search; kept after a restart."""
+    COLS = ("Link", "From", "Where", "When", "Note")
+
     def __init__(self, win):
-        super().__init__("BChat: URL Grabber", win, (560, 340))
+        super().__init__("BChat: URL Grabber", win, (720, 360))
+        top = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search")
+        self.search.textChanged.connect(lambda _: self.fill())
+        top.addWidget(self.search, 1)
+        self.emails = QCheckBox("Also catch email addresses")
+        self.emails.setChecked(win.cfg.url_emails)
+        self.emails.toggled.connect(self._emails)
+        top.addWidget(self.emails)
+        self.body.addLayout(top)
         self.view = QTreeWidget()
-        self.view.setHeaderHidden(True)
+        self.view.setHeaderLabels(list(self.COLS))
         self.view.setRootIsDecorated(False)
-        self.view.itemDoubleClicked.connect(lambda it, _: self.win.open_url(it.text(0)))
+        for col, w in enumerate((300, 80, 90, 80)):
+            self.view.setColumnWidth(col, w)
+        self.view.itemDoubleClicked.connect(lambda it, _: self.win.open_url(it.data(0, Qt.ItemDataRole.UserRole)))
         self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.view.customContextMenuRequested.connect(self._menu)
         self.body.addWidget(self.view, 1)
+        self.keep = QCheckBox("Keep the list after BChat closes")
+        self.keep.setChecked(win.cfg.url_keep)
+        self.keep.toggled.connect(self._keep)
+        self.body.addWidget(self.keep)
         row = QHBoxLayout()
         row.addStretch(1)
+        self.send_btn = button("Send to Channel", self.send)
+        self.note_btn = button("Note...", self.note)
+        self.remove_btn = button("Remove", self.remove)
         self.clear_btn = button("Clear", self.clear)
         self.copy_btn = button("Copy", self.copy)
         self.save_btn = button("Save As...", self.save)
-        for w in (self.clear_btn, self.copy_btn, self.save_btn):
+        for w in (self.send_btn, self.note_btn, self.remove_btn, self.copy_btn, self.save_btn, self.clear_btn):
             row.addWidget(w)
         self.body.addLayout(row)
+        self.view.currentItemChanged.connect(lambda *_: self._buttons())
         self.fill()
 
+    @staticmethod
+    def when(ts: float) -> str:
+        if not ts:
+            return ""
+        day = time.strftime("%Y%m%d", time.localtime(ts))
+        if day == time.strftime("%Y%m%d"):
+            return time.strftime("%H:%M", time.localtime(ts))
+        if day == time.strftime("%Y%m%d", time.localtime(time.time() - 86400)):
+            return "yesterday"
+        return time.strftime("%d %b", time.localtime(ts))
+
     def fill(self) -> None:
+        keep = self.current()
         self.view.clear()
-        self.view.addTopLevelItems([QTreeWidgetItem([u]) for u in self.win.urls])
+        words = self.search.text().lower().split()
+        bold = None
+        for url in reversed(self.win.urls):          # newest on top
+            info = self.win.url_info.get(url, {})
+            cols = [url, info.get("nick", ""), info.get("where", ""), self.when(info.get("ts", 0.0)), info.get("note", "")]
+            if words and not all(any(w in c.lower() for c in cols) for w in words):
+                continue
+            it = QTreeWidgetItem(cols)
+            it.setData(0, Qt.ItemDataRole.UserRole, url)
+            if info.get("new"):
+                if bold is None:
+                    bold = self.view.font()
+                    bold.setBold(True)
+                for c in range(len(cols)):
+                    it.setFont(c, bold)
+            self.view.addTopLevelItem(it)
+            if url == keep:
+                self.view.setCurrentItem(it)
+        if self.isVisible():
+            for info in self.win.url_info.values():
+                info["new"] = False                  # seen now: bold until the next look
+        self._buttons()
+
+    def current(self) -> str:
+        it = self.view.currentItem()
+        return it.data(0, Qt.ItemDataRole.UserRole) if it is not None else ""
+
+    def _buttons(self) -> None:
+        on = bool(self.current())
+        for b in (self.send_btn, self.note_btn, self.remove_btn, self.copy_btn):
+            b.setEnabled(on)
+
+    def _emails(self, on: bool) -> None:
+        self.win.cfg.url_emails = on
+        self.win.save_config()
+
+    def _keep(self, on: bool) -> None:
+        self.win.cfg.url_keep = on
+        self.win.save_config()
+        self.win.save_urls()
 
     def clear(self) -> None:
         self.win.urls.clear()
+        self.win.url_info.clear()
+        self.win.save_urls()
         self.fill()
 
+    def remove(self) -> None:
+        url = self.current()
+        if url in self.win.urls:
+            self.win.urls.remove(url)
+            self.win.url_info.pop(url, None)
+            self.win.save_urls()
+            self.fill()
+
+    def note(self, text: str | None = None) -> None:
+        url = self.current()
+        if not url:
+            return
+        info = self.win.url_info.setdefault(url, {})
+        if text is None:
+            text, ok = QInputDialog.getText(self, "BChat: Note", "A few words about this link:", text=info.get("note", ""))
+            if not ok:
+                return
+        info["note"] = " ".join(text.split())[:200]
+        self.win.save_urls()
+        self.fill()
+
+    def send(self) -> None:
+        """Puts the link in the chat you're looking at (a channel or private chat)."""
+        url = self.current()
+        b = self.win.buf
+        if not url or b is None or b.kind not in ("channel", "query") or b.session.state != "connected":
+            return
+        b.session.say(b.name, url)
+
     def copy(self) -> None:
-        it = self.view.currentItem()
-        if it is not None:
-            QApplication.clipboard().setText(it.text(0))
+        if self.current():
+            QApplication.clipboard().setText(self.current())
 
     def save(self, path: str = "") -> None:
         if not path:
@@ -583,7 +687,7 @@ class UrlGrabberWindow(ToolWindow):
         it = self.view.itemAt(pos)
         if it is not None:
             self.view.setCurrentItem(it)
-            self.win.url_menu(it.text(0)).exec(self.view.viewport().mapToGlobal(pos))
+            self.win.url_menu(it.data(0, Qt.ItemDataRole.UserRole)).exec(self.view.viewport().mapToGlobal(pos))
 
 
 # --- File Transfers, Direct Chat ------------------------------------------------------------

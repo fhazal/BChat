@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout)
 
 from . import config
-from .config import NetworkConfig, Server
+from .config import NetworkConfig, Server, server_text
 from .widgets import FramedDialog, icon
 from .xchat_import import parse_server
 
@@ -46,9 +46,11 @@ class NetworkEditDialog(FramedDialog):
         top.addRow("Network name:", self.name)
         self.body.addLayout(top)
         self.body.addWidget(QLabel("Servers, one per line: host/port. Use /+port for SSL,\n"
-                                   "or /*port to switch a plain port to SSL (STARTTLS)."))
+                                   "or /*port to switch a plain port to SSL (STARTTLS).\n"
+                                   "Several ports: host/+6697,7000 (one is picked at random).\n"
+                                   "Web servers: wss://host/path"))
         self.servers = QPlainTextEdit(self)
-        self.servers.setPlainText("\n".join(f"{s.host}/{'+' if s.ssl else '*' if s.starttls else ''}{s.port}" for s in net.servers))
+        self.servers.setPlainText("\n".join(server_text(s) for s in net.servers))
         self.body.addWidget(self.servers)
         form = QFormLayout()
         self.autojoin = QLineEdit(net.autojoin, self)
@@ -70,11 +72,23 @@ class NetworkEditDialog(FramedDialog):
         self.cert_path = net.cert_file
         self.cert_box = self._cert_row()
         self.nickserv_row = self._nickserv_row()
+        self.caps_off = list(net.caps_off)          # 0.6.0 Server Features
+        self.features = QPushButton(icon("preferences"), "Choose...", self)
+        self.features.setAutoDefault(False)
+        self.features.clicked.connect(self._choose_features)
+        feat_row = QWidget(self)
+        fl = QHBoxLayout(feat_row)
+        fl.setContentsMargins(0, 0, 0, 0)
+        fl.addWidget(self.features)
+        self.features_note = QLabel(self)
+        fl.addWidget(self.features_note)
+        fl.addStretch(1)
+        self._features_text()
         for label, w in (("Auto-join channels:", self.autojoin), ("Connect commands:", self.commands),
                          ("Nick name:", self.nick), ("Second choice:", self.nick2), ("User name:", self.username),
                          ("Real name:", self.realname), ("Server password:", self.password), ("NickServ password:", self.nickserv),
                          ("Log in with:", self.login), ("SASL account:", self.sasl_user), ("SASL password:", self.sasl_password),
-                         ("Certificate:", self.cert_box), ("", self.nickserv_row)):
+                         ("Certificate:", self.cert_box), ("", self.nickserv_row), ("Server features:", feat_row)):
             form.addRow(label, w)
         self.form = form
         self.body.addLayout(form)
@@ -102,6 +116,20 @@ class NetworkEditDialog(FramedDialog):
         row.addWidget(save)
         self.body.addLayout(row)
         self._start = self._state()
+
+    # --- Server Features (0.6.0) --------------------------------------------------------------
+
+    def _features_text(self) -> None:
+        from .session import Session
+        off = sum(1 for _, caps in Session.SERVER_FEATURES if set(caps) <= set(self.caps_off))
+        self.features_note.setText(f"{off} turned off" if off else "")
+        self.features_note.setStyleSheet(f"color: {_muted(self)};")
+
+    def _choose_features(self) -> None:
+        d = ServerFeaturesDialog(self, self.name.text().strip() or self.net.name, self.caps_off)
+        if d.exec():
+            self.caps_off = d.caps_off()
+            self._features_text()
 
     # --- Log in with: password or certificate ----------------------------------------------
 
@@ -232,7 +260,7 @@ class NetworkEditDialog(FramedDialog):
         return (self.login.currentIndex(), self.cert_path, self.name.text(), self.servers.toPlainText(), self.autojoin.text(), self.commands.text(), self.nick.text(),
                 self.nick2.text(), self.username.text(), self.realname.text(), self.password.text(), self.nickserv.text(),
                 self.sasl_user.text(), self.sasl_password.text(), self.use_global.isChecked(), self.auto.isChecked(),
-                self.cycle.isChecked(), self.invalid.isChecked())
+                self.cycle.isChecked(), self.invalid.isChecked(), tuple(self.caps_off))
 
     def reject(self) -> None:
         """Red button or Esc: ask before losing changes (it used to drop them silently)."""
@@ -266,7 +294,42 @@ class NetworkEditDialog(FramedDialog):
         n.autoconnect = self.auto.isChecked()
         n.cycle = not self.cycle.isChecked()
         n.allow_invalid_cert = self.invalid.isChecked()
+        n.caps_off = list(self.caps_off)
         super().accept()
+
+
+class ServerFeaturesDialog(FramedDialog):
+    """Edit Network > Server features: Choose... All on; only for a server that gets one feature wrong."""
+
+    def __init__(self, parent, name: str, caps_off: list[str]):
+        super().__init__(f"BChat: Server Features for {name}", parent)
+        from .session import Session
+        note = QLabel("All on by default. Only turn one off when this server gets it wrong.", self)
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {_muted(self)};")
+        self.body.addWidget(note)
+        self.boxes: list[tuple[QCheckBox, tuple]] = []
+        for label, caps in Session.SERVER_FEATURES:
+            c = QCheckBox(label, self)
+            c.setToolTip(", ".join(caps))
+            c.setChecked(not set(caps) <= set(caps_off))
+            self.body.addWidget(c)
+            self.boxes.append((c, caps))
+        row = QHBoxLayout()
+        normal = QPushButton(icon("revert"), "Back to Normal", self)
+        normal.setAutoDefault(False)
+        normal.clicked.connect(lambda: [c.setChecked(True) for c, _ in self.boxes])
+        ok = QPushButton(icon("save"), "&OK", self)
+        ok.setDefault(True)
+        ok.clicked.connect(self.accept)
+        row.addWidget(normal)
+        row.addStretch(1)
+        row.addWidget(ok)
+        self.body.addLayout(row)
+        self.resize(380, 0)
+
+    def caps_off(self) -> list[str]:
+        return sorted(cap for c, caps in self.boxes if not c.isChecked() for cap in caps)
 
 
 class NetItem(QTreeWidgetItem):
