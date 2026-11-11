@@ -3,7 +3,51 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.6.0 release (11 Nov 2026)
+## Current baseline: 0.6.1 release (12 Nov 2026)
+
+Released as `v0.6.1` from commit `f68b3b8`. Numbers from QA run `20261112-030913`
+(`tools/qa.py all --perf-quick`), one `perf_bench.py --quick` re-run alone, and the release checks.
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.6.1` (`version_info` 0.6.1.0) |
+| Installer | `BChat-0.6.1-setup.exe`, 35,807,285 bytes |
+| Installer SHA-256 | `baf9594efe8c1c7090528f58c8f4f41df145cfd7d573860353579660a2609a43` |
+| `BChat.exe` SHA-256 | `aa871168053e34be1985451b74bcf890f0101373d783e93be55866cd404530b8` |
+| VirusTotal installer | 1 / 71 (DeepInstinct, ML false positive; flags some builds and not others) |
+| VirusTotal `BChat.exe` | 1 / 71 (APEX, as on every build) |
+
+### Performance (quick mode, one run)
+
+| Measure | 0.6.1 | 0.6.0 |
+| --- | --- | --- |
+| Start to visible main window / joined | 0.64 s / 0.73 s | 0.64 s / 0.73 s |
+| Idle, 3 networks: CPU / working set | 1.6 % / 108.4 MB | 1.1 % / 108.7 MB |
+| Load 300 msg/s: CPU / working set | 58 % / 117.4 MB | 53 % / 117.2 MB |
+| Load: marker latency / worst UI stall | 6 ms / 40 ms | 9 ms / 47 ms |
+| Burst of 5000 messages: time / worst UI stall | 7.5 s / 243 ms (re-run alone: 7.3 s / 52 ms) | 5.7 s / 0.86 s |
+| History 10k to 20k lines | 137.8 to 138.3 MB | 136.9 to 137.0 MB |
+| All 15 tabs full / soak growth | 245.3 MB / 0.0 MB/min | 244.3 MB / 0.0 MB/min |
+
+The burst change is on purpose: incoming lines are now handled 30 ms at a time with the event loop
+in between, so the window keeps answering (worst stall 52-243 ms instead of 0.86-1.4 s). The price is
+throughput: the same 5000 lines take longer (TEST3 4.8 s, TEST4 6.4 s, release 7.3-7.5 s; noisy on
+this PC). Every message is still counted.
+
+### Test results
+
+| Check | Result |
+| --- | --- |
+| `pytest` (source) | 639/639 passed, 0 known deviations (FINDING-01 fixed) |
+| Protocol | 88/88; conformance table 63 OK |
+| `build_check.py` / `bundle_check.py` | 8/8 / 23/23 |
+| `frozen_check` / `frozen_features` / `frozen_reports` / `frozen_extra` | 19/19 / 60/60 / 19/19 / 59/59 |
+| Button check | 673 controls, no problems |
+| Secret scan / history scan | PASS / 733 file versions, none of the 8 own secrets |
+| Real servers (TEST4 exe, `build/realtest/real_test061c.py`) | 14/14: Ergo testnet, UnrealIRCd TLS, IPv6-only, `//whois` |
+| Release | tag `v0.6.1` = `f68b3b8`, latest, anonymous download hash = build, signed manifest OK, updater offers 0.6.1 to 0.3.0 / 0.5.0 / 0.6.0 / 0.6.1-TEST4 |
+
+## Previous baseline: 0.6.0 release (11 Nov 2026)
 
 Released as `v0.6.0` from commit `ce6af76`, slim packaging (the candidate below, approved
 and made the normal build in commit `a63e07f`). Numbers from QA run `20261111-230044`
