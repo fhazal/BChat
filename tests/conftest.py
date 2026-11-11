@@ -20,3 +20,22 @@ from PySide6.QtWidgets import QApplication
 @pytest.fixture(scope="session")
 def app():
     return QApplication.instance() or QApplication(["bchat-test"])
+
+
+@pytest.fixture
+def qa_server(tmp_path):
+    """Factory for tests/qa_ircd.QaIrcd servers (QA item A). Every server made is stopped after the test, and a
+    simulator thread still alive afterwards fails the test: nothing may keep running."""
+    from qa_ircd import QaIrcd
+    made = []
+
+    def make(**kw):
+        kw.setdefault("cert_dir", tmp_path / "qa-certs")
+        srv = QaIrcd(**kw)
+        made.append(srv)
+        return srv
+    yield make
+    for srv in made:
+        srv.stop()
+    left = [t.name for srv in made for t in srv.alive_threads()]
+    assert not left, f"qa_ircd threads still running after the test: {left}"

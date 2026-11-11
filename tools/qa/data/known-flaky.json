@@ -1,0 +1,8 @@
+{
+ "_about": "Tests known to fail now and then for timing reasons. The QA runner never retries them; a failure is still a failure, it is only labelled. Remove an entry once the test is made reliable.",
+ "tests": [
+  {"test": "tests/test_040.py::test_skip_motd_and_motd_command",
+   "why": "waits for the MOTD with a fixed timeout; fails when the PC is busy (e.g. a packaged-app check running at the same time); passes when run alone",
+   "seen": "2026-11-11"}
+ ]
+}

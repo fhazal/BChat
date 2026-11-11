@@ -1,0 +1,6 @@
+{
+ "_about": "Public: the signed entry of the published BChat 0.5.0 release (its bchat-update.json). The QA checks use it to prove the exe verifies a real release signature.",
+ "version": "0.5.0",
+ "sha256": "fa3cda46dbbb5a63272eee66ab380d6d72c23f4c97831a036abdbae471897a5f",
+ "sig": "EY8XFKrXE5t9Zt25SfneWMXGIZSiLkk4a55TH3xFimIB/tNkZA6JJSsKO7KPNNc3P8c/pKq8DdzU7j4pBZ5vAA=="
+}
