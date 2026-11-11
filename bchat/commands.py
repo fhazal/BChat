@@ -332,30 +332,19 @@ def _dcc_command(ui, s: Session, b: Buffer, args: list[str], rest: str) -> None:
         s.add(b, ERROR, "*", HELP["dcc"])
 
 
-_PASSWORD_CMD = re.compile(r"(?i)^/(?:ns|cs|ms|os|hs|bs|nickserv|chanserv|\S*serv|msg\s+\S*serv|m\s+\S*serv|quote\s+\S*serv|raw\s+\S*serv)"
-                           r"\s+(?:identify|id|ghost|recover|register|login|auth)\b"
-                           r"|^/(?:oper|pass|quote\s+(?:pass|oper)|raw\s+(?:pass|oper))\s+\S")
-
-
-def looks_like_password(line: str) -> bool:
-    """A command line that carries a password: /ns identify, /msg NickServ identify, /oper, /pass ..."""
-    return bool(_PASSWORD_CMD.match(line.strip()))
-
-
 def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
     if text.startswith("!") :
         start_program(s, b, text[1:])
+        return
+    if text.startswith("//") and text.lstrip("/")[:1].strip():       # ///typo too: never chat
+        # 0.6.1 (user: 'mIRC way'): //command runs the command, as in mIRC. Before, it was XChat's 'say this as
+        # chat', so '//ns identify nick password' in a channel went to everyone. Text that starts with / : /say
+        run(ui, s, b, "/" + text.lstrip("/"), depth)
         return
     if text.startswith("/") and not text.startswith("//") and ui.plugins.on_command(text):
         return
     if not text.startswith("/") or text.startswith("//"):
         msg = text[1:] if text.startswith("//") else text
-        if text.startswith("//") and looks_like_password(msg):
-            # 0.6.1: '//' sends the line as chat (it's how you say '/something'), so a password command typed with
-            # two slashes would go to everyone in the tab. Never send it; say how to run it instead.
-            s.add(b, ERROR, "*", "Not sent: with // that line goes out as a chat message everyone here can read, "
-                                 f"password included. To run it, use one slash: {msg.split(' ', 1)[0]} ...")
-            return
         if not s.net.servers:
             s.add(b, ERROR, "*", "This tab has no server yet. Type /server <host> [port or +port for SSL].")
         elif b.name.startswith("="):

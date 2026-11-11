@@ -271,7 +271,8 @@ def test_lines_still_queued_are_handled_before_disconnected(app):
 
 # --- 0.6.1: passwords typed with // or as /ns, /oper ------------------------------------------------------
 
-def test_double_slash_password_lines_are_never_sent_as_chat(app, tmp_path):
+def test_double_slash_runs_the_command_the_mirc_way(app, tmp_path):
+    """0.6.1 (user: 'mIRC way'): //command runs it. Before, // said the line as chat, so a password went public."""
     from test_live import live_with, type_cmd, wait
     srv, win, net, s = live_with(app, tmp_path)
     assert wait(app, lambda: s.state == "connected", 5000)
@@ -279,13 +280,23 @@ def test_double_slash_password_lines_are_never_sent_as_chat(app, tmp_path):
     assert wait(app, lambda: "#c" in s.buffers, 3000)
     b = s.buffers["#c"]
     win.select_buffer(b)
-    for line in ("//ns identify Belon hunter22", "//oper Belon hunter22", "//msg NickServ IDENTIFY hunter22"):
-        type_cmd(win, line)
-    type_cmd(win, "//me is a command, said as text")          # the normal use of // still works
-    assert wait(app, lambda: any("/me is a command" in x for x in srv.received), 3000)
-    assert not any("hunter22" in x for x in srv.received)
-    assert sum("Not sent: with //" in l.text for l in b.lines) == 3
+    type_cmd(win, "//ns identify Belon hunter22")
+    type_cmd(win, "//msg NickServ IDENTIFY hunter22")
+    type_cmd(win, "///oper Belon hunter22")                     # a third slash is still a command
+    type_cmd(win, "//me waves")
+    type_cmd(win, "/say /me is text here")                     # how to say a line that starts with /
+    assert wait(app, lambda: any("/me is text here" in x for x in srv.received), 3000)
+    got = srv.received
+    assert any(x.upper().startswith("NS IDENTIFY BELON HUNTER22") for x in got)
+    assert any(x.upper() == "PRIVMSG NICKSERV :IDENTIFY HUNTER22" for x in got)
+    assert any(x.upper() == "OPER BELON HUNTER22" for x in got)
+    assert any(x == "PRIVMSG #c :ACTION waves" for x in got)
+    assert not any(x.startswith("PRIVMSG #c") and "hunter22" in x for x in got)    # never to the channel
     assert not any("hunter22" in l.text for l in b.lines)
+    win.select_buffer(s.server_buffer)                          # the user's case: the server tab
+    type_cmd(win, "//ns identify Belon hunter33")
+    assert wait(app, lambda: any("HUNTER33" in x.upper() for x in srv.received), 3000)
+    assert not any("No channel joined" in l.text for l in s.server_buffer.lines)
     win.close(); srv.stop()
 
 
