@@ -11,7 +11,7 @@
 </h1>
 
 **Handle IRC as a bee does a flower. A calm, modern IRC client for Windows, made by BajuBesi Labs.**
-Classic XChat feel · six themes · safe by default · notification cards · Python plugins
+Classic XChat feel · seventeen themes · safe by default · notification cards · Python plugins
 
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?logo=windows&logoColor=white)
 [![Licence: GPL-2.0-or-later](https://img.shields.io/badge/licence-GPL--2.0--or--later-a6e3a1)](LICENSE)
@@ -77,7 +77,7 @@ Classic XChat feel · six themes · safe by default · notification cards · Pyt
 ## 🎨 Seventeen themes
 
 <p align="center">
-  <img src="docs/screenshots/themes.png" alt="BChat in Catppuccin Mocha, Macchiato, Frappé and Latte, One Dark Pro and Dracula" width="100%">
+  <img src="docs/screenshots/themes.png" alt="BChat in Catppuccin Mocha (dark) and Catppuccin Latte (light)" width="100%">
 </p>
 
 **Dark:** Catppuccin **Mocha** (the default), **Macchiato** and **Frappé**, **One Dark Pro**, **Dracula**, **Tokyo Night**, **Nord**, **Gruvbox Dark**, **Rosé Pine** and **Solarized Dark**.<br>
@@ -100,7 +100,7 @@ A network tree with folders and dotted lines, a topic bar, inline chat and a nic
 <td width="50%" valign="top">
 
 ### 🌐 Networks and servers
-A Network List with auto-connect and auto-join, SSL/TLS, SASL, certificate login, NickServ, ZNC and soju bouncers, and proxies. Open a quick `/server` tab and save it as a network later; the tree updates straight away. New to IRC? The welcome screen on first start has you pick a nickname and a network, and you're talking.
+A Network List with auto-connect and auto-join, SSL/TLS and STARTTLS, secure WebSocket (`wss://`) servers, several ports per server, IPv4 or IPv6 only, SASL (SCRAM-SHA-256 too), certificate login, NickServ, ZNC and soju bouncers, and proxies. BChat can even refuse to connect while your VPN is off. Open a quick `/server` tab and save it as a network later; the tree updates straight away. New to IRC? The welcome screen on first start has you pick a nickname and a network, and you're talking.
 
 </td>
 </tr>
@@ -108,7 +108,7 @@ A Network List with auto-connect and auto-join, SSL/TLS, SASL, certificate login
 <td valign="top">
 
 ### 🔒 Safe by default
-Passwords live in **Windows Credential Manager**, not in a settings file. Server certificates are checked, and risky links ask before they open. Read more in [Safety](#-safety).
+Passwords live in **Windows Credential Manager**, not in a settings file. Server certificates are checked, risky links ask before they open, and you can **lock BChat** with a password or run it **portable**. Read more in [Safety](#-safety).
 
 </td>
 <td valign="top">
@@ -181,7 +181,8 @@ All of them can be changed in *Settings → Advanced → Keyboard Shortcuts*.
 <td width="55%" valign="top">
 
 - **Passwords stay out of files.** Network, SASL, NickServ and proxy passwords are kept in Windows Credential Manager. Older settings move there by themselves on the next save.
-- **Log in without a password.** With a certificate (SASL EXTERNAL) nothing secret is stored or sent; its private key never leaves your PC.
+- **Log in without a password.** With a certificate (SASL EXTERNAL) nothing secret is stored or sent; its private key never leaves your PC. With SCRAM-SHA-256, used whenever the server offers it, your password itself is never sent.
+- **Typos don't leak passwords.** `//ns identify ...` runs the command instead of saying it in the channel, and passwords typed to `/ns` or `/oper` are hidden in the raw log.
 - **Certificates are checked.** A bad or changed certificate gets a clear question with its fingerprint: *Don't Connect*, *Connect Once* or *Always Trust*. If a trusted certificate ever changes, BChat warns you.
 - **Risky links ask first.** Program downloads, look-alike names and bare IP links show where they lead before they open. Normal links still open with one click.
 - **DCC tricks are stripped.** Hidden right-to-left characters that disguise `photo.exe` as a picture are removed from file names, and programs need your OK.
