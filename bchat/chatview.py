@@ -8,7 +8,7 @@ import re
 
 import zlib
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import QPoint, Qt, QUrl, Signal
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetrics, QImage, QPainter, QPen, QTextBlockFormat,
                            QTextCharFormat, QTextCursor, QTextDocument, QTextFormat, QTextImageFormat)
 from PySide6.QtWidgets import QTextBrowser
@@ -58,7 +58,9 @@ class ChatView(QTextBrowser):
         d.setDefaultFont(self.chat_font)
         d.setUndoRedoEnabled(False)
         d.setDocumentMargin(3)
-        d.setMaximumBlockCount(max(100, self.cfg.max_lines or self.MAX_BLOCKS))
+        # No Qt cap (setMaximumBlockCount): once full, Qt drops one line per new line and lays the WHOLE tab out
+        # again each time (0.6.1 BR-4: 3 ms a line at 5000, 13 ms at 20000). _trim drops a batch now and then.
+        d.setMaximumBlockCount(0)
         blank = QImage(4, 4, QImage.Format.Format_ARGB32)
         blank.fill(0)
         d.addResource(QTextDocument.ResourceType.ImageResource, QUrl("bchat:blank"), blank)
@@ -124,8 +126,32 @@ class ChatView(QTextBrowser):
         sb = self.verticalScrollBar()
         at_end = b is not self.current or sb.value() >= sb.maximum() - 4
         self._render(d, b, ln)
+        cap = max(100, self.cfg.max_lines or self.MAX_BLOCKS)
+        if d.blockCount() > cap + max(50, cap // 10):
+            self._trim(d, b, d.blockCount() - cap, keep_view=not at_end and b is self.current)
         if at_end and b is self.current:
             sb.setValue(sb.maximum())
+
+    def _trim(self, d: QTextDocument, b: Buffer, n: int, keep_view: bool = False) -> None:
+        """Drop the oldest n lines in one edit: one layout pass for the batch instead of one per new line.
+        The marker (a line number) moves up with the text; someone scrolled up keeps seeing the same lines."""
+        sb, lay = self.verticalScrollBar(), d.documentLayout()
+        top = self.cursorForPosition(QPoint(0, 0)).block() if keep_view else None   # the line at the top of the view
+        if top is not None and top.blockNumber() < n:
+            top = None                                     # that line goes too: nothing to hold on to
+        offset = sb.value() - int(lay.blockBoundingRect(top).top()) if top is not None else 0
+        keep =QTextCursor(d.findBlockByNumber(n)).blockFormat()   # the first kept line's indent and ids
+        cur = QTextCursor(d)
+        cur.movePosition(QTextCursor.MoveOperation.Start)
+        cur.movePosition(QTextCursor.MoveOperation.NextBlock, QTextCursor.MoveMode.KeepAnchor, n)
+        cur.beginEditBlock()
+        cur.removeSelectedText()
+        cur.setBlockFormat(keep)
+        cur.endEditBlock()
+        if b.marker is not None:
+            b.marker = b.marker - n if b.marker >= n else None
+        if top is not None:          # by the line itself, not the scroll bar: Qt lays big tabs out a bit at a time
+            sb.setValue(max(0, int(lay.blockBoundingRect(top).top()) + offset))
 
     # --- drawing a line ------------------------------------------------------
 

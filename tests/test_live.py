@@ -3580,7 +3580,7 @@ def test_preferences_text_box_settings_take_effect(live):
     saved = config.load(win.cfg_dir)
     assert saved.rank_lights == "slot" and saved.stamp_format == "%H:%M:%S" and not saved.marker_line
     doc = win.chat.document()
-    assert doc.maximumBlockCount() == 2000 and doc.defaultFont().family() == "Courier New"
+    assert doc.maximumBlockCount() == 0 and doc.defaultFont().family() == "Courier New"   # 0.6.2: BChat trims to 2000 itself (BR-4)
     blk = doc.begin()
     while "hello" not in blk.text():
         blk = blk.next()

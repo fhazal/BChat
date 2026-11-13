@@ -92,6 +92,7 @@ def command_step(text: str) -> None:
 # --- privacy -------------------------------------------------------------------------------------------------
 
 _NICK_EDGE = r"[\w\[\]\\`^{}|-]"
+_OWN_WORDS = re.compile(r'(?<=\.py"), line \d+, in (?=[\w<])|\b(?:Ctrl|Shift|Alt|Meta)\+(?=\w)')
 _IP4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 # full form (8 groups) or any form with "::"; plain times like 01:58:12 never match
 _IP6 = re.compile(r"(?<![\w:])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:)*:(?::?[0-9a-fA-F]{1,4})*(?:\.\d{1,3}){0,3})(?![\w:])")
@@ -136,9 +137,16 @@ class Redactor:
         text = _MAIL.sub("<email>", text)
         text = _IP6.sub("<ip>", text)
         text = _IP4.sub("<ip>", text)
+        # BChat's own wording, never a name: a nick 'line' or 'Ctrl' made 'line 153' / 'Ctrl+V' unreadable (BR-4)
+        kept: list[str] = []
+
+        def hold(m: re.Match) -> str:
+            kept.append(m.group(0))
+            return f"\x00{len(kept) - 1}\x00"
+        text = _OWN_WORDS.sub(hold, text)
         for pat, label in self.rules:
             text = pat.sub(label, text)
-        return text
+        return re.sub(r"\x00(\d+)\x00", lambda m: kept[int(m.group(1))], text) if kept else text
 
 
 def redactor_for(win) -> Redactor:
