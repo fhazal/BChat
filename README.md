@@ -33,12 +33,20 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 
 ---
 
-## 🆕 What's new in 0.6.1
+## 🆕 What's new in 0.6.2
+
+- ⚡ **Long sessions stay quick**: once a tab held its 5000 lines, every new line made BChat lay the whole tab out again, so busy tabs got slow and the window could stutter. Old lines now go in batches: each line is about six times quicker in a full tab.
+- 📍 **The marker line stays put**: in a full tab, the line that shows where you stopped reading slid further down with every new line. It now stays on its line, and if you scrolled up to read, the text no longer jumps.
+- 🧹 Problem reports stay readable even when someone on your networks has a nick like *line* or *Ctrl* (names are still hidden).
+
+<details><summary>0.6.1</summary>
 
 - 🔑 **`//command` works the mIRC way**: `//ns identify ...` runs the command. Before, two slashes said the line as chat, so in a channel a password could go to everyone. Passwords typed to `/ns` or `/oper` are now hidden in the raw log too. To say a line that starts with `/`, use `/say`.
 - 🧹 **Bug fixes**: nicks like `[x]` and `{x}` stay apart on servers that say so; *Add Network* on a `/server` tab no longer fails; Ergo servers are no longer called a bouncer; *IPv4 only* / *IPv6 only* now says when a server has only the other kind of address.
 - ⚡ **No freeze on a flood of lines**: thousands of lines at once (big history, busy channel) no longer stop the window.
 - 🗂️ Adding or editing a network while disconnected keeps your open channel tabs.
+
+</details>
 
 <details><summary>0.6.0</summary>
 
