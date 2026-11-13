@@ -3,7 +3,49 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.6.1 release (12 Nov 2026)
+## Current baseline: 0.6.2 release (14 Nov 2026)
+
+Released as `v0.6.2` from commit `ab80c2d`. Numbers from QA run `20261114-065639`
+(`tools/qa.py all --perf-quick`, one run) and the release checks.
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.6.2` (`version_info` 0.6.2.0) |
+| Installer | `BChat-0.6.2-setup.exe`, 35,820,924 bytes |
+| Installer SHA-256 | `26305621a34f35e1ffe0dcb5e4e9d6282a695db0b0b1f4529def635254759069` |
+| `BChat.exe` SHA-256 | `75d296612d711bae94620d32538e302d651fad96e5298728cf511e10f4209784` |
+| VirusTotal installer | 0 / 69 |
+| VirusTotal `BChat.exe` | 1 / 71 (APEX, as on every build) |
+
+### Performance (quick mode, one run)
+
+| Measure | 0.6.2 | 0.6.1 |
+| --- | --- | --- |
+| Start to visible main window / joined | 0.63 s / 0.71 s | 0.64 s / 0.73 s |
+| Idle, 3 networks: CPU / working set | 1.5 % / 108.4 MB | 1.6 % / 108.4 MB |
+| Load 300 msg/s: CPU / working set | 48 % / 117.2 MB | 58 % / 117.4 MB |
+| Load: marker latency / worst UI stall | 5 ms / 32 ms | 6 ms / 40 ms |
+| Burst of 5000 messages: time / worst UI stall | 3.1 s / 61 ms | 7.5 s / 243 ms (re-run alone: 7.3 s / 52 ms) |
+| History 10k to 20k lines | 154.6 to 160.6 MB | 137.8 to 138.3 MB |
+| All 15 tabs full / soak growth | 264.7 MB / 0.0 MB/min | 245.3 MB / 0.0 MB/min |
+
+BR-4: a full tab no longer drops one line per new line (Qt laid the whole tab out again each time);
+old lines go in batches when a tab is 10 % over Scrollback. That is why the burst is more than twice
+as fast and the load CPU lower. The price is memory: a tab can hold up to 10 % more lines between
+batches, so full tabs and long history use about 15-20 MB more. Soak growth stays 0.
+
+### Test results
+
+| Check | Result |
+| --- | --- |
+| `pytest` (source) | 642/642 passed (+3 BR-4 tests) |
+| Protocol | 88/88 |
+| `build_check.py` / packaged checks | PASS / bundle, frozen_check, frozen_features, frozen_reports, frozen_extra all PASS |
+| Button check | 673 controls, no problems |
+| Secret scan | PASS |
+| Release | tag `v0.6.2` = `ab80c2d`, latest, anonymous download hash = build, signed manifest OK, updater offers 0.6.2 to 0.3.0 / 0.5.0 / 0.6.1 / 0.6.2-TEST1 and nothing to 0.6.2 |
+
+## Previous baseline: 0.6.1 release (12 Nov 2026)
 
 Released as `v0.6.1` from commit `f68b3b8`. Numbers from QA run `20261112-030913`
 (`tools/qa.py all --perf-quick`), one `perf_bench.py --quick` re-run alone, and the release checks.

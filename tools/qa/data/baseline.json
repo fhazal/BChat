@@ -1,5 +1,5 @@
 {
- "_about": "Number of tests/checks each QA step had in the last known-good run (docs/QA-BASELINE.md, 0.6.1, 2026-11-12; pytest 523 -> 536 (+13 QA runner tests) -> 564 (+28 qa_ircd) -> 616 (+52 conformance) -> 617 (+1 qa_ircd ghost test) -> 618 (+1 Wixchat welcome test, 0.6.0) -> 624 (+6 FINDING-01 CASEMAPPING tests, 0.6.1) -> 626 (+2 BR-3 Add/Edit Network tests) -> 637 (+11 Ergo bouncer, IPv6-only wording, burst slices tests) -> 639 (+2 password safety tests) -> 642 (+3 BR-4 full-tab trim + report scrubber tests, 0.6.2)). Fewer than this in a run = possible lost coverage, reported as a warning. Update together with QA-BASELINE.md.",
+ "_about": "Number of tests/checks each QA step had in the last known-good run (docs/QA-BASELINE.md, 0.6.2, 2026-11-14; pytest 523 -> 536 (+13 QA runner tests) -> 564 (+28 qa_ircd) -> 616 (+52 conformance) -> 617 (+1 qa_ircd ghost test) -> 618 (+1 Wixchat welcome test, 0.6.0) -> 624 (+6 FINDING-01 CASEMAPPING tests, 0.6.1) -> 626 (+2 BR-3 Add/Edit Network tests) -> 637 (+11 Ergo bouncer, IPv6-only wording, burst slices tests) -> 639 (+2 password safety tests) -> 642 (+3 BR-4 full-tab trim + report scrubber tests, 0.6.2)). Fewer than this in a run = possible lost coverage, reported as a warning. Update together with QA-BASELINE.md.",
  "pytest:pytest": 642,
  "ui:controls": 673,
  "packaged:bundle_check": 23,
