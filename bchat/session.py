@@ -1433,8 +1433,28 @@ class Session(QObject):
             return
         self.add(self.server_buffer, ERROR, "*", m.param(-1))
 
+    def _znc_lost_irc(self, m: Message) -> None:
+        """ZNC lost the IRC server but stays connected to us: no 'Disconnected' ever reaches BChat, so the
+        channels would still show everyone online, ourselves as op. Leave them the way a real disconnect does;
+        ZNC's own JOIN on its way back fills them again."""
+        user, _, host = m.prefix.partition("!")[2].partition("@")
+        if not (user == "znc" and host == "znc.in" and m.nick.lower().endswith("status")):
+            return
+        if not strip_format(m.param(-1)).strip().startswith("Disconnected from IRC"):
+            return
+        if self._znc_collect is not None or time.time() - self._ts(m) > 60:
+            return                                  # an old line played back, not news
+        for b in self.all_buffers():
+            if b.kind == CHANNEL and b.joined:
+                b.joined = False
+                b.users.clear()
+                self.add(b, INFO, "*", "Disconnected: the bouncer lost the IRC server. It rejoins when the server is back.")
+                self.users_changed.emit(b)
+                self.buffer_changed.emit(b)
+
     def _irc_privmsg(self, m: Message) -> None:
         target, text = m.param(0), m.param(-1)
+        self._znc_lost_irc(m)
         if m.nick == "***" and m.prefix.endswith("@znc.in"):
             if text.strip() == "Buffer Playback...":
                 if self._znc_collect is not None:

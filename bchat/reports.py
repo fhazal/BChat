@@ -6,9 +6,10 @@ kind and size, the number of plugins. Before anything leaves the PC, nicks, chan
 Windows user and PC name, IP addresses, e-mail addresses, hostmasks and links are replaced (Redactor), and the
 user sees every word in "See what's sent". Chat text and passwords are never collected at all.
 
-Crashes: faulthandler writes a crash file only on a fatal error, so a bar on the next start means a real crash
-(a Windows restart or a killed BChat never looks like one). Errors inside a click keep BChat running: the same
-bar shows at once, once per error. Freezes: a watchdog thread sees the window stuck for FREEZE_SECONDS.
+Crashes: faulthandler writes a crash file on a fatal error. On Windows it also writes errors that were caught and
+survived, so a normal close empties the file and known survived codes are left out (real_crash). Errors inside a
+click keep BChat running: the same bar shows at once, once per error. Freezes: a watchdog thread sees the window
+stuck for FREEZE_SECONDS and writes where; a freeze left from last time wins over the crash file (BR-5).
 """
 from __future__ import annotations
 
@@ -226,6 +227,25 @@ class ErrorCatcher(QObject):
         sys.excepthook, threading.excepthook = self._old, self._old_thread
 
 
+# Windows errors that Windows itself catches and BChat always survives. faulthandler logs them anyway (every
+# start writes 0x8001010d, a COM call refused during an input call), so a run that was closed while stuck or by
+# a Windows shutdown would otherwise look like a crash with the wrong error in it (BR-5).
+SURVIVED_CODES = ("0x8001010d", "0x8001010e")
+_CRASH_BLOCK = re.compile(r"(?m)^(?=Windows fatal exception:|Fatal Python error:)")
+
+
+def real_crash(text: str) -> str:
+    """The crash file without the blocks for errors that are always survived."""
+    keep = []
+    for block in _CRASH_BLOCK.split(text):
+        head = block.lstrip().split("\n", 1)[0].lower()
+        if head.startswith("windows fatal exception:") and any(c in head for c in SURVIVED_CODES):
+            continue
+        if block.strip():
+            keep.append(block.strip())
+    return "\n\n".join(keep)
+
+
 class CrashFile:
     """faulthandler writes here on a crash. Read at start: something in it = last run crashed. A normal close
     empties it (close()), because on Windows faulthandler also logs errors that were caught and survived."""
@@ -235,7 +255,7 @@ class CrashFile:
         folder.mkdir(parents=True, exist_ok=True)
         self.previous = ""
         try:
-            self.previous = self.path.read_text(encoding="utf-8", errors="replace").strip()[-MAX_TEXT:]
+            self.previous = real_crash(self.path.read_text(encoding="utf-8", errors="replace"))[-MAX_TEXT:]
         except OSError:
             pass
         self._f = None
@@ -327,6 +347,17 @@ def leftover_freeze(folder: Path) -> tuple[float, str] | None:
         return float(d.get("seconds", 0)), str(d.get("stack", ""))
     except (OSError, ValueError):
         return None
+
+
+def last_run_problem(crash: CrashFile, folder: Path) -> tuple | None:
+    """What went wrong last time, as offer_report's arguments. A freeze wins: BChat was closed while stuck, so the
+    freeze says where it was stuck and the crash file only holds errors it survived (BR-5)."""
+    stuck = leftover_freeze(folder)
+    if stuck:
+        return ("BChat stopped responding last time and was closed.", "Slow", stuck[1], fingerprint(stuck[1]), stuck[0])
+    if crash.previous:
+        return ("BChat closed unexpectedly last time.", "Crashed", crash.previous, fingerprint(crash.previous))
+    return None
 
 
 # --- the report ----------------------------------------------------------------------------------------------

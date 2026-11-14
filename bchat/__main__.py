@@ -203,11 +203,9 @@ def main(argv: list[str] | None = None) -> int:
             win.open_irc_link(link)
         if args.server:
             start_network(win, args.server, args.join, args.nick)
-        stuck = reports.leftover_freeze(report_dir)
-        if crash.previous:
-            win.offer_report("BChat closed unexpectedly last time.", "Crashed", crash.previous, reports.fingerprint(crash.previous))
-        elif stuck:
-            win.offer_report("BChat stopped responding last time and was closed.", "Slow", stuck[1], reports.fingerprint(stuck[1]), stuck[0])
+        last = reports.last_run_problem(crash, report_dir)
+        if last:
+            win.offer_report(*last)
         reports.Sender(win).send_pending()
 
     QTimer.singleShot(0, start)
