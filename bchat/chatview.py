@@ -8,10 +8,10 @@ import re
 
 import zlib
 
-from PySide6.QtCore import QPoint, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetrics, QImage, QPainter, QPen, QTextBlockFormat,
                            QTextCharFormat, QTextCursor, QTextDocument, QTextFormat, QTextImageFormat)
-from PySide6.QtWidgets import QTextBrowser
+from PySide6.QtWidgets import QTextBrowser, QWidget
 
 from .config import Config
 from .protocol import colour_of, parse_format, readable, split_urls
@@ -46,6 +46,13 @@ class ChatView(QTextBrowser):
         self.apply_font()
         self._empty = self._new_doc()
         self.setDocument(self._empty)
+
+    def changeEvent(self, ev):
+        super().changeEvent(ev)
+        if ev.type() == QEvent.Type.FontChange:    # Qt hands the document the widget's UI font (first show, styles)
+            d = self.document()
+            if d is not None and d.defaultFont() != self.chat_font:
+                d.setDefaultFont(self.chat_font)
 
     def apply_font(self) -> None:
         self.chat_font = QFont(self.cfg.chat_font, self.cfg.chat_font_size)
@@ -462,3 +469,165 @@ class ChatView(QTextBrowser):
                 y = int(rect.bottom()) - self.verticalScrollBar().value()
                 p.setPen(QPen(QColor(t.marker), 1))
                 p.drawLine(0, y, self.viewport().width(), y)
+
+
+class ChatPane(QWidget):
+    """The main window's chat area: one ChatView per tab, stacked. A ChatView that swaps documents makes Qt lay
+    the whole tab out again on every switch (0.6.3: 113 ms at 5000 lines, 295 ms with 24 tabs, worse with Windows
+    accessibility on); a view per tab keeps its layout, so a switch only raises it. Same calls as ChatView: the
+    ones it doesn't have go to the tab on show. Only the view on show follows the pane's size: the server tab (no
+    nick list) is wider than a channel, and resizing every view would lay every tab out again; a hidden view
+    keeps its size and only catches up if it differs when it is shown."""
+    channel_double_clicked = Signal(str)
+    central_requested = Signal(object)
+
+    def __init__(self, cfg: Config, parent=None):
+        super().__init__(parent)
+        self.cfg = cfg
+        self.views: dict[int, ChatView] = {}
+        self._stale: set[int] = set()          # Preferences changed: rebuilt when next shown
+        self.current: Buffer | None = None
+        self.menu_provider = None              # (pos, view) -> menu; set by the main window
+        self.colour_rule = None
+        self.reply_jump = None
+        self._shown: ChatView | None = None
+        self._blank = self._make()
+        self.setCurrentWidget(self._blank)
+
+    def _make(self) -> ChatView:
+        v = ChatView(self.cfg, self)
+        v.menu_provider = lambda pos, v=v: self.menu_provider(pos, v) if self.menu_provider else None
+        v.colour_rule = lambda b, nick: self.colour_rule(b, nick) if self.colour_rule else None
+        v.reply_jump = lambda b, msgid: self.reply_jump(b, msgid) if self.reply_jump else None
+        v.channel_double_clicked.connect(self.channel_double_clicked)
+        v.central_requested.connect(self.central_requested)
+        v.hide()
+        return v
+
+    def currentWidget(self) -> ChatView:
+        return self._shown
+
+    def setCurrentWidget(self, v: ChatView) -> None:
+        if v is self._shown:
+            return
+        old, self._shown = self._shown, v
+        if not v.property("sized"):            # never shown: give it a size now
+            v.setProperty("sized", True)
+            v.setGeometry(self.rect())
+        v.show()
+        if old is not None:
+            old.hide()
+        # A size change comes after the switch (the nick list shows or hides). Fit once, after that, not twice.
+        QTimer.singleShot(0, self._fit)
+
+    def _fit(self) -> None:
+        if self._shown is not None and self._shown.geometry() != self.rect():
+            self._shown.setGeometry(self.rect())
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        if self._shown is not None:
+            self._shown.setGeometry(self.rect())
+
+    def sizeHint(self):
+        return self._shown.sizeHint() if self._shown is not None else super().sizeHint()
+
+    def minimumSizeHint(self):
+        return self._shown.minimumSizeHint() if self._shown is not None else super().minimumSizeHint()
+
+    def view(self) -> ChatView:
+        """The view on show."""
+        return self.currentWidget()
+
+    def view_of(self, b: Buffer) -> ChatView | None:
+        return self.views.get(id(b))
+
+    def __getattr__(self, name):       # textCursor, copy, document, verticalScrollBar, word_at...: the tab on show
+        if name.startswith("__") or name in ("views", "_blank", "_stale", "_shown"):
+            raise AttributeError(name)
+        return getattr(self.currentWidget(), name)
+
+    def find(self, *args):             # QWidget.find is a different thing: search the tab on show
+        return self.view().find(*args)
+
+    @property
+    def docs(self) -> dict:
+        return {k: v.docs[k] for k, v in self.views.items() if k in v.docs}
+
+    def doc_for(self, b: Buffer) -> QTextDocument:
+        v = self.views.get(id(b))
+        if v is None:
+            v = self.views[id(b)] = self._make()
+        return v.doc_for(b)
+
+    def show_buffer(self, b: Buffer | None) -> None:
+        old = self.views.get(id(self.current)) if self.current is not None else None
+        if old is not None and self.current is not b and id(self.current) in old.docs:
+            self.current.marker = old.docs[id(self.current)].blockCount() - 1
+        self.current = b
+        if b is None:
+            self.setCurrentWidget(self._blank)
+            return
+        self.doc_for(b)
+        v = self.views[id(b)]
+        if id(b) in self._stale:
+            self._stale.discard(id(b))
+            v.reload(b)                        # built again from the buffer's lines
+        if v.current is not b:
+            v.show_buffer(b)
+        self.setCurrentWidget(v)
+        sb = v.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def add_line(self, b: Buffer, ln: Line) -> None:
+        v = self.views.get(id(b))
+        if v is not None and id(b) not in self._stale:
+            v.add_line(b, ln)
+
+    def drop(self, b: Buffer) -> None:
+        """The tab lives somewhere else now (its own window): let go of its view."""
+        v = self.views.pop(id(b), None)
+        self._stale.discard(id(b))
+        if self.current is b:
+            self.current = None
+            self.setCurrentWidget(self._blank)
+        if v is not None:
+            v.hide()
+            v.deleteLater()
+
+    forget = drop
+
+    def reload(self, b: Buffer) -> None:
+        """Rebuild after /clear or lines put in front (history)."""
+        v = self.views.get(id(b))
+        if v is None:
+            return
+        if self.current is b:
+            self._stale.discard(id(b))
+            v.reload(b)                        # the view shows b: it builds it again at once
+            sb = v.verticalScrollBar()
+            sb.setValue(sb.maximum())
+        else:
+            self._stale.add(id(b))
+
+    def reload_all(self) -> None:
+        """After Preferences: the tab on show now, the others when next shown (as before)."""
+        for k, v in self.views.items():
+            if self.current is not None and k == id(self.current):
+                continue
+            self._stale.add(k)
+        if self.current is not None:
+            v = self.views.get(id(self.current))
+            if v is not None:
+                v.reload_all()
+                sb = v.verticalScrollBar()
+                sb.setValue(sb.maximum())
+
+    def apply_font(self) -> None:
+        for v in [self._blank, *self.views.values()]:
+            v.apply_font()
+
+    def reset_marker(self) -> None:
+        v = self.views.get(id(self.current)) if self.current is not None else None
+        if v is not None:
+            v.reset_marker()

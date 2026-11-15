@@ -53,7 +53,9 @@ def run1(userdata):
     from bchat import reports
     w = win()
     note("crash file armed (faulthandler on)", faulthandler.is_enabled)
-    note("crash file starts empty", lambda: (w.cfg_dir / "reports" / "crash.log").read_text() == "")
+    text = (w.cfg_dir / "reports" / "crash.log").read_text()
+    results["crash file at start (first line)"] = text.strip().splitlines()[0] if text.strip() else "(empty)"
+    note("crash file starts with no real crash", lambda: reports.real_crash(text) == "")   # survived errors may be in it
     from PySide6.QtGui import QAction
     note("Help menu has Report a Problem", lambda: any("Report a &Problem" in a.text() for a in w.findChildren(QAction)))
     note("report goes to the test receiver, not the real one", lambda: reports.REPORT_URL.startswith("http://127.0.0.1:"))
@@ -92,7 +94,8 @@ def run2(userdata):
     bar = w.report_bar
     note("after the crash: the bar shows on start", lambda: bar.isVisible() and "closed unexpectedly" in bar.text.text())
     note("the bar carries the real crash", lambda: "fatal" in bar.offer.get("error", "").lower())
-    note("crash file is fresh again", lambda: (w.cfg_dir / "reports" / "crash.log").read_text() == "")
+    from bchat import reports
+    note("crash file is fresh again (no real crash)", lambda: reports.real_crash((w.cfg_dir / "reports" / "crash.log").read_text()) == "")
     bar.dismiss()
     save()
     time.sleep(12)               # the window's thread is stuck: a freeze
@@ -152,5 +155,5 @@ if out2.exists():
     res.update(json.loads(out2.read_text()))
 srv.shutdown()
 
-res = {k: (str(v) if (k.endswith("(error)") or k == "report answer") else v) for k, v in res.items()}   # text = information
+res = {k: (str(v) if (k.endswith("(error)") or k in ("report answer", "crash file at start (first line)")) else v) for k, v in res.items()}   # text = information
 finish("frozen_reports", ARGS, res)

@@ -86,3 +86,71 @@ def test_only_znc_itself_and_only_news_count(app, tmp_path):
     assert wait(app, lambda: any(ln.text == "marker" for ln in b.lines))
     assert b.joined and len(b.users) > 3
     win.close()
+
+
+# --- one chat view per tab (slow tab switch: Qt laid the whole tab out again on every switch) -----------------
+
+def pane(app):
+    from bchat.chatview import ChatPane
+    p = ChatPane(Config(nick="me", max_lines=500))
+    p.resize(800, 400)
+    p.show()
+    return p
+
+
+def lines(p, b, n, tag="x"):
+    from bchat.session import MSG, Line
+    for i in range(n):
+        ln = Line(MSG, "nick", f"{tag} {i}", time.time())
+        b.lines.append(ln)
+        p.add_line(b, ln)
+
+
+def test_each_tab_keeps_its_own_view_and_layout(app):
+    from bchat.session import Buffer
+    p = pane(app)
+    a, b = Buffer(None, "#a", "channel"), Buffer(None, "#b", "channel")
+    p.doc_for(a), p.doc_for(b)
+    p.show_buffer(a)
+    lines(p, a, 50, "a")
+    lines(p, b, 30, "b")                                       # a hidden tab still gets its lines
+    va, vb = p.view_of(a), p.view_of(b)
+    assert va is not vb and p.view() is va
+    doc_a = va.document()
+    p.show_buffer(b)
+    assert p.view() is vb and "b 29" in p.toPlainText() and "a 1" not in p.toPlainText()
+    assert a.marker == 49                                      # leaving a tab still sets its marker line
+    p.show_buffer(a)
+    assert p.view() is va and va.document() is doc_a          # same document: nothing built or laid out again
+    assert p.document().defaultFont().family() == va.chat_font.family()
+
+
+def test_preferences_rebuild_the_shown_tab_now_and_the_rest_when_shown(app):
+    from bchat.session import Buffer
+    p = pane(app)
+    a, b = Buffer(None, "#a", "channel"), Buffer(None, "#b", "channel")
+    p.doc_for(a), p.doc_for(b)
+    p.show_buffer(b)
+    lines(p, a, 5, "a")
+    p.show_buffer(a)
+    old_b = p.view_of(b).document()
+    p.reload_all()
+    assert "a 4" in p.toPlainText()                            # the shown tab right away
+    lines(p, b, 3, "late")                                     # waits in the buffer, drawn at the rebuild
+    p.show_buffer(b)
+    assert p.view_of(b).document() is not old_b and "late 2" in p.toPlainText()
+
+
+def test_a_tab_in_its_own_window_lets_go_of_its_view(app):
+    from bchat.session import Buffer
+    p = pane(app)
+    a = Buffer(None, "#a", "channel")
+    p.doc_for(a)
+    p.show_buffer(a)
+    lines(p, a, 3)
+    p.drop(a)
+    assert p.view_of(a) is None and p.view() is p._blank
+    lines(p, a, 2, "while away")                               # not drawn twice
+    p.doc_for(a)
+    p.show_buffer(a)
+    assert "while away 1" in p.toPlainText() and "x 2" in p.toPlainText()

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QBoxLayout, QProgressBar, QTabBar, QToolButton, Q
                                QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction)
 
 from . import __version__, commands, config
-from .chatview import ChatView
+from .chatview import ChatPane
 from .config import Config, NetworkConfig, Server
 from .protocol import URL_RE, lower, strip_format
 from .session import ACTION, CHANNEL, HILITE, INFO, MSG, NOTICE, QUERY, SELF, SERVER, Buffer, Line, Session, User
@@ -581,7 +581,7 @@ class MainWindow(FramelessWindow):
         self.dialog_lay.setSpacing(2)
         top_row.addWidget(self.dialog_bar)
         ml.addLayout(top_row)
-        self.chat = ChatView(self.cfg, mid)
+        self.chat = ChatPane(self.cfg, mid)      # one chat view per tab: switching never lays a tab out again
         self.chat.menu_provider = self._chat_menu
         self.chat.colour_rule = self.chat_colour_rule
         self.chat.reply_jump = self.reply_jump
@@ -1214,7 +1214,7 @@ class MainWindow(FramelessWindow):
                 self._refresh_all()
         else:
             self.detached[id(b)] = w
-        self.chat.docs.pop(id(b), None)
+        self.chat.drop(b)
         w.show()
         w.input.setFocus()
 
@@ -2076,9 +2076,9 @@ class MainWindow(FramelessWindow):
         if b is not None and s is not None and b.kind in (CHANNEL, QUERY) and not href:
             self._share_menu(menu, s, b)
             menu.addSeparator()
-        copy = menu.addAction(icon("copy"), "Copy Selection", self.chat.copy)
-        copy.setEnabled(self.chat.textCursor().hasSelection())
-        menu.addAction("Select All", self.chat.selectAll)
+        copy = menu.addAction(icon("copy"), "Copy Selection", chat.copy)
+        copy.setEnabled(chat.textCursor().hasSelection())
+        menu.addAction("Select All", chat.selectAll)
         menu.addSeparator()
         menu.addAction(icon("clear"), "Clear Text", self._clear_current)
         menu.addAction(icon("find"), "Search Text...", self._search)
@@ -3071,7 +3071,7 @@ class MainWindow(FramelessWindow):
             self.start_reply(b, ln.msgid)
 
     def reply_jump(self, b: Buffer, msgid: str) -> None:
-        chat = self.detached[id(b)].chat if id(b) in self.detached else self.chat
+        chat = self.detached[id(b)].chat if id(b) in self.detached else (self.chat.view_of(b) or self.chat.view())
         block = chat.block_of(msgid)
         if block is not None:
             chat.flash_block(block)

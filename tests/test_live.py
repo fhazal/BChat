@@ -3977,6 +3977,7 @@ def test_double_click_in_channel_text_opens_channel_central(live):
     assert got == ["#chat"]                                           # a channel name still joins
     win.select_buffer(s.server_buffer)
     wait(app, lambda: False, 100)
+    vp = win.chat.viewport()                                          # 0.6.3: every tab has its own view
     opened = []
     win.chat.central_requested.connect(opened.append)
     QTest.mouseDClick(vp, Qt.MouseButton.LeftButton, pos=QPoint(vp.width() - 30, vp.height() - 12))
