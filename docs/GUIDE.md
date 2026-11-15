@@ -353,7 +353,22 @@ Yes: tick **Include test versions** on the Updates page.
 ## Plugins and scripts
 
 ### Can I add scripts to BChat?
-Yes. BChat runs Python plugins written for XChat's Python interface, so most XChat 2 scripts work. Load one with **BChat → Load Plugin or Script...**, or put it in `%APPDATA%\BChat\addons` to load it at start. **Window → Plugins and Scripts...** lists them. Only load plugins you trust: a plugin can do anything BChat can.
+Yes. BChat runs Python scripts, and most scripts written for XChat 2 work too. Open **Window → Scripts...** to see them, or put a `.py` file in `%APPDATA%\BChat\addons` and it starts with BChat. **BChat → Load Plugin or Script...** runs one from another folder. Only run scripts you trust: a script can do anything you can do on your PC.
+
+### How do I write or change a script inside BChat?
+**Window → Scripts...**: your scripts are on the left, the editor on the right. **New** starts a script from a short example (a command, an event and a menu item). Press **Ctrl+S** to save and reload it. If there is a mistake, its line lights up and the bar under the editor says what is wrong; the version that was running keeps running until you fix it. Untick a script to stop it without deleting it; it then stays off when BChat starts. **Ctrl+F** finds text, **F3** finds the next one.
+
+### What can a script react to?
+mIRC's events: `bchat.on_text`, `on_action`, `on_notice`, `on_join`, `on_part`, `on_quit`, `on_kick`, `on_nick`, `on_mode`, `on_topic`, `on_invite`, `on_ctcp`, `on_connect` and `on_disconnect`. Your function gets one event with `network`, `channel`, `nick`, `text` and `me` (a private message has no channel). `bchat.add_menu_item("Channel", "Say hi", "say Hi $chan!")` adds an item to a right-click menu: Channel, Private chat, Server tab, Nick list or Menu bar. `bchat.set_pluginpref("count", 3)` keeps a value between starts, `bchat.get_pluginpref("count")` reads it back. XChat's own `hook_command`, `hook_server`, `hook_print` and `hook_timer` work as well.
+
+### A script shows an error. What now?
+The error shows once, in the server tab, with the script's name and line. Click **Open in Scripts** on that line: the Scripts window opens with the line lit. Fix it and press **Ctrl+S**.
+
+### How do I add my own items to the right-click menus?
+**Settings → Advanced → Popups...** has a list for each menu: Channel, Private chat, Server tab, Nick list, and Menu bar (a **Commands** menu in the menu bar that only shows when it has items). Your items go under BChat's own, after a line. A command can use `$nick` (the nick, or each selected nick in the Nick list), `$chan`, `$me`, `$network`, `$1` (the word you right-clicked), and `|` to run more than one command. **Submenu** starts a menu inside the menu, **Separator** draws a line, and you can drag rows to move them.
+
+### Can I use my mIRC popups?
+Yes, most of them. In **Settings → Advanced → Popups...** press **Paste mIRC popups...**, paste the popup text from mIRC and press **Add**. Lines BChat can run are added (submenus with dots and `-` lines too); a `menu nicklist {` block goes to the Nick list. Lines that use things only a mIRC script has, like `$?`, `$readini` or `{ }` blocks, are listed with the reason so you can rewrite them. Press **Save** to keep what was added.
 
 ---
 
@@ -384,7 +399,7 @@ BChat isn't code-signed yet, and some antivirus programs distrust unsigned apps.
 Check **Settings → Preferences → Alerts → Show pop-up notifications on:**. Also check that Windows Focus / Do Not Disturb is off, and that you're not in a full-screen game: BChat stays quiet then on purpose.
 
 ### Where are my settings, logs and downloads?
-In `%APPDATA%\BChat`: `config.json` (settings and networks, no passwords), `logs\`, `scrollback\`, `addons\` (plugins), `downloads\` (files received over DCC). Passwords are in Windows Credential Manager under entries named `BChat:...`.
+In `%APPDATA%\BChat`: `config.json` (settings and networks, no passwords), `logs\`, `scrollback\`, `addons\` (scripts), `downloads\` (files received over DCC). Passwords are in Windows Credential Manager under entries named `BChat:...`.
 
 ### How do I report a bug or ask for help?
 In BChat 0.3.0 and newer: **Help → Report a Problem...**, pick what happened and click **Send**. BChat adds the details for you and hides names and addresses; **See what's sent** shows every word first. After a crash or a freeze, BChat offers this by itself on the next start. You can also ask in **#BChat** on irc.bajubesi.org (people there and the Buzz helper bot can help), in the BChat forum on bajubesi.org, or open an issue on [GitHub](https://github.com/fhazal/BChat/issues).

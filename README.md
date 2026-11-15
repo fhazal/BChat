@@ -33,7 +33,15 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 
 ---
 
-## 🆕 What's new in 0.7.0
+## 🆕 What's new in 0.8.0
+
+- 🖱️ **Your own right-click menus**: *Settings → Advanced → Popups...* has a list for the Channel, Private chat, Server tab and Nick list menus, plus a **Commands** menu in the menu bar. Your items go under BChat's own, after a line, and can use `$nick`, `$chan`, `$me`, `$1` and `|` for more than one command. Submenus and lines too.
+- 📋 **Paste mIRC popups**: paste your mIRC popup text and BChat adds every line it can run. Lines it can't run are listed with the reason, never added broken.
+- 🧩 **Scripts window**: *Window → Scripts...* lists your Python scripts with an on/off tick and opens them in an editor with colours, line numbers and Find. **Ctrl+S** saves and reloads; a mistake lights its line and the version that was running keeps running. **New** starts from a short example.
+- 🔔 **More for scripts**: mIRC's events (`bchat.on_text`, `on_join`, `on_kick`, `on_connect` and more), menu items in any of the popups, and settings a script keeps between starts. XChat scripts still work as before.
+- 🐞 **Script errors show once**, in the server tab, with an **Open in Scripts** link to the line.
+
+<details><summary>0.7.0</summary>
 
 - ⌨️ **31 everyday commands from mIRC**, each with `/help` text and tab completion:
   - **Talking**: `/describe` (an action to another tab), `/omsg` (only the channel's ops see it), `/qmsg` and `/qme` (every open private chat), `/ctcpreply`
@@ -44,6 +52,8 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
   - **Sound and files**: `/beep`, `/flash`, `/splay` (a .wav), `/play` (a text file line by line, paced so you don't flood; `/play stop`), `/run` (opens a file, folder or link; asks once before starting a program)
 - 🔕 **Do not disturb**: in the tray menu or `/donotdisturb on`. No sounds, flashes, pop-up cards or tray blinking until you turn it off.
 - 🎨 **Strip colours per channel**: a new tick in each tab's **Settings for #channel** menu.
+
+</details>
 
 <details><summary>0.6.4</summary>
 
@@ -163,8 +173,8 @@ Send and receive files and direct chats, with a File Transfers window. Programs 
 </td>
 <td valign="top">
 
-### 🧩 Python plugins
-XChat's Python interface, so most XChat 2 scripts just work. Drop them in the `addons` folder or load them from *Window → Plugins and Scripts*. Text events and key bindings can be changed too.
+### 🧩 Python scripts and popups
+XChat's Python interface, so most XChat 2 scripts just work, plus mIRC's events. Write, save and reload them in *Window → Scripts*, and add your own items to every right-click menu in *Settings → Advanced → Popups*. Text events and key bindings can be changed too.
 
 </td>
 </tr>
