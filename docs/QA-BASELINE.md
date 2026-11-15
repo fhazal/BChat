@@ -3,7 +3,38 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.7.0 release (15 Nov 2026)
+## Current baseline: 0.8.0 release (16 Nov 2026)
+
+Released as `v0.8.0` from commit `84dcbba` (Popups for five menus + Paste mIRC popups, Scripts window, mIRC events,
+add_menu_item and pluginprefs for scripts). Numbers from QA run `20261116-003730` (`tools/qa.py all --perf-quick`).
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.8.0` (`version_info` 0.8.0.0) |
+| Installer | `BChat-0.8.0-setup.exe`, 35,892,198 bytes |
+| Installer SHA-256 | `328fba334c91936f8d2f91d41b726b62d1bc024f06b47e25f57b396af367e5ab` |
+| `BChat.exe` SHA-256 | `532337bb1cea735ae451e3d9f9127810c80ddc2bbce613c688e6c4daca0675d2` |
+| Packaged files | 209 |
+| VirusTotal installer | 1 / 71 (DeepInstinct) |
+| VirusTotal `BChat.exe` | 1 / 71 (APEX, as on every build) |
+
+### Performance (quick mode, full QA run)
+
+| Measure | 0.8.0 |
+| --- | --- |
+| Start to window | 0.53 s |
+| Idle working set | 103.9 MB |
+| Load 300 msg/s: CPU / worst UI stall | 54.4 % / 39 ms |
+| Burst of 5000 messages: time / worst UI stall | 3.5 s / 42 ms |
+| History 10k lines / all 15 tabs full | 149.7 / 259.4 MB |
+
+### Test results
+
+pytest 675 (+12 `test_080`), protocol PASS, packaged 5/5 PASS, ui 728 controls no problems (+55: Popups pages,
+Paste mIRC popups, Scripts window), perf PASS. The first 0.8.0-TEST1 build failed 3 packaged checks: their probe
+scripts use `from bchat import ...`, which the new `import bchat` API hid; fixed in `fa4e3eb` before release.
+
+## Previous baseline: 0.7.0 release (15 Nov 2026)
 
 Released as `v0.7.0` from commit `e9a35dc` (Everyday commands: 31 commands, Do not disturb, strip colours per
 tab). Numbers from QA run `20261115-221738` (`tools/qa.py all --perf-quick`) and the re-check of the rebuilt
@@ -37,7 +68,7 @@ pytest 663 (+13 `test_070`), protocol PASS, packaged 5/5 PASS in the full run, u
 Timing flakes seen in packaged checks today (each 19/19 or 59/59 when re-run alone): `frozen_check` status strip
 and `/server`, `frozen_extra` sent channel/private message (checked without waiting).
 
-## Previous baseline: 0.6.4 release (15 Nov 2026)
+## Earlier release: 0.6.4 (15 Nov 2026)
 
 Released as `v0.6.4` from commit `b957848`. Numbers from QA run `20261115-210636`
 (`tools/qa.py all --perf-quick`) and a same-day comparison with 0.6.3 on an idle PC
