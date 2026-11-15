@@ -3,7 +3,38 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.6.3 release (15 Nov 2026)
+## Current baseline: 0.6.4 release (15 Nov 2026)
+
+Released as `v0.6.4` from commit `b957848`. Numbers from QA run `20261115-210636`
+(`tools/qa.py all --perf-quick`) and a same-day comparison with 0.6.3 on an idle PC
+(`perf_bench.py --quick`, two rounds each).
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.6.4` (`version_info` 0.6.4.0) |
+| Installer | `BChat-0.6.4-setup.exe`, 35,825,872 bytes |
+| Installer SHA-256 | `dbe15df5cbfc0acb38d2028fba1772aa81d83a57c7b9b563643bbb141dc1c15f` |
+| `BChat.exe` SHA-256 | `09ef000d3f32b7ff3e12c076dfff33d2aada004ea277b7f4c30eba8c60154c05` |
+| Packaged files | 209 (the spec now leaves out `api-ms-win-*` and `ucrtbase.dll`: a JDK on PATH had added 44) |
+| VirusTotal installer | 1 / 71 (DeepInstinct, as on earlier builds) |
+| VirusTotal `BChat.exe` | 1 / 71 (APEX, as on every build) |
+
+### Performance (quick mode, idle PC, same day)
+
+| Measure | 0.6.4 | 0.6.3 |
+| --- | --- | --- |
+| Load 300 msg/s: CPU (two rounds) | 37.8 / 45.9 % | 45.4 / 45.8 % |
+| Load: worst UI stall | 31 / 43 ms | 39 / 29 ms |
+| Burst of 5000 messages | 3.2 / 5.1 s (second round noisy) | 3.1 / 3.2 s |
+
+Full QA run: idle 106.1 MB, load 39.5 % CPU / 44 ms, burst 4.1 s / 102 ms, history 10k 152.8 MB.
+
+### Test results
+
+pytest 650, protocol PASS, packaged 5/5 PASS (`frozen_check` failed 2 status-strip timing checks in the
+full run; 19/19 twice when re-run alone on the same exe), ui PASS, perf PASS.
+
+## Previous baseline: 0.6.3 release (15 Nov 2026)
 
 Released as `v0.6.3` from commit `7b0ac79`. Numbers from QA run `20261115-150057`
 (`tools/qa.py all`), the installer re-check `20261115-152449` and a same-day perf comparison
