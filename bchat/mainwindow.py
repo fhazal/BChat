@@ -671,6 +671,7 @@ class MainWindow(FramelessWindow):
         self._status_timer = QTimer(self, interval=1000, timeout=self._refresh_status)
         self._status_timer.start()
         self._blink_timer = QTimer(self, interval=500, timeout=self._blink_tray)
+        self.title_extra = ""            # /titlebar text (until BChat closes, as in mIRC)
         # 0.3.0: Delete logs older than ..., a moment after start and every 6 hours
         self._log_clean_timer = QTimer(self, interval=6 * 3600 * 1000, timeout=self.clean_old_logs)
         self._log_clean_timer.start()
@@ -921,7 +922,10 @@ class MainWindow(FramelessWindow):
             focus = self.cfg.tab_focus
             if asked:
                 b.session.focus_next = ""
-            if focus == 1 or (focus == 2 and (asked or (b.kind == CHANNEL and reading_server))) or (focus == 0 and self.buf is None):
+            back = b.session.fold(b.name) == b.session.stay_back         # /join -n: open it behind
+            if back:
+                b.session.stay_back = ""
+            if (focus == 0 and self.buf is None) or not back and (focus == 1 or (focus == 2 and (asked or (b.kind == CHANNEL and reading_server)))):
                 self.select_buffer(b)
             if b.kind == QUERY and self.cfg.dialogs_in_windows and b.name != "(notices)":
                 self.detach(b)
@@ -1388,26 +1392,31 @@ class MainWindow(FramelessWindow):
         self.status_strip.setToolTip("<qt>" + html.escape(tip) + "</qt>")
 
     def _refresh_title(self) -> None:
+        self._set_title(self._title_text())
+
+    def _set_title(self, text: str) -> None:
+        extra = self.title_extra.strip()
+        self.setWindowTitle(f"{text} - {extra}" if extra else text)
+
+    def _title_text(self) -> str:
         self._refresh_nick()
         self._refresh_status()
         b = self.buf
         if b is None:
-            self.setWindowTitle("BChat")
-            return
+            return "BChat"
         s = b.session
         if not s.net.servers:
-            self.setWindowTitle("BChat")
-            return
+            return "BChat"
         host = s.server_name or s.net.name
         if b.kind == CHANNEL:
             modes = b.mode_text()
             inside = " ".join(x for x in (modes, str(len(b.users)) if b.users else "") if x)
             tail = f" ({inside})" if inside else ""
-            self.setWindowTitle(f"BChat: {s.nick} @ {host} / {b.name}{tail}")
+            return f"BChat: {s.nick} @ {host} / {b.name}{tail}"
         elif b.kind == QUERY:
-            self.setWindowTitle(f"BChat: {s.nick} @ {host} / {b.name}")
+            return f"BChat: {s.nick} @ {host} / {b.name}"
         else:
-            self.setWindowTitle(f"BChat: {s.nick} @ {host}" if s.state != "disconnected" else f"BChat: {host} (not connected)")
+            return f"BChat: {s.nick} @ {host}" if s.state != "disconnected" else f"BChat: {host} (not connected)"
 
     # --- input ------------------------------------------------------------------
 
@@ -1739,6 +1748,7 @@ class MainWindow(FramelessWindow):
             a.toggled.connect(lambda on, n=name: self.set_tab_opt(b, n, on))
         tick("Timestamps", "timestamps")
         tick("Colored nick names", "color_nicks")
+        tick("Strip colours", "strip")
         jp = sub.addMenu("Join and part lines")
         if tabopts.has_own(self.cfg, b, "joins"):
             jp.menuAction().setFont(bold)
@@ -1768,7 +1778,7 @@ class MainWindow(FramelessWindow):
         from . import tabopts
         tabopts.set_(self.cfg, b, name, value)
         self.save_config()
-        if name in ("timestamps", "color_nicks"):
+        if name in ("timestamps", "color_nicks", "strip"):
             self.reload_buffer(b)
 
     def clear_tab_opts(self, b: Buffer) -> None:
@@ -2146,7 +2156,14 @@ class MainWindow(FramelessWindow):
     MORE_CARDS = {"kicked": "kick", "disconnect": "disconnect", "friend": "friend", "invite": "invite", "dcc": "dcc",
                   "notice": "notice"}
 
+    def set_do_not_disturb(self, on: bool) -> None:
+        """/donotdisturb and the tray menu: no sounds, chimes, flashes, beeps, pop-up cards or tray blinking."""
+        self.cfg.do_not_disturb = bool(on)
+        self.save_config()
+
     def _on_notify(self, b: Buffer, kind: str) -> None:
+        if self.cfg.do_not_disturb:
+            return
         if kind in ("friend", "friend_off"):
             name = getattr(b.session, "last_friend", "")
             opts = self.cfg.friend_opts.get(name.lower(), {})
@@ -2369,6 +2386,10 @@ class MainWindow(FramelessWindow):
         away.setChecked(bool(live) and all(s.away for s in live))
         away.setEnabled(bool(live))
         away.toggled.connect(self.set_away_everywhere)
+        dnd = menu.addAction("Do not disturb")
+        dnd.setCheckable(True)
+        dnd.setChecked(self.cfg.do_not_disturb)
+        dnd.toggled.connect(self.set_do_not_disturb)
         menu.addAction(icon("preferences"), "Preferences...", self._prefs_from_tray)
         menu.addSeparator()
         menu.addAction(icon("quit"), "Quit", self._quit_for_real)

@@ -200,6 +200,9 @@ class Session(QObject):
         self._last_rx = 0.0
         self.current: Buffer | None = None
         self.focus_next = ""
+        self.stay_back = ""                # /join -n: this channel's tab opens without taking the front
+        self.dns_waiting: dict = {}        # /dns <nick>: folded nick -> the tab that asked (USERHOST answer)
+        self.player = None                 # /play: the file being sent
         self.typed_by_hand = False
         self.statusmsg = ""
         self.whox = False
@@ -2029,6 +2032,10 @@ class Session(QObject):
 
     # numerics --------------------------------------------------------------------
 
+    def _dns_answer(self, m: Message) -> bool:
+        from . import everyday
+        return everyday.userhost_answer(self, m)
+
     def _numeric(self, n: int, m: Message) -> None:
         if self._starttls == "waiting" and self._starttls_answer(n, m):
             return
@@ -2065,11 +2072,22 @@ class Session(QObject):
             self.ban_sinks[self.fold(m.param(1))].ban_item({367: "b", 348: "e", 346: "I"}[n], m.param(2), m.param(3), m.param(4))
         elif n in (368, 349, 347) and self.fold(m.param(1)) in self.ban_sinks:
             self.ban_sinks[self.fold(m.param(1))].ban_end({368: "b", 349: "e", 347: "I"}[n])
+        elif n == 302 and self.dns_waiting and self._dns_answer(m):
+            pass
         elif n in (302, 340) and self._local_waiting:          # USERHOST / USERIP for ourselves
             self._local_waiting -= 1
             reply = m.param(-1).strip().split()
             host = reply[0].split("@")[-1] if reply else ""
             self._local_found(host)
+        elif n == 364:                                         # /links: one tidy line per server
+            hops, _, info = m.param(-1).partition(" ")
+            name, uplink = m.param(1), m.param(2)
+            self._links_seen = getattr(self, "_links_seen", 0) + 1
+            where = "the server you're on" if hops == "0" else f"{hops} hop{'' if hops == '1' else 's'} away, via {uplink}"
+            self.add(self.server_buffer, INFO, "*", f"{name}: {where}" + (f" ({info})" if info.strip() else ""))
+        elif n == 365:
+            count, self._links_seen = getattr(self, "_links_seen", 0), 0
+            self.add(self.server_buffer, INFO, "*", f"{count} server{'' if count == 1 else 's'} on {self.net.name}.")
         elif n == 303 and self._ison_waiting:
             self._ison_waiting -= 1
             on = {self.fold(x) for x in m.param(-1).split()}

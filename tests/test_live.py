@@ -2274,7 +2274,7 @@ def test_meters_help_opacity_close_to_tray(live, monkeypatch):
     b = s.buffers["#skinhead"]
     win.select_buffer(b)
     type_cmd(win, "/help join")
-    assert any("JOIN <channel>" in l.text for l in b.lines)
+    assert any("JOIN [-n] <channel>" in l.text for l in b.lines)
     prefs(win, lambda d: d.opacity.setValue(70))
     assert abs(win.windowOpacity() - 0.7) < 0.02
     prefs(win, lambda d: d.opacity.setValue(100))

@@ -175,7 +175,7 @@ def test_per_tab_join_lines_timestamps_and_reset(app, tmp_path):
     menu = win._switcher_menu(b)
     sub = next(a.menu() for a in menu.actions() if a.text() == "Settings for #skinhead")
     labels = [a.text() for a in sub.actions() if not a.isSeparator()]
-    assert labels[:3] == ["Timestamps", "Colored nick names", "Join and part lines"] and "Log to Disk" in labels
+    assert labels[:4] == ["Timestamps", "Colored nick names", "Strip colours", "Join and part lines"] and "Log to Disk" in labels
     assert "Log to Disk" not in [a.text() for a in menu.actions()]        # it moved into the submenu
     win.set_tab_opt(b, "joins", "hide")
     srv.send(":Wira2!w@h JOIN #skinhead")

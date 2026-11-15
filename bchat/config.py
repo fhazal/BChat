@@ -317,6 +317,8 @@ class Config:
     control_rules: list = field(default_factory=list)  # {"who", "by": account|mask, "give": @|+, "protect", "channels", "network"}
     send_typing: bool = False      # 0.3.0: let others see when I'm typing (+typing); off until the user turns it on
     strip_colors: bool = False     # drop mIRC colours from what people say
+    do_not_disturb: bool = False   # 0.7.0 /donotdisturb + tray menu: no sounds, flashes or pop-up cards
+    run_allowed: list = field(default_factory=list)    # 0.7.0 /run: programs the user said yes to once
     colors_exact: bool = False     # fixed (16-98) and hex text colours exactly as sent, even when hard to read
     chat_bg_image: str = ""        # Text box: background image
     # Input box

@@ -6,7 +6,7 @@ from __future__ import annotations
 from .protocol import lower
 
 # name -> (label, the Preferences value it overrides)
-NAMES = ("timestamps", "color_nicks", "joins", "beep", "flash", "popups")
+NAMES = ("timestamps", "color_nicks", "strip", "joins", "beep", "flash", "popups")
 JOINS = ("show", "short", "hide")
 HIDEABLE = ("Join", "Part", "Part with Reason", "Quit")
 
@@ -18,7 +18,7 @@ def key(b) -> str:
 def default(cfg, name: str, b=None):
     """What Preferences says for this tab (alert ticks: the column for its kind of tab)."""
     which = 1 if b is not None and b.kind == "query" else 0
-    return {"timestamps": cfg.timestamps, "color_nicks": cfg.color_nicks,
+    return {"timestamps": cfg.timestamps, "color_nicks": cfg.color_nicks, "strip": cfg.strip_colors,
             "joins": "short" if cfg.short_joins else "show",
             "beep": bool(cfg.alert_beep[which]), "flash": bool(cfg.alert_flash[which]),
             "popups": bool(cfg.alert_popup[which])}[name]

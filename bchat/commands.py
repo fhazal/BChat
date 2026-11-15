@@ -7,6 +7,7 @@ import time
 from .protocol import lower, strip_format
 from .config import NetworkConfig, Server
 from .session import CHANNEL, ERROR, INFO, QUERY, Buffer, Session
+from . import everyday
 
 
 # XChat's default user commands (src/common/xchat.c). &2 = the rest from word 2, %2 = word 2, %c channel, %n own nick
@@ -26,7 +27,7 @@ COMMAND_NAMES = sorted(set(ALIASES) | {
     "lastlog", "leave", "list", "mdeop", "me", "mkick", "mode", "mop", "msg", "names", "nctcp", "newserver", "nick",
     "notice", "notify", "np", "op", "part", "ping", "query", "quit", "quote", "raw", "reconnect", "say", "server", "topic", "unban",
     "sysinfo", "unignore", "url", "voice", "wallchan", "wallchop", "whois", "wi",
-    "timer", "timers", "alias", "channel", "partall", "online", "motd",
+    "timer", "timers", "alias", "channel", "partall", "online", "motd", *everyday.NAMES,
 })
 
 
@@ -64,7 +65,7 @@ HELP = {
     "notify": "NOTIFY [<nick> [<networks>]]: adds a friend, or takes them off if already there. Alone: opens the Friends List",
     "ignore": "IGNORE <mask> [CHAN PRIV NOTI CTCP DCC INVI ALL UNIGNORE]: hides someone. See Window > Ignore List",
     "invite": "INVITE <nick> [<channel>]: invites someone",
-    "join": "JOIN <channel> [<key>]: joins a channel",
+    "join": "JOIN [-n] <channel> [<key>]: joins a channel and shows it. -n joins without switching to it",
     "kick": "KICK <nick> [<reason>]: kicks someone",
     "kickban": "KICKBAN <nick> [<type>]: bans, then kicks. KICKBAN -a <nick> bans their account",
     "lastlog": "LASTLOG <text>: finds text in this tab",
@@ -118,6 +119,7 @@ HELP = {
     "online": "ONLINE: how long you've been connected to each network, and how long BChat has been running",
     "motd": "MOTD: shows the server's welcome message (also when Preferences > General skips it)",
     "channel": "CHANNEL: opens Channel Central for this channel (topic, modes, bans, exceptions, invites)",
+    **everyday.HELP,
 }
 
 
@@ -357,7 +359,7 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
     cmd, _, rest = text[1:].partition(" ")
     cmd = cmd.lower()
     rest = rest.strip()
-    if not s.net.servers and cmd not in ("server", "newserver", "clear", "close", "help", "echo", "allserv"):
+    if not s.net.servers and cmd not in ("server", "newserver", "clear", "close", "help", "echo", "allserv", *everyday.LOCAL):
         s.add(b, ERROR, "*", "This tab has no server yet. Type /server <host> [port or +port for SSL].")
         return
     args = rest.split()
@@ -402,10 +404,15 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
         b.marker = None
         ui.reload_buffer(b)
     elif cmd in ("join", "j"):
+        flags = [a.lower() for a in args if a.lower() in ("-n", "-x")]
+        args = [a for a in args if a.lower() not in ("-n", "-x")]
+        stay = "-n" in flags and "-x" not in flags      # mIRC: -n = don't switch to it, -x = do (the default)
         if args:
             name = args[0] if s.is_channel(args[0]) or "," in args[0] else "#" + args[0]  # as XChat does
             existing = s.buffers.get(s.fold(name))
-            if existing is not None:
+            if stay:
+                s.stay_back = s.fold(name)
+            elif existing is not None:
                 ui.select_buffer(existing)
             else:
                 s.focus_next = s.fold(name)
@@ -655,6 +662,8 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
     elif cmd == "channel":
         if need_channel():
             ui.open_channel_central(b)
+    elif cmd in everyday.NAMES:
+        everyday.run(ui, s, b, cmd, args, rest)
     elif cmd == "help" and args:
         about = HELP.get(args[0].lstrip("/").lower())
         s.add(b, INFO, "*", about or f"No help for {args[0]}. Help > Contents lists every command.")
@@ -663,6 +672,7 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
                             "/devoice /kick /ban /unban /kickban /mode /invite /away /back /quote /ctcp /ping /clear /close "
                             "/server /newserver /say /echo /names /list /id /ghost /cycle /allchan /allserv /lastlog /reconnect /discon /quit "
                             "/ignore /unignore /nctcp /url /flushq /mop /mdeop /mkick /wallchan /wallchop "
+                            + " ".join("/" + n for n in everyday.NAMES) + " "
                             + " ".join("/" + a for a in sorted(ALIASES)))
     else:
         s.send_labeled(b, text[1:])

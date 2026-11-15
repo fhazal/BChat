@@ -17,6 +17,7 @@ from .config import Config
 from .protocol import colour_of, parse_format, readable, split_urls
 from .session import (ACTION, CONNECT, ERROR, HILITE, INFO, JOIN, MSG, NOTICE, NOW_TALKING, PART, SELF, SERVER, TOPIC,
                       WHOIS, Buffer, Line)
+from . import tabopts
 from .widgets import ASSETS
 
 
@@ -269,7 +270,7 @@ class ChatView(QTextBrowser):
                 elif tabopts.get(self.cfg, b, "color_nicks") if b is not None else self.cfg.color_nicks:
                     mark = self.nick_colour(ln.left)
             self._put_parts(cur, self._left_parts(ln, mark) + [(" ", mark)])
-        self._insert_text(cur, ln.text, text_col)
+        self._insert_text(cur, ln.text, text_col, b)
 
     LIGHT = 7   # logical px, same as the user list
     MSGID = QTextFormat.Property.UserProperty + 1
@@ -357,9 +358,9 @@ class ChatView(QTextBrowser):
         shades = PALETTES.get(self.cfg.theme.name, MOCHA)     # the theme's own shades; a Custom theme keeps its base's
         return shades[self.NICK_COLOURS[zlib.crc32(nick.lower().encode()) % len(self.NICK_COLOURS)]]
 
-    def _insert_text(self, cur: QTextCursor, text: str, default_fg: str) -> None:
+    def _insert_text(self, cur: QTextCursor, text: str, default_fg: str, b: Buffer | None = None) -> None:
         t = self.cfg.theme
-        strip = self.cfg.strip_colors
+        strip = tabopts.get(self.cfg, b, "strip") if b is not None else self.cfg.strip_colors
         for sp in parse_format(text):
             cf = QTextCharFormat()
             # 0-15 follow the theme, 16-98 are the fixed mIRC colours, hex (\x04) as sent; 99 = default
