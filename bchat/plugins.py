@@ -137,6 +137,21 @@ class Plugin:
         api.get_pluginpref = lambda name: mgr.get_pref(self, str(name))
         api.del_pluginpref = lambda name: mgr.del_pref(self, str(name))
         api.list_pluginpref = lambda: mgr.list_pref(self)
+
+        def rest_of_bchat(name):
+            """`import bchat` gives a script this API; `from bchat import config` (BChat's own modules) still works."""
+            import importlib
+            pkg = importlib.import_module("bchat")
+            if name.startswith("__"):
+                raise AttributeError(name)
+            try:
+                return getattr(pkg, name)
+            except AttributeError:
+                try:
+                    return importlib.import_module(f"bchat.{name}")
+                except ImportError:
+                    raise AttributeError(f"bchat has no {name!r}") from None
+        api.__getattr__ = rest_of_bchat
         return api
 
     def fire(self, h: Hook, *args):

@@ -400,9 +400,12 @@ bchat.del_pluginpref("a")
 bchat.prnt("prefs " + ",".join(bchat.list_pluginpref()) + " " + bchat.get_pluginpref("b"))
 import bchat as again
 bchat.prnt("same api " + str(again is bchat))
+from bchat import config, full_version            # BChat's own modules, as scripts used them before 0.8.0
+import bchat.updater as up
+bchat.prnt("own modules " + str(bool(config.Config and full_version() and up.Updater and bchat.lucide)))
 ''')
     win.plugins.load(str(path))
-    assert said(b, "prefs b two") and said(b, "same api True")
+    assert said(b, "prefs b two") and said(b, "same api True") and said(b, "own modules True")
     menu = win.build_nick_menu(b, [b.users["oracle"], b.users["belon"]])
     act(menu, "Who are they").trigger()
     assert said(b, "picked Oracle,Belon on #skinhead as Badaboom")
