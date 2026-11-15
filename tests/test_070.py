@@ -78,6 +78,7 @@ def test_nick_and_name(app, tmp_path):
     assert sent(app, srv, "NICK Saved") and win.cfg.nick == "Saved"
     commands.run(win, s, b, "/fullname Belon the Bee")
     assert win.cfg.realname == "Belon the Bee" and said(b, "next time you connect")
+    assert said(b, "Network List > User Information")                # where the saved nick and name really are
     s.net.use_global, s.net.nick = False, "OwnNick"                # a network with its own nick keeps it there
     commands.run(win, s, b, "/mnick Other")
     assert s.net.nick == "Other" and win.cfg.nick == "Saved"
@@ -162,6 +163,7 @@ def test_tabs_and_text(app, tmp_path, monkeypatch):
 def test_lists(app, tmp_path):
     srv, win, s = live(app, tmp_path)
     b = s.buffers["#skinhead"]
+    assert wait(app, lambda: s.fold("Belon") in b.users)
     b.users[s.fold("Belon")].host = "b@" + "home.example"            # user@host, split so it never reads as an email
     commands.run(win, s, b, "/aop Belon #skinhead")
     r = win.cfg.control_rules[-1]
@@ -176,6 +178,7 @@ def test_lists(app, tmp_path):
     assert said(b, "Can't see Nobody")
     commands.run(win, s, b, "/cnick Belon teal")
     assert {"mask": "Belon", "colour": "teal", "net": ""} in win.cfg.nick_colours
+    assert said(b, "Settings > Advanced > Nick Colours")             # where the list really is
     commands.run(win, s, b, "/cnick Belon purple")
     assert said(b, "No colour called purple")
     commands.run(win, s, b, "/cnick Belon -r")
@@ -277,6 +280,7 @@ def test_dns_and_links(app, tmp_path):
 def test_uwho_shows_the_card_and_asks_whois(app, tmp_path):
     srv, win, s = live(app, tmp_path)
     b = s.buffers["#skinhead"]
+    assert wait(app, lambda: s.fold("Belon") in b.users)            # the names list is in
     commands.run(win, s, b, "/uwho Belon")
     assert sent(app, srv, "WHOIS Belon")
     assert win.uwho_menu.isVisible()

@@ -33,9 +33,23 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 
 ---
 
-## 🆕 What's new in 0.6.4
+## 🆕 What's new in 0.7.0
+
+- ⌨️ **31 everyday commands from mIRC**, each with `/help` text and tab completion:
+  - **Talking**: `/describe` (an action to another tab), `/omsg` (only the channel's ops see it), `/qmsg` and `/qme` (every open private chat), `/ctcpreply`
+  - **Your nick and name**: `/tnick` (for now), `/mnick` (saved), `/fullname`
+  - **Channels**: `/autojoin` and `/perform` change this network's join list and connect commands, `/join -n` joins without switching to the tab
+  - **Tabs and text**: `/clearall`, `/markasread`, `/savebuf` and `/loadbuf` (save a tab to a file, or show a file), `/strip`, `/timestamp` and `/log` for one tab, `/titlebar`
+  - **People and servers**: `/dns`, `/links` (one tidy line per server), `/uwho` (the person's card), `/aop` and `/avoice` (Auto-Op & Protect), `/abook`, `/cnick` (a nick colour)
+  - **Sound and files**: `/beep`, `/flash`, `/splay` (a .wav), `/play` (a text file line by line, paced so you don't flood; `/play stop`), `/run` (opens a file, folder or link; asks once before starting a program)
+- 🔕 **Do not disturb**: in the tray menu or `/donotdisturb on`. No sounds, flashes, pop-up cards or tray blinking until you turn it off.
+- 🎨 **Strip colours per channel**: a new tick in each tab's **Settings for #channel** menu.
+
+<details><summary>0.6.4</summary>
 
 - ⚡ **Busy tabs in the background cost less**: since 0.6.3 every tab has its own chat view, and tabs you weren't looking at still did scroll work for every new line. They now only add the line and scroll to the end when you open them. With many busy channels, BChat uses less CPU again, back to what 0.6.2 used or lower.
+
+</details>
 
 <details><summary>0.6.3</summary>
 
@@ -158,7 +172,7 @@ XChat's Python interface, so most XChat 2 scripts just work. Drop them in the `a
 <td valign="top">
 
 ### 🗂️ Tools you'll use
-Channel List, Channel Central, Ignore List, Friends (notify), Address Book, URL Grabber, character chart, spell check while you type, daily logs with a Logs window to search them, and scrollback for every chat.
+Channel List, Channel Central, Ignore List, Friends (notify), Address Book, URL Grabber, the everyday mIRC commands (`/autojoin`, `/perform`, `/play`, `/savebuf`, `/dns` and more), character chart, spell check while you type, daily logs with a Logs window to search them, and scrollback for every chat.
 
 </td>
 <td valign="top">

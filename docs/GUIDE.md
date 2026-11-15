@@ -75,7 +75,7 @@ Type `/nick NewName`. To change it for good, open the Network List and change **
 ## Chatting
 
 ### What are the most useful commands?
-- `/join #channel`: join a channel
+- `/join #channel`: join a channel (`/join -n #channel` joins without switching to it)
 - `/part`: leave the channel you're in
 - `/hop`: leave and rejoin the channel you're in (`/cycle` does the same)
 - `/msg nick text`: send a private message
@@ -88,7 +88,12 @@ Type `/nick NewName`. To change it for good, open the Network List and change **
 - `/partall`: leave every channel on this network
 - `/online`: how long you've been connected to each network
 - `/motd`: show the server's welcome message
+- `/describe nick waves`: an action in someone else's tab, without switching to it
+- `/qmsg text`: say it in every private chat you have open on this network
+- `/markasread -a`: take the unread colour off every tab
 - `/help`: every command, with a search box (also **Help → Contents**, `F1`)
+
+Since 0.7.0 BChat also knows the everyday commands mIRC users type, such as `/autojoin`, `/perform`, `/savebuf`, `/play`, `/dns`, `/links`, `/aop`, `/cnick` and `/run`. `/help` followed by a command name (`/help play`) says what it does.
 
 ### What does // do? Is it safe for passwords? Why did //ns identify say "No channel joined"?
 Yes, in BChat 0.6.1 and newer `//` is safe for passwords: `//ns identify yourpassword`, `//oper name password` and `//whois nick` run the command the mIRC way, exactly like one slash. Nothing is said in the channel, and the raw log hides the password with stars. Older BChat (0.6.0 and before) sent a `//` line as a chat message instead: on a server tab that gave *No channel joined*, and in a channel the password would have gone to everyone, so update. To say a line that starts with `/` as chat, use `/say`, for example `/say /me is a command`.
@@ -127,7 +132,7 @@ Double-click in the channel's chat (like mIRC), right-click the channel tab and 
 You need to be an operator (**@**) in the channel. Right-click their nick → **Operator Actions** → **ChanServ Access...** and pick **Auto-op @**, **Auto-voice +** or **No access**. BChat asks ChanServ what they have now, shows the exact line it will send, and ChanServ's answer appears in the channel. It works with Anope and Atheme services. The person must be registered with NickServ.
 
 ### Can BChat give @ or + to people by itself?
-Yes, even without ChanServ: **Window → Auto-Op & Protect...**, or right-click their nick → **Operator Actions** → **Auto-Op / Auto-Voice...**. Choose them by their **NickServ account** (safest: nobody can fake it) or by their address, like `*!*@bsn.my`. A nick alone isn't allowed, because anyone can take a nick. Pick **Auto-op @** or **Auto-voice +**, and the channels (empty = every channel where you have @).
+Yes, even without ChanServ: **Window → Auto-Op & Protect...**, or right-click their nick → **Operator Actions** → **Auto-Op / Auto-Voice...**. Choose them by their **NickServ account** (safest: nobody can fake it) or by their address, like `*!*@bsn.my`. A nick alone isn't allowed, because anyone can take a nick. Pick **Auto-op @** or **Auto-voice +**, and the channels (empty = every channel where you have @). Typing works too: `/aop Wira #chat` or `/avoice Wira` adds them by their account (or their address when the account isn't known), `/aop -r Wira` takes them off.
 
 BChat only acts in channels where you have **@** yourself. It waits 2 to 4 seconds and does nothing if ChanServ or another op already did it, and it prints one grey line saying why. On channels with ChanServ, **ChanServ Access** is better, because it works while you're offline.
 
@@ -145,7 +150,7 @@ Yes: **Settings → Preferences → General**, tick **Skip the server's welcome 
 
 
 ### Can one channel have its own settings?
-Yes. Right-click the channel in the channel list and choose **Settings for #channel**: timestamps, coloured nick names, join and part lines (show, short or hide), beep, flash, pop-up cards and **Log to Disk**, for that tab only. A setting that differs from Preferences shows in bold. **Use the defaults again** clears them.
+Yes. Right-click the channel in the channel list and choose **Settings for #channel**: timestamps, coloured nick names, strip colours, join and part lines (show, short or hide), beep, flash, pop-up cards and **Log to Disk**, for that tab only. In the tab itself you can also type `/timestamp off`, `/strip on` or `/log on`. A setting that differs from Preferences shows in bold. **Use the defaults again** clears them.
 
 ### How do I keep all the links people post?
 **Window → URL Grabber...** lists every link, newest on top (new ones in bold), with who posted it, where and when. Search it, add a **Note...**, or **Send to Channel**. Tick **Keep the list after BChat closes** to keep the links (never the chat around them) and **Also catch email addresses** to collect those too.
@@ -174,7 +179,7 @@ Right-click a nick and choose **Add to Friends List**, or type `/notify nick`. *
 Yes: in **Window → Friends List...**, pick a friend and click **Edit...**. Write a **Note** (it's the same note as in their Address Book card), and choose what happens when they come online or leave: **Show a pop-up**, **Play a sound** (your pop-up sound, or a .wav you pick), **Ask WHOIS**. When they leave, the server tab says how long they were online.
 
 ### How do I colour nicks or keep notes about people?
-**Settings → Advanced → Nick Colours...** gives nicks colours by rules, and other nicks automatic colours. To keep a note about someone, right-click their nick and choose **Address Book...**; **Window → Address Book...** lists everyone you saved.
+**Settings → Advanced → Nick Colours...** gives nicks colours by rules, and other nicks automatic colours. `/cnick Wira teal` gives one nick a colour, `/cnick Wira -r` takes it off. To keep a note about someone, right-click their nick and choose **Address Book...**; **Window → Address Book...** lists everyone you saved.
 
 ### How do I share the song I'm listening to?
 First turn it on in **Settings → Preferences → Now Playing**, then type `/np` in a channel. It's off at first, shares only music (no videos), and shows you the line before it's sent. To announce every new song, right-click in a channel and choose **Share → Announce Songs Here**.
@@ -187,6 +192,21 @@ Type `/sysinfo` in a channel: one line with Windows, CPU, memory, disks, graphic
 
 ### How do I keep logs of my chats?
 Logging is off until you turn it on. **Settings → Preferences → Logging**, tick **Enable logging of conversations to disk**; for one tab only, right-click it and choose **Log to Disk**. The first time, BChat asks once how long to keep logs. **Window → Logs...** opens your logs by network, channel and day, with a search. Logs go to `%APPDATA%\BChat\logs`.
+
+### How do I change which channels BChat joins when it connects?
+Type `/autojoin #chat` to add a channel to this network's join list (`/autojoin #chat key` for one with a key; in that channel's tab BChat remembers its key itself). `/autojoin -r #chat` takes it off, and `/autojoin` alone lists them. `/perform /mode MyNick +x` adds a command BChat sends after connecting, `/perform` lists them and `/perform -r 1` takes the first one off. Both change the same lists as **Edit...** in the Network List, so the network must be saved there.
+
+### Can I save a chat to a file?
+`/savebuf` saves the tab you're in to a text file in `Documents\BChat`, named after the network, channel and time. `/savebuf name.txt` picks the name. `/loadbuf name.txt` shows a text file in the tab; nothing is sent. For keeping every chat, see logs above.
+
+### How do I send a text file to a channel, line by line?
+`/play song.txt` sends it to the tab you're in, one line every 2 seconds (1 or 3 seconds with **Pace** set to Fast or Careful in **Settings → Preferences → Flood**), so you never flood the channel. `/play #chat song.txt 1500` sends it to #chat with 1.5 seconds between lines; BChat never goes faster than 2 lines a second. `/play -e song.txt` shows it only to you. `/play stop` stops. A file without a folder is looked for in `Documents\BChat`.
+
+### How do I look up someone's address?
+`/dns Wira` finds the address of someone in your channels (or asks the server), then looks it up. `/dns irc.example.org` or `/dns 1.2.3.4` work too. `/links` lists the servers of the network you're on, in the server tab.
+
+### Can I open a file, folder or link from BChat?
+`/run C:\Music` opens the folder, `/run notes.txt` the file (a file without a folder is looked for in `Documents\BChat`) and `/run https://bajubesi.org` the link, each with its normal Windows program. The first time a file is a program (`.exe`, `.bat`, and so on), BChat asks before starting it.
 
 ## Notifications and the tray
 
@@ -207,6 +227,9 @@ Yes: **Settings → Preferences → Alerts**, in the row **Show pop-up notificat
 ### Will cards pop up while I'm gaming?
 No. BChat stays quiet while Windows says you're busy: full-screen games, presentations, and Focus / Do Not Disturb. Messages still make the tray icon blink.
 
+### How do I make BChat quiet for a while?
+Right-click the tray icon and tick **Do not disturb**, or type `/donotdisturb on`. Until you turn it off again, BChat plays no sounds and shows no pop-up cards, and the taskbar button and tray icon don't flash. Messages still arrive and still colour their tabs. `/donotdisturb` alone says whether it's on.
+
 ### What if many messages arrive at once?
 BChat never floods your screen. Messages from the same person update one card, at most three cards show, and anything more becomes one summary card ("N more messages from M people").
 
@@ -214,7 +237,7 @@ BChat never floods your screen. Messages from the same person update one card, a
 **Settings → Preferences → General**, tick **Minimize button sends BChat to the tray** and/or **Close button sends BChat to the tray**. To really quit, right-click the tray icon → **Quit**, or use **BChat → Quit** (`Ctrl+Q`).
 
 ### What's in the tray icon's menu?
-Right-click the tray icon: **Show BChat**, then your open channels and private chats by network. Bold with a number means unread lines, **@** means someone said your nick. Click one to open BChat right there. Below them: **Away** (sets you away on every network; untick to come back), **Preferences...** and **Quit**. Hovering the tray icon shows how many lines are unread. To open BChat with a double-click instead of one click, or to hide the list, see **Settings → Preferences → Alerts → Tray icon**.
+Right-click the tray icon: **Show BChat**, then your open channels and private chats by network. Bold with a number means unread lines, **@** means someone said your nick. Click one to open BChat right there. Below them: **Away** (sets you away on every network; untick to come back), **Do not disturb**, **Preferences...** and **Quit**. Hovering the tray icon shows how many lines are unread. To open BChat with a double-click instead of one click, or to hide the list, see **Settings → Preferences → Alerts → Tray icon**.
 
 ### Can BChat start with Windows?
 Yes: **Settings → Preferences → General → Start with Windows**. Next to **When BChat starts**, choose **Minimized** or **In the tray** if you want it to start quietly: in the tray, BChat connects and stays out of sight until you click the tray icon.

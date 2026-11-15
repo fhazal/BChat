@@ -250,7 +250,7 @@ def _run(ui, s, b, rest) -> None:
     if "://" in what or what.lower().startswith("www."):
         ui.open_url(what if "://" in what else "https://" + what)
         return
-    path = Path(what).expanduser()
+    path = _file(what)                           # no folder given: Documents\BChat, like /play and /savebuf
     if not path.exists():
         _err(s, b, f"No such file or folder: {path}")
         return
@@ -468,7 +468,7 @@ def _cnick(ui, s, b, args) -> None:
         _info(s, b, f"{nick}: back to the normal colour.")
     elif word in people.COLOURS:
         people.set_rule(ui.cfg, nick, word, "")
-        _info(s, b, f"{nick} is {word} now (Window > Nick Colors has the list).")
+        _info(s, b, f"{nick} is {word} now (Settings > Advanced > Nick Colours has the list).")
     else:
         _err(s, b, f"No colour called {args[1]}. Colours: {', '.join(people.COLOURS)}")
         return
@@ -594,7 +594,7 @@ def run(ui, s: Session, b: Buffer, cmd: str, args: list[str], rest: str) -> None
         own = not s.net.use_global and bool(getattr(s.net, field_)) and _saved(ui, s)
         setattr(s.net if own else cfg, field_, value)
         ui.save_config()
-        where = f"for {s.net.name}" if own else "(Preferences > General)"
+        where = f"for {s.net.name}" if own else "(Network List > User Information)"
         if cmd == "mnick":
             _info(s, b, f"Saved nick {where}: {value}")
             if s.state == "connected" and lower(value) != lower(s.nick):
