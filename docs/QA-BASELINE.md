@@ -3,7 +3,41 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.6.4 release (15 Nov 2026)
+## Current baseline: 0.7.0 release (15 Nov 2026)
+
+Released as `v0.7.0` from commit `e9a35dc` (Everyday commands: 31 commands, Do not disturb, strip colours per
+tab). Numbers from QA run `20261115-221738` (`tools/qa.py all --perf-quick`) and the re-check of the rebuilt
+installer `20261115-223506`.
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.7.0` (`version_info` 0.7.0.0) |
+| Installer | `BChat-0.7.0-setup.exe`, 35,851,308 bytes |
+| Installer SHA-256 | `2cd6f53e9a24ec510233308b2cf8b5ad3b94816b89d478f6bf6ff6fd58e5637a` |
+| `BChat.exe` SHA-256 | `9b64b930c87f16d0512f10c6cba18af5da51dc8c9c534fee1178190de97d84bf` |
+| Packaged files | 209 |
+| VirusTotal installer | 1 / 71 (DeepInstinct). The first build of the same commit was 2 / 68 (Microsoft `Wacatac.B!ml` + DeepInstinct); rebuilt, same `BChat.exe` |
+| VirusTotal `BChat.exe` | 1 / 71 (APEX, as on every build) |
+
+### Performance (quick mode, full QA run)
+
+| Measure | 0.7.0 |
+| --- | --- |
+| Start to window | 0.52 s |
+| Idle working set | 105.6 MB |
+| Load 300 msg/s: CPU / worst UI stall | 48.5 % / 29 ms |
+| Burst of 5000 messages: time / worst UI stall | 3.1 s / 38 ms |
+| History 10k lines / all 15 tabs full | 151.6 / 261.5 MB |
+
+Against 0.6.4 the same day (TEST1, busy PC, two rounds): load CPU 51 / 58 % vs 59 / 71 %, burst and memory the same.
+
+### Test results
+
+pytest 663 (+13 `test_070`), protocol PASS, packaged 5/5 PASS in the full run, ui 673 controls no problems, perf PASS.
+Timing flakes seen in packaged checks today (each 19/19 or 59/59 when re-run alone): `frozen_check` status strip
+and `/server`, `frozen_extra` sent channel/private message (checked without waiting).
+
+## Previous baseline: 0.6.4 release (15 Nov 2026)
 
 Released as `v0.6.4` from commit `b957848`. Numbers from QA run `20261115-210636`
 (`tools/qa.py all --perf-quick`) and a same-day comparison with 0.6.3 on an idle PC
