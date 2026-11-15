@@ -191,8 +191,9 @@ out["IRCv3: message-tags requested"] = any(x.startswith("CAP REQ") and "message-
 plain.send("@time=2023-11-14T22:13:20.000Z :Belon!b@h PRIVMSG #skinhead :hello channel")
 plain.send(":Belon!b@h PRIVMSG Badaboom :hello you")
 out["probe reached the ready point"] = wait(lambda: flag.exists(), 60)
-out["sent channel message"] = any("PRIVMSG #skinhead :chan reply from bchat" in x for x in plain.received)
-out["sent private message"] = any("PRIVMSG Belon :private reply from bchat" in x for x in plain.received)
+# BChat's send queue paces lines (Flood > Pace), so they can arrive a little after the probe's ready point
+out["sent channel message"] = wait(lambda: any("PRIVMSG #skinhead :chan reply from bchat" in x for x in plain.received), 15)
+out["sent private message"] = wait(lambda: any("PRIVMSG Belon :private reply from bchat" in x for x in plain.received), 15)
 out["dlls_all_windows_open"] = modules(p.pid)
 time.sleep(5)
 out["ram_busy_MB"] = round(mem_cpu(p.pid)[0] / 1048576, 1)

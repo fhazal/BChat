@@ -96,12 +96,10 @@ try:
     results["strip green when connected"] = strip() == "#a6e3a1"
     print("strip:", strip())
     srv.send(":Fhazal!f@h MODE #skinhead +o Badaboom")
-    time.sleep(1.5)
-    results["strip blue when op"] = strip() == "#74c7ec"
+    results["strip blue when op"] = wait(lambda: strip() == "#74c7ec", 10)      # waits for the repaint, not a fixed time
     shot(h, W, H, "op.png")
     srv.send(":Fhazal!f@h MODE #skinhead -o Badaboom")
-    time.sleep(1.5)
-    results["strip back to green"] = strip() == "#a6e3a1"
+    results["strip back to green"] = wait(lambda: strip() == "#a6e3a1", 10)
     # green: maximise and back
     click(h, s(GREEN), s(14))
     results["green maximizes"] = wait(lambda: bool(u.IsZoomed(h)), 3)
@@ -146,6 +144,11 @@ try:
     shot(h, W, H, "before-typing.png")
     print("checkpoint before typing: QUIT at server =", any(x.startswith("QUIT") for x in srv.received), "| lines:", [x[:40] for x in srv.received[-3:]])
     VK = {"/": 0xBF, " ": 0x20, ".": 0xBE}
+    # empty the input box first: a stray key from the menu checks once left 'l' there and the line went out as chat
+    u.PostMessageW(h, 0x100, 0x23, 1); u.PostMessageW(h, 0x101, 0x23, 0xC0000001)          # End
+    for _ in range(60):
+        u.PostMessageW(h, 0x100, 0x08, 1); u.PostMessageW(h, 0x101, 0x08, 0xC0000001)      # Backspace
+    time.sleep(0.3)
     for ch in f"/server 127.0.0.1 {other.port}":
         vk = VK.get(ch) or ord(ch.upper())
         u.PostMessageW(h, 0x100, vk, 1); u.PostMessageW(h, 0x101, vk, 0xC0000001); time.sleep(0.02)
