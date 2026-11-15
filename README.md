@@ -33,11 +33,19 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 
 ---
 
-## 🆕 What's new in 0.6.2
+## 🆕 What's new in 0.6.3
+
+- ⚡ **Switching tabs is quick again**: every tab now has its own chat view, so clicking a channel or server no longer makes BChat lay the whole tab out again. With full tabs a switch takes about a quarter of the time it did,, and busy moments (a server restart, a flood of joins and quits) run more than twice as smoothly.
+- 🔌 **ZNC: a lost server shows**: when your bouncer loses the IRC server, your channels now show you as disconnected instead of still online (and still op). They fill in again when ZNC rejoins.
+- 🐞 **Better problem reports**: if BChat stops responding and you close it, the next start offers a report that says where it was stuck, instead of a "crashed" report with a harmless Windows message in it.
+
+<details><summary>0.6.2</summary>
 
 - ⚡ **Long sessions stay quick**: once a tab held its 5000 lines, every new line made BChat lay the whole tab out again, so busy tabs got slow and the window could stutter. Old lines now go in batches: each line is about six times quicker in a full tab.
 - 📍 **The marker line stays put**: in a full tab, the line that shows where you stopped reading slid further down with every new line. It now stays on its line, and if you scrolled up to read, the text no longer jumps.
 - 🧹 Problem reports stay readable even when someone on your networks has a nick like *line* or *Ctrl* (names are still hidden).
+
+</details>
 
 <details><summary>0.6.1</summary>
 
