@@ -52,9 +52,6 @@ EDITORS = {
                "Buttons at the top of a private tab.\n%s the other person's nick\n" + NICK_HELP),
     "ulbuttons": ("Userlist Buttons", "ul_buttons", ("Name", "Command"),
                   "Buttons under the user list.\n" + NICK_HELP),
-    "popup": ("Userlist Popup", "ul_popup", ("Name", "Command"),
-              "Extra items at the bottom of the nick right-click menu.\n" + NICK_HELP +
-              "\n\nName SEP makes a separator. Name SUB with the title as its command starts a submenu, ENDSUB ends it."),
     "slaps": ("Slaps", "slaps", ("Slap",),
               "Right-click a nick > Slap! sends one of these at random, as an action (/me) in the channel.\n"
               "$nick the person you slap\n%B bold, %U underline, %O reset\n%C colour: %C4 red, %C7 orange, %C8 yellow, "

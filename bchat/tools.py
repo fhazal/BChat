@@ -840,60 +840,6 @@ class DirectChatWindow(ToolWindow):
             t.abort()
 
 
-# --- Plugins and Scripts -----------------------------------------------------------------------
-
-class PluginsWindow(ToolWindow):
-    def __init__(self, win):
-        super().__init__("BChat: Plugins and Scripts", win, (640, 300))
-        self.view = QTreeWidget()
-        self.view.setHeaderLabels(["Name", "Version", "File", "Description"])
-        self.view.setRootIsDecorated(False)
-        self.view.setColumnWidth(0, 130)
-        self.view.setColumnWidth(1, 60)
-        self.view.setColumnWidth(2, 150)
-        self.body.addWidget(self.view, 1)
-        hint = QLabel(f"Python scripts in {win.plugins.folder} load at start. They run with your full access, so only use ones you trust.")
-        hint.setTextFormat(Qt.TextFormat.PlainText)
-        hint.setWordWrap(True)
-        self.body.addWidget(hint)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        self.load_btn = button("Load...", self.do_load)
-        self.unload_btn = button("Unload", self.do_unload)
-        self.reload_btn = button("Reload", self.do_reload)
-        for w in (self.load_btn, self.unload_btn, self.reload_btn):
-            row.addWidget(w)
-        self.body.addLayout(row)
-        self.fill()
-
-    def fill(self) -> None:
-        self.view.clear()
-        for p in self.win.plugins.plugins:
-            it = QTreeWidgetItem([p.name, p.version, p.path.name, p.description])
-            it.setData(0, Qt.ItemDataRole.UserRole, p)
-            self.view.addTopLevelItem(it)
-
-    def _current(self):
-        it = self.view.currentItem()
-        return it.data(0, Qt.ItemDataRole.UserRole) if it else None
-
-    def do_load(self) -> None:
-        self.win.load_plugin_dialog()
-        self.fill()
-
-    def do_unload(self) -> None:
-        p = self._current()
-        if p is not None:
-            self.win.plugins.unload(p)
-            self.fill()
-
-    def do_reload(self) -> None:
-        p = self._current()
-        if p is not None:
-            self.win.plugins.reload(p)
-            self.fill()
-
-
 # --- Help ----------------------------------------------------------------------------------
 
 class HelpWindow(ToolWindow):

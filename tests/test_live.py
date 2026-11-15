@@ -2674,8 +2674,9 @@ def test_plugins_xchat_api_window_and_errors(live, tmp_path, monkeypatch):
     path.write_text(PLUGIN)
     type_cmd(win, f"/load {path}")
     assert any("tester 1.2 loaded" in l.text for l in b.lines)
-    w = win.open_tool("plugins")
-    assert w.view.topLevelItem(0).text(0) == "tester" and w.view.topLevelItem(0).text(3) == "A test script"
+    w = win.open_tool("plugins")          # 0.8.0: the Scripts window
+    it = w.item_for(path)
+    assert it is not None and it.checkState() == Qt.CheckState.Checked and "A test script" in it.toolTip()
     type_cmd(win, "/testcmd one two")
     assert any(l.text == "cmd one | one two | data" for l in b.lines)
     # a plain command still works, and server hooks see lines
@@ -2692,18 +2693,20 @@ def test_plugins_xchat_api_window_and_errors(live, tmp_path, monkeypatch):
     assert any(l.text.startswith("Badaboom #skinhead SkinIRC ") for l in b.lines)
     # an error in a script reports and doesn't take anything down
     type_cmd(win, "/boom")
-    assert any("kaboom" in l.text for l in b.lines)
+    sb = s.server_buffer                   # 0.8.0: script errors go to the server tab, once, with the line
+    assert any("kaboom" in l.text and "tester.py, line 21" in l.text for l in sb.lines)
+    type_cmd(win, "/boom")
+    assert sum("kaboom" in l.text for l in sb.lines) == 1
     # a broken script doesn't either
     bad = tmp_path / "bad.py"; bad.write_text("this is not python !!")
     assert win.plugins.load(str(bad)) is None
     assert any("Couldn't load bad.py" in l.text for l in b.lines)
-    # reload, unload by button
+    # reload by Save, unload by unticking
     w.fill()
-    w.view.setCurrentItem(w.view.topLevelItem(0))
-    QTest.mouseClick(w.reload_btn, Qt.MouseButton.LeftButton)
+    assert w.select(path)
+    QTest.mouseClick(w.save_btn, Qt.MouseButton.LeftButton)
     assert any("bye from tester" in l.text for l in b.lines) and len(win.plugins.plugins) == 1
-    w.view.setCurrentItem(w.view.topLevelItem(0))
-    QTest.mouseClick(w.unload_btn, Qt.MouseButton.LeftButton)
+    w.item_for(path).setCheckState(Qt.CheckState.Unchecked)
     assert not win.plugins.plugins
     srv.send(":Belon!b@h PRIVMSG #skinhead :eatme after unload")
     assert wait(app, lambda: any("eatme after unload" in l.text for l in b.lines))

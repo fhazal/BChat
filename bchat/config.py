@@ -318,6 +318,7 @@ class Config:
     send_typing: bool = False      # 0.3.0: let others see when I'm typing (+typing); off until the user turns it on
     strip_colors: bool = False     # drop mIRC colours from what people say
     do_not_disturb: bool = False   # 0.7.0 /donotdisturb + tray menu: no sounds, flashes or pop-up cards
+    scripts_off: list = field(default_factory=list)    # 0.8.0 Scripts window: addons files the user unticked (not started)
     run_allowed: list = field(default_factory=list)    # 0.7.0 /run: programs the user said yes to once
     colors_exact: bool = False     # fixed (16-98) and hex text colours exactly as sent, even when hard to read
     chat_bg_image: str = ""        # Text box: background image
@@ -452,6 +453,7 @@ class Config:
     dlg_buttons: list | None = None
     ul_buttons: list | None = None
     ul_popup: list | None = None
+    popups: dict = field(default_factory=dict)     # 0.8.0 Popups: channel / query / server / menubar -> rows (Nick list = ul_popup)
     slaps: list | None = None       # Slap! lines ([text] rows); None = the built-in list
     report_offer: bool = True       # offer a problem report after a crash, an error or a freeze
     my_reports: list = field(default_factory=list)   # reports this PC sent: {id, sig, kind, date}

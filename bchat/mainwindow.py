@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QBoxLayout, QProgressBar, QTabBar, QToolButton, Q
                                QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QSystemTrayIcon, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction)
 
-from . import __version__, commands, config
+from . import __version__, commands, config, popups
 from .chatview import ChatPane
 from .config import Config, NetworkConfig, Server
 from .protocol import URL_RE, lower, strip_format
@@ -775,8 +775,8 @@ class MainWindow(FramelessWindow):
         self._act(st, "&Preferences", self.open_preferences, "", "preferences")
         adv = st.addMenu(icon("justify"), "Advanced")
         for name, key in (("Auto Replace...", "replace"), ("CTCP Replies...", "ctcp"), ("Dialog Buttons...", "dialog"),
-                          ("Keyboard Shortcuts...", "keys"), ("Slaps...", "slaps"), ("Text Events...", "events"), ("URL Handlers...", "url"),
-                          ("User Commands...", "commands"), ("Userlist Buttons...", "ulbuttons"), ("Userlist Popup...", "popup")):
+                          ("Keyboard Shortcuts...", "keys"), ("Popups...", "popups"), ("Slaps...", "slaps"), ("Text Events...", "events"),
+                          ("URL Handlers...", "url"), ("User Commands...", "commands"), ("Userlist Buttons...", "ulbuttons")):
             self._act(adv, name, lambda _=False, k=key: self.open_editor(k))
         self._act(adv, "Nick Colours...", self.open_nick_colours)
 
@@ -790,7 +790,7 @@ class MainWindow(FramelessWindow):
         self._act(w, "Friends List...", lambda: self.open_tool("friends"))
         self._act(w, "Ignore List...", lambda: self.open_tool("ignore"))
         self._act(w, "Logs...", lambda: self.open_logs(), "", "find")
-        self._act(w, "Plugins and Scripts...", lambda: self.open_tool("plugins"))
+        self._act(w, "Scripts...", lambda: self.open_tool("scripts"))
         self._act(w, "Raw Log...", self._open_raw_log)
         self._act(w, "URL Grabber...", lambda: self.open_tool("urls"))
         w.addSeparator()
@@ -851,6 +851,7 @@ class MainWindow(FramelessWindow):
             s.on_dcc = self.dcc.incoming
             s.dcc_say = self.dcc.say
             s.server_hook = self.plugins.on_server
+            s.state_changed.connect(lambda s=s: self.plugins.on_state(s))
             s.print_hook = self.plugins.on_print
             s.state_changed.connect(self._state_changed)
             s.raw_line.connect(self._raw)
@@ -1578,7 +1579,7 @@ class MainWindow(FramelessWindow):
         if len(users) == 1 and b.kind == CHANNEL:      # one nick only: never ten slaps at once
             menu.addSeparator()
             menu.addAction("Slap!", lambda: self.slap(b, one.nick))
-        self._add_popup_items(menu, nicks)
+        popups.add_items(self, menu, "nicklist", b, nicks=nicks, line=False)
         return menu
 
     def open_chanserv_access(self, b: Buffer, u: User) -> None:
@@ -1948,20 +1949,6 @@ class MainWindow(FramelessWindow):
         else:
             self._run_with(cmd)
 
-    def _add_popup_items(self, menu: QMenu, nicks: list[str]) -> None:
-        stack = [menu]
-        for name, cmd in rows_for(self.cfg, "ul_popup"):
-            word = name.upper()
-            if word == "SEP":
-                stack[-1].addSeparator()
-            elif word == "SUB":
-                stack.append(stack[-1].addMenu(cmd))
-            elif word == "ENDSUB":
-                if len(stack) > 1:
-                    stack.pop()
-            else:
-                stack[-1].addAction(name, lambda c=cmd: self.nick_command(c, nicks))
-
     # --- buttons under the list, on the topic row -------------------------------------
 
     def _toggle_ul_buttons(self, on: bool) -> None:
@@ -2032,12 +2019,17 @@ class MainWindow(FramelessWindow):
 
     def open_editor(self, key: str):
         from .editors import EditListDialog, KeysDialog, TextEventsDialog
-        d = KeysDialog(self) if key == "keys" else TextEventsDialog(self) if key == "events" else EditListDialog(self, key)
+        from .popups import PopupsDialog
+        if key in ("popup", "popups"):      # "popup" = the old Userlist Popup: the Nick list page of Popups
+            d = PopupsDialog(self, "nicklist" if key == "popup" else "channel")
+        else:
+            d = KeysDialog(self) if key == "keys" else TextEventsDialog(self) if key == "events" else EditListDialog(self, key)
         d.show()
         return d
 
     def lists_changed(self, save: bool = True) -> None:
         """After any editor's Save, and at start."""
+        popups.sync_menubar(self)
         self._rebuild_buttons()
         self._sync_button_bars()
         for name, act in self.named_actions().items():
@@ -2092,6 +2084,10 @@ class MainWindow(FramelessWindow):
         menu.addSeparator()
         menu.addAction(icon("clear"), "Clear Text", self._clear_current)
         menu.addAction(icon("find"), "Search Text...", self._search)
+        if b is not None and s is not None and not href:
+            key = {CHANNEL: "channel", QUERY: "query", SERVER: "server"}.get(b.kind)
+            if key:
+                popups.add_items(self, menu, key, b, word=word or "")
         return menu
 
     def _share_menu(self, menu: QMenu, s, b) -> QMenu:
@@ -3102,14 +3098,23 @@ class MainWindow(FramelessWindow):
 
     def open_tool(self, name: str):
         from . import tools
+        name = "scripts" if name == "plugins" else name
         w = self.tools.get(name)
         if w is None:
-            make = {"plugins": tools.PluginsWindow, "chart": tools.CharChartWindow, "friends": tools.FriendsWindow, "ignore": tools.IgnoreWindow, "urls": tools.UrlGrabberWindow}[name]
+            from .scripts import ScriptsWindow
+            make = {"plugins": ScriptsWindow, "scripts": ScriptsWindow, "chart": tools.CharChartWindow, "friends": tools.FriendsWindow, "ignore": tools.IgnoreWindow, "urls": tools.UrlGrabberWindow}[name]
             w = self.tools[name] = make(self)
         elif hasattr(w, "fill"):
             w.fill()
         w.show()
         w.raise_()
+        return w
+
+    def open_scripts(self, name: str = "", line: int = 0):
+        """Window > Scripts, or a script error's 'Open in Scripts' link: that script, its line lit."""
+        w = self.open_tool("scripts")
+        if name:
+            w.open_at(name, line)
         return w
 
     def open_channel_list(self, s: Session, download: bool | None = None):

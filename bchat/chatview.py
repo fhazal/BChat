@@ -21,6 +21,20 @@ from . import tabopts
 from .widgets import ASSETS
 
 
+
+_SCRIPT_LINK = re.compile(r"bchat-script://[\w.-]+\.py/\d+")
+
+
+def _script_links(text: str) -> list[tuple[str, bool]]:
+    """split_urls, plus the Open in Scripts link BChat puts on a script error line."""
+    out: list[tuple[str, bool]] = []
+    at = 0
+    for m in _SCRIPT_LINK.finditer(text):
+        out += split_urls(text[at:m.start()])
+        out.append((m.group(0), True))
+        at = m.end()
+    return out + split_urls(text[at:])
+
 class ChatView(QTextBrowser):
     channel_double_clicked = Signal(str)
     central_requested = Signal(object)    # mIRC: double-click in a channel's text opens Channel Central (the buffer)
@@ -387,8 +401,14 @@ class ChatView(QTextBrowser):
                 cf.setFontStrikeOut(True)
             if sp.mono:
                 cf.setFontFamilies(["Consolas", "Courier New", "monospace"])
-            for piece, is_url in split_urls(sp.text):
-                if is_url:
+            for piece, is_url in _script_links(sp.text):
+                if is_url and piece.startswith("bchat-script://"):
+                    link = QTextCharFormat(cf)
+                    link.setAnchor(True)
+                    link.setAnchorHref(piece)
+                    link.setFontUnderline(True)
+                    cur.insertText("Open in Scripts", link)
+                elif is_url:
                     link = QTextCharFormat(cf)
                     link.setAnchor(True)
                     link.setAnchorHref(piece if "://" in piece else "http://" + piece)
@@ -399,6 +419,12 @@ class ChatView(QTextBrowser):
 
     def _open_url(self, url: QUrl) -> None:
         """A click on a link: the window checks it first (safety.link_risk) and says who posted it."""
+        if url.scheme().lower() == "bchat-script":
+            opener = getattr(self.window(), "open_scripts", None)
+            parts = url.toString()[len("bchat-script://"):].split("/")
+            if opener is not None and parts and parts[0]:
+                opener(parts[0], int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0)
+            return
         if url.scheme().lower() in ("irc", "ircs"):
             opener = getattr(self.window(), "open_irc_link", None)
             if opener is not None:
