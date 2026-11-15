@@ -154,3 +154,20 @@ def test_a_tab_in_its_own_window_lets_go_of_its_view(app):
     p.doc_for(a)
     p.show_buffer(a)
     assert "while away 1" in p.toPlainText() and "x 2" in p.toPlainText()
+
+
+def test_a_hidden_tab_skips_scrolling_and_shows_its_end(app):
+    from bchat.session import Buffer
+    p = pane(app)
+    a, b = Buffer(None, "#a", "channel"), Buffer(None, "#b", "channel")
+    p.doc_for(a), p.doc_for(b)
+    p.show_buffer(b)
+    p.show_buffer(a)
+    assert p.view_of(b).hidden_tab and not p.view_of(a).hidden_tab
+    lines(p, b, 900, "hidden")                                 # over Scrollback (500): trimmed while hidden too
+    assert p.view_of(b).document().blockCount() <= 500 + 50
+    p.show_buffer(b)
+    app.processEvents()
+    sb = p.view().verticalScrollBar()
+    assert not p.view_of(b).hidden_tab and p.view_of(a).hidden_tab
+    assert sb.value() == sb.maximum() and "hidden 899" in p.toPlainText()

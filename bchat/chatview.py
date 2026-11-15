@@ -26,6 +26,7 @@ class ChatView(QTextBrowser):
     menu_provider = None  # set by the main window; builds the right-click menu
     colour_rule = None    # set by the main window: (buffer, nick) -> colour from Nick Colours / Address Book, or None
     reply_jump = None     # set by the main window: a click on a reply's quote line (buffer, msgid)
+    hidden_tab = False    # ChatPane sets it while this tab's view is not on show
 
     PICTURES = {WHOIS: "info", JOIN: "te-join", NOW_TALKING: "te-join", PART: "te-part", ACTION: "te-action"}
     MAX_BLOCKS = 5000
@@ -129,6 +130,12 @@ class ChatView(QTextBrowser):
     def add_line(self, b: Buffer, ln: Line) -> None:
         d = self.docs.get(id(b))
         if d is None:
+            return
+        if self.hidden_tab:        # ChatPane: a view not on show skips the scroll work, it goes to the end on show
+            self._render(d, b, ln)
+            cap = max(100, self.cfg.max_lines or self.MAX_BLOCKS)
+            if d.blockCount() > cap + max(50, cap // 10):
+                self._trim(d, b, d.blockCount() - cap)
             return
         sb = self.verticalScrollBar()
         at_end = b is not self.current or sb.value() >= sb.maximum() - 4
@@ -501,6 +508,7 @@ class ChatPane(QWidget):
         v.reply_jump = lambda b, msgid: self.reply_jump(b, msgid) if self.reply_jump else None
         v.channel_double_clicked.connect(self.channel_double_clicked)
         v.central_requested.connect(self.central_requested)
+        v.hidden_tab = True
         v.hide()
         return v
 
@@ -514,8 +522,10 @@ class ChatPane(QWidget):
         if not v.property("sized"):            # never shown: give it a size now
             v.setProperty("sized", True)
             v.setGeometry(self.rect())
+        v.hidden_tab = False
         v.show()
         if old is not None:
+            old.hidden_tab = True
             old.hide()
         # A size change comes after the switch (the nick list shows or hides). Fit once, after that, not twice.
         QTimer.singleShot(0, self._fit)
