@@ -3,7 +3,41 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.6.2 release (14 Nov 2026)
+## Current baseline: 0.6.3 release (15 Nov 2026)
+
+Released as `v0.6.3` from commit `7b0ac79`. Numbers from QA run `20261115-150057`
+(`tools/qa.py all`), the installer re-check `20261115-152449` and a same-day perf comparison
+(`perf_bench.py --quick`, 0.6.2 built from its tag on the same PC, one run each).
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.6.3` (`version_info` 0.6.3.0) |
+| Installer | `BChat-0.6.3-setup.exe`, 35,822,826 bytes |
+| Installer SHA-256 | `ee824df86a69be162821b022738de980fee4972bb2cb4c79a47916bd7a2fa063` |
+| `BChat.exe` SHA-256 | `718d1d61b6d65072842f5142e10837869685536311577a4b1a32555ecd8658b4` |
+| VirusTotal installer | 0 / 70 (the first build of the same commit: 2 / 70, Microsoft `Wacatac.C!ml` + DeepInstinct; rebuilt, same `BChat.exe`) |
+| VirusTotal `BChat.exe` | 1 / 71 (APEX, as on every build) |
+
+### Performance (quick mode, same PC, same day)
+
+| Measure | 0.6.3 | 0.6.2 |
+| --- | --- | --- |
+| Idle working set | 108.0 MB | 105.9 MB |
+| Load 300 msg/s: CPU / worst UI stall | 60 % / 43 ms | 50 % / 46 ms |
+| Burst of 5000 messages: time / worst UI stall | 4.0 s / 60 ms | 3.9 s / 50 ms |
+| History 10k lines / all 15 tabs full | 153.9 / 267.3 MB | 151.4 / 263.6 MB |
+| Tab switch, 5000-line tabs (real screen) | 27 ms avg | 110 ms avg |
+
+The full QA run's own perf numbers (filled 300.8 MB, burst 4.4 s) were higher than the 0.6.2 baseline
+for both versions that day: the same-day comparison above is the fair one. One chat view per tab costs
+CPU when many hidden tabs are busy (load 50 -> 60 %); fixed after the release (hidden views skip the
+scroll work), not in 0.6.3.
+
+### Test results
+
+pytest 649 (1 known flaky: `test_040` skip_motd), protocol PASS, packaged 5/5 PASS, ui PASS, perf 13/13.
+
+## Previous baseline: 0.6.2 release (14 Nov 2026)
 
 Released as `v0.6.2` from commit `ab80c2d`. Numbers from QA run `20261114-065639`
 (`tools/qa.py all --perf-quick`, one run) and the release checks.
