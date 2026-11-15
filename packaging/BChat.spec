@@ -38,6 +38,10 @@ def _keep(entry):
     dest = entry[0].replace("\\", "/").lower()
     if os.path.basename(dest) in _DROP_FILES:
         return False
+    # Windows' own C runtime (built into Windows 10 and 11). PyInstaller copies it in when another program on
+    # PATH carries its own copy (a JDK did, 15 Nov 2026: +44 files); BChat always uses the one in Windows.
+    if os.path.basename(dest).startswith("api-ms-win-") or os.path.basename(dest) == "ucrtbase.dll":
+        return False
     if dest.startswith("pyside6/translations/") and dest.endswith(".qm"):
         return False
     return True
