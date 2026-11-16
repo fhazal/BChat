@@ -3,7 +3,39 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.8.0 release (16 Nov 2026)
+## Current baseline: 0.8.1 release (17 Nov 2026)
+
+Released as `v0.8.1` from commit `3607ca7` (bug fix: ZNC ghost channel after a server restart, `3d1bf3a`).
+Numbers from QA run `20261117-070952` (`tools/qa.py all`, full perf mode, not quick: perf times are not
+directly comparable with 0.8.0's quick-mode numbers).
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.8.1` (`version_info` 0.8.1.0) |
+| Installer | `BChat-0.8.1-setup.exe`, 35,897,244 bytes |
+| Installer SHA-256 | `19af4b37e03cef9b301bfaec7143b0369715776982bd8e0c4508043b13785720` |
+| `BChat.exe` SHA-256 | `2dcea3c9d518dc39e7dd19934c815a89288c63e274c0e2c984243bdb40cce53c` |
+| Packaged files | 209 |
+| VirusTotal installer | 1 / 68 (DeepInstinct) |
+| VirusTotal `BChat.exe` | 1 / 71 (APEX, as on every build) |
+
+### Performance (full mode, full QA run)
+
+| Measure | 0.8.1 |
+| --- | --- |
+| Start to window | 0.54 s |
+| Idle working set | 106.2 MB |
+| Load 300 msg/s: CPU / worst UI stall | 60.3 % / 54 ms |
+| Burst of 5000 messages: time / worst UI stall | 5.4 s / 47 ms |
+| History 10k lines / all 15 tabs full | 173.3 / 296.3 MB |
+
+### Test results
+
+pytest 682 (+7 `test_081`), 681 passed + 1 known flaky (`test_040::test_skip_motd_and_motd_command`, listed in
+`known-flaky.json`; passed alone 3/3), protocol PASS, packaged 5/5 PASS, ui 728 controls no problems, perf PASS.
+The user confirmed the fix on 0.8.1-TEST1 (ghost channel gone).
+
+## Previous baseline: 0.8.0 release (16 Nov 2026)
 
 Released as `v0.8.0` from commit `84dcbba` (Popups for five menus + Paste mIRC popups, Scripts window, mIRC events,
 add_menu_item and pluginprefs for scripts). Numbers from QA run `20261116-003730` (`tools/qa.py all --perf-quick`).
