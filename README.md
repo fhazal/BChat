@@ -33,13 +33,19 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 
 ---
 
-## 🆕 What's new in 0.8.0
+## 🆕 What's new in 0.8.1
+
+- 🔌 **ZNC: no more ghost channels**: after the IRC server restarted, a channel your bouncer couldn't get back into (an opers-only one, say) kept its old list and showed you inside, as op. BChat now hears every way ZNC says it lost the server, and when the server refuses a join, that tab empties and says so.
+
+<details><summary>0.8.0</summary>
 
 - 🖱️ **Your own right-click menus**: *Settings → Advanced → Popups...* has a list for the Channel, Private chat, Server tab and Nick list menus, plus a **Commands** menu in the menu bar. Your items go under BChat's own, after a line, and can use `$nick`, `$chan`, `$me`, `$1` and `|` for more than one command. Submenus and lines too.
 - 📋 **Paste mIRC popups**: paste your mIRC popup text and BChat adds every line it can run. Lines it can't run are listed with the reason, never added broken.
 - 🧩 **Scripts window**: *Window → Scripts...* lists your Python scripts with an on/off tick and opens them in an editor with colours, line numbers and Find. **Ctrl+S** saves and reloads; a mistake lights its line and the version that was running keeps running. **New** starts from a short example.
 - 🔔 **More for scripts**: mIRC's events (`bchat.on_text`, `on_join`, `on_kick`, `on_connect` and more), menu items in any of the popups, and settings a script keeps between starts. XChat scripts still work as before.
 - 🐞 **Script errors show once**, in the server tab, with an **Open in Scripts** link to the line.
+
+</details>
 
 <details><summary>0.7.0</summary>
 
