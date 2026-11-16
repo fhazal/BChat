@@ -151,6 +151,8 @@ class Session(QObject):
                        ("Server time on lines", ("server-time", "znc.in/server-time-iso")),
                        ("Friends' away status", ("extended-monitor",)))
     PACE = {"careful": 1.5, "normal": 1.0, "fast": 0.5}   # Preferences > Network > Flood: how quickly lines go out
+    ZNC_LOST = ("disconnected from irc", "irc connection timed out", "connection refused", "cannot connect to irc")
+    JOIN_REFUSED = {405, 471, 473, 474, 475, 477, 489, 520}   # 477 registered only, 489 TLS only, 520 opers only (+O)
     HISTORY_LINES = 50     # asked for on join when the server keeps channel history (IRCv3 chathistory)
 
     def __init__(self, net: NetworkConfig, cfg: Config, parent=None):
@@ -1166,8 +1168,9 @@ class Session(QObject):
                 self._playback[bid][1].append(m)     # ZNC playback: shown under one header when the batch ends
             return
         if self._znc_collect is not None and m.command in ("PRIVMSG", "NOTICE") and m.nick != "***":
-            self._znc_collect[1].append(m)
-            return
+            if not self._znc_lost_irc(m):        # ZNC losing the server mid-playback is news: it goes through live
+                self._znc_collect[1].append(m)
+                return
         handler = getattr(self, "_irc_" + m.command.lower(), None) if m.command.isalpha() else None
         if handler:
             handler(m)
@@ -1436,17 +1439,18 @@ class Session(QObject):
             return
         self.add(self.server_buffer, ERROR, "*", m.param(-1))
 
-    def _znc_lost_irc(self, m: Message) -> None:
+    def _znc_lost_irc(self, m: Message) -> bool:
         """ZNC lost the IRC server but stays connected to us: no 'Disconnected' ever reaches BChat, so the
         channels would still show everyone online, ourselves as op. Leave them the way a real disconnect does;
         ZNC's own JOIN on its way back fills them again."""
         user, _, host = m.prefix.partition("!")[2].partition("@")
         if not (user == "znc" and host == "znc.in" and m.nick.lower().endswith("status")):
-            return
-        if not strip_format(m.param(-1)).strip().startswith("Disconnected from IRC"):
-            return
-        if self._znc_collect is not None or time.time() - self._ts(m) > 60:
-            return                                  # an old line played back, not news
+            return False
+        # every way ZNC words it (IRCSock.cpp): plain disconnect, with the server's reason, timeout, refused
+        if not strip_format(m.param(-1)).strip().lower().startswith(self.ZNC_LOST):
+            return False
+        if time.time() - self._ts(m) > 60 or (self._znc_collect is not None and "time" not in m.tags):
+            return False                            # an old line played back, not news; mid-playback only a dated line counts
         for b in self.all_buffers():
             if b.kind == CHANNEL and b.joined:
                 b.joined = False
@@ -1454,6 +1458,20 @@ class Session(QObject):
                 self.add(b, INFO, "*", "Disconnected: the bouncer lost the IRC server. It rejoins when the server is back.")
                 self.users_changed.emit(b)
                 self.buffer_changed.emit(b)
+        return True
+
+    def _join_refused(self, n: int, m: Message) -> bool:
+        """The server says no to a channel whose tab still shows us inside: that list is old (a bouncer's memory
+        from before the server restarted, say). Empty it so no one shows as there, ourselves included.
+        Returns False so the usual 'Cannot join' line still follows."""
+        b = self.buffers.get(self.fold(m.param(1)))
+        if b is not None and b.kind == CHANNEL and (b.joined or b.users):
+            b.joined = False
+            b.users.clear()
+            self.add(b, INFO, "*", f"You are not in {b.name}: the server refused the join.")
+            self.users_changed.emit(b)
+            self.buffer_changed.emit(b)
+        return False
 
     def _irc_privmsg(self, m: Message) -> None:
         target, text = m.param(0), m.param(-1)
@@ -1706,6 +1724,7 @@ class Session(QObject):
 
     def _irc_notice(self, m: Message) -> None:
         target, text = m.param(0), m.param(-1)
+        self._znc_lost_irc(m)
         if self.fold(m.nick) == "operserv" and "session limit" in text.lower():
             # services count kills, then auto-ban the whole IP (Anope maxsessionkill), so retrying can lock out every client on it
             self.want_connected = False
@@ -2148,6 +2167,8 @@ class Session(QObject):
                 self._sasl_done(False, f"SASL login failed: {m.param(-1)}")
         elif n in (464, 465):
             self._login_refused(m.param(-1))
+        elif n in self.JOIN_REFUSED and self._join_refused(n, m):
+            pass
         elif n == 471:
             self.add(self._front(), ERROR, "*", f"Cannot join {m.param(1)} (User limit reached).")
         elif n == 473:
