@@ -3,7 +3,42 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.8.1 release (17 Nov 2026)
+## Current baseline: 0.8.2 release (18 Nov 2026)
+
+Released as `v0.8.2` from commit `85418c3` (connect and disconnect fixes `ba3d5b8`: joins wait 1 s after the
+welcome text and optionally for the NickServ login, 5 s reconnects with numbered tries, no reconnect after a KILL,
+ban retries every 60 s, server time-out setting). Numbers from QA run `20261118-044537` on the release build
+(`build-check audit packaged ui perf`, full perf mode); the source stages ran on the same code for 0.8.2-TEST1
+(runs `20261118-041745`, `20261118-043544`).
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.8.2` (`version_info` 0.8.2.0) |
+| Installer | `BChat-0.8.2-setup.exe`, 35,900,121 bytes |
+| Installer SHA-256 | `42e87abab6d1b4c8c329a3cede187558660dea7b09bf6cb0730f5ff72a225c1e` |
+| `BChat.exe` SHA-256 | `ec941ce3e9b92ff066920cb84e1c86219542a688ca3f28badfd3a4971b0466e4` |
+| Packaged files | 209 |
+| VirusTotal installer | 0 / 69 |
+| VirusTotal `BChat.exe` | 1 / 71 (APEX, as on every build) |
+
+### Performance (full mode)
+
+| Measure | 0.8.2 |
+| --- | --- |
+| Start to window | 0.52 s |
+| Start to joined (15 channels) | 1.6 s (by design: joins wait 1 s after the welcome text; 0.7 s before) |
+| Idle working set | 105.9 MB |
+| Load 300 msg/s: CPU / worst UI stall | 54.4 % / 46 ms |
+| Burst of 5000 messages: time / worst UI stall | 5.2 s / 49 ms |
+| History 10k lines / all 15 tabs full | 173.2 / 296.3 MB |
+
+### Test results
+
+pytest 703 (+21 `test_082`) all passed, protocol PASS (TEST1 runs); release build: build-check, secret scan,
+packaged 5/5, ui 731 controls no problems, perf 13/13 PASS. Live run against a local server through a fault
+proxy (drop, silence, K-line, KILL, `-s`) behaved as designed. The user confirmed 0.8.2-TEST1 works.
+
+## Previous baseline: 0.8.1 release (17 Nov 2026)
 
 Released as `v0.8.1` from commit `3607ca7` (bug fix: ZNC ghost channel after a server restart, `3d1bf3a`).
 Numbers from QA run `20261117-070952` (`tools/qa.py all`, full perf mode, not quick: perf times are not
