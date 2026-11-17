@@ -2221,7 +2221,7 @@ class MainWindow(FramelessWindow):
         elif kind == "disconnect":
             if not s.want_connected:
                 return                                     # you quit or disconnected yourself
-            title, where, text = "Disconnected", net, f"BChat will reconnect in {self.cfg.reconnect_delay} s."
+            title, where, text = "Disconnected", net, f"BChat will reconnect in {s.reconnect_wait(s._tries + 1)[0]} s."
         elif kind == "friend":
             name = getattr(s, "last_friend", "")
             opts = self.cfg.friend_opts.get(name.lower(), {})

@@ -185,24 +185,24 @@ def main(argv: list[str] | None = None) -> int:
         win.show()
 
     def start():
-        if getattr(cfg, "vault_missing", False):
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(win, "BChat: saved passwords", "BChat couldn't read your saved network passwords from "
-                                "Windows Credential Manager. Please enter them again in the Network List.")
         win.updater.start()
         win.check_autostart()
         if not args.no_autoconnect:
             win.autoconnect()
+        if args.server:                # 0.8.2: -s connects now, not after the Network List is closed
+            start_network(win, args.server, args.join, args.nick)
+        if getattr(cfg, "vault_missing", False):     # 0.8.2: after the connects, so a hidden box can't hold them up
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(win, "BChat: saved passwords", "BChat couldn't read your saved network passwords from "
+                                "Windows Credential Manager. Please enter them again in the Network List.")
         from .welcome import first_start_action, run_welcome
         action = first_start_action(cfg, bool(win.sessions))
-        if action == "welcome":
+        if action == "welcome" and not args.server:
             run_welcome(win)
-        elif action == "netlist" and not link:
+        elif action == "netlist" and not link and not args.server:
             win.open_network_list()
         if link:
             win.open_irc_link(link)
-        if args.server:
-            start_network(win, args.server, args.join, args.nick)
         last = reports.last_run_problem(crash, report_dir)
         if last:
             win.offer_report(*last)

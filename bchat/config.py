@@ -202,6 +202,7 @@ class NetworkConfig:
     login: str = ""          # 0.4.0 "Log in with": "" = SASL password when an account is set (as before), "none", "cert"
     cert_file: str = ""      # the certificate (+ key) shown to the server when login is "cert"
     caps_off: list = field(default_factory=list)   # 0.6.0 Server Features: IRCv3 capabilities never asked for here
+    join_after_login: bool = True   # 0.8.2: joins wait for NickServ (up to 10 s) after IDENTIFY
 
 
 @dataclass
@@ -483,7 +484,9 @@ class Config:
     url_keep: bool = False         # 0.6.0: the URL Grabber list survives a restart (urls.json, links only)
     url_emails: bool = False       # 0.6.0: catch email addresses too
     # Advanced
-    reconnect_delay: int = 10
+    reconnect_delay: int = 5
+    reconnect_fast: bool = True    # 0.8.2: the one-time 10 -> 5 s switch below has been done
+    server_timeout: int = 180      # 0.8.2: seconds without a word from the server before BChat drops the link
     raw_modes: bool = False
     hide_joinpart: bool = False
     nick_width: int = 0  # unused since 0.1.0-TEST9 (no nick column); kept so older settings load
@@ -565,6 +568,11 @@ def load(directory: Path) -> Config:
                 if cfg.ul_double.strip().upper() == "QUOTE WHOIS %S %S":
                     cfg.ul_double = "QUERY %s"
                 cfg.ul_double_mirc = True
+            if not d.get("reconnect_fast"):
+                # 0.8.2: still on the old 10 s default -> 5 s. A delay the user picked stays.
+                if cfg.reconnect_delay == 10:
+                    cfg.reconnect_delay = 5
+                cfg.reconnect_fast = True
         except (ValueError, TypeError) as e:
             # keep the broken file for inspection rather than overwriting it on next save
             path.replace(path.with_suffix(".broken.json"))

@@ -829,6 +829,7 @@ class PreferencesDialog(FramedDialog):
         lay.addWidget(_heading("Advanced Settings"))
         g = QGridLayout()
         self.reconnect = self._number(g, 0, "Auto reconnect delay:", c.reconnect_delay, 1, 9999, " seconds")
+        self.server_timeout = self._number(g, 1, "Server time-out:", c.server_timeout, 60, 600, " seconds")
         g.setColumnStretch(2, 1)
         lay.addLayout(g)
         self.raw_modes = self._check(lay, "Display MODEs in raw form", c.raw_modes)
@@ -1454,6 +1455,7 @@ class PreferencesDialog(FramedDialog):
         c.log_stamps, c.log_stamp_format = self.log_stamps.isChecked(), self.log_fmt.text()
         c.sounds = {k: e.text().strip() for k, e in self.sound_edits.items() if e.text().strip()}
         c.reconnect_delay = self.reconnect.value()
+        c.server_timeout = self.server_timeout.value()
         c.dcc_auto = {0: 0, 1: 2, 2: 1}[self.dcc_auto.currentIndex()]
         c.dcc_trusted = [dict(e) for e in self.trusted]
         c.flood_pace = ("careful", "normal", "fast")[self.flood_pace.currentIndex()]

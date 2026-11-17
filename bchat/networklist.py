@@ -55,6 +55,8 @@ class NetworkEditDialog(FramedDialog):
         form = QFormLayout()
         self.autojoin = QLineEdit(net.autojoin, self)
         self.commands = QLineEdit("; ".join(net.commands), self)
+        self.join_wait = QCheckBox("Join after the NickServ login (wait up to 10 s)", self)   # 0.8.2
+        self.join_wait.setChecked(net.join_after_login)
         self.nick = QLineEdit(net.nick, self)
         self.nick2 = QLineEdit(net.nick2, self)
         self.username = QLineEdit(net.username, self)
@@ -84,7 +86,7 @@ class NetworkEditDialog(FramedDialog):
         fl.addWidget(self.features_note)
         fl.addStretch(1)
         self._features_text()
-        for label, w in (("Auto-join channels:", self.autojoin), ("Connect commands:", self.commands),
+        for label, w in (("Auto-join channels:", self.autojoin), ("", self.join_wait), ("Connect commands:", self.commands),
                          ("Nick name:", self.nick), ("Second choice:", self.nick2), ("User name:", self.username),
                          ("Real name:", self.realname), ("Server password:", self.password), ("NickServ password:", self.nickserv),
                          ("Log in with:", self.login), ("SASL account:", self.sasl_user), ("SASL password:", self.sasl_password),
@@ -187,6 +189,7 @@ class NetworkEditDialog(FramedDialog):
             self.form.setRowVisible(w, i == 1)
         for w in (self.cert_box, self.nickserv_row):
             self.form.setRowVisible(w, i == 2)
+        self.form.setRowVisible(self.join_wait, i == 0)     # a SASL login is done before any join anyway
         self._show_cert()
 
     def _fingerprint(self) -> str:
@@ -260,7 +263,7 @@ class NetworkEditDialog(FramedDialog):
         return (self.login.currentIndex(), self.cert_path, self.name.text(), self.servers.toPlainText(), self.autojoin.text(), self.commands.text(), self.nick.text(),
                 self.nick2.text(), self.username.text(), self.realname.text(), self.password.text(), self.nickserv.text(),
                 self.sasl_user.text(), self.sasl_password.text(), self.use_global.isChecked(), self.auto.isChecked(),
-                self.cycle.isChecked(), self.invalid.isChecked(), tuple(self.caps_off))
+                self.cycle.isChecked(), self.invalid.isChecked(), tuple(self.caps_off), self.join_wait.isChecked())
 
     def reject(self) -> None:
         """Red button or Esc: ask before losing changes (it used to drop them silently)."""
@@ -295,6 +298,7 @@ class NetworkEditDialog(FramedDialog):
         n.cycle = not self.cycle.isChecked()
         n.allow_invalid_cert = self.invalid.isChecked()
         n.caps_off = list(self.caps_off)
+        n.join_after_login = self.join_wait.isChecked()
         super().accept()
 
 

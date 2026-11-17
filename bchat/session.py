@@ -267,6 +267,15 @@ class Session(QObject):
 
         self._reconnect = QTimer(self, singleShot=True)
         self._reconnect.timeout.connect(self._connect_next)
+        # 0.8.2 connect/disconnect: one number per connection attempt, so a timer from an old link does nothing
+        self._conn_gen = 0
+        self._performed = self._joins_sent = False   # NickServ/commands/joins done for this link
+        self._ns_wait = 0                 # >0 = joins wait for NickServ (ticket = _conn_gen)
+        self._sasl_ok = False
+        self._killed = self._banned = False
+        self._tries = 0                   # reconnect tries since the link was last up
+        self._down_since = 0.0            # when the link dropped by itself (for "Back after X")
+        self._drop_why = ""
         self._keepalive = QTimer(self, interval=15000)
         self._keepalive.timeout.connect(self._tick)
         self._who = QTimer(self, interval=120000)
@@ -439,6 +448,12 @@ class Session(QObject):
         self._buf = b""
         self._rx.clear()
         self._welcomed = False
+        self._conn_gen += 1
+        self._performed = self._joins_sent = False
+        self._ns_wait = 0
+        self._sasl_ok = False
+        self._killed = False
+        self._drop_why = ""
         self._friends_wait = 0
         self._cap_active = set()
         self.nick_attempt = 0
@@ -552,6 +567,7 @@ class Session(QObject):
     def disconnect_from_network(self, reason: str | None = None) -> None:
         self.want_connected = False
         self._reconnect.stop()
+        self._tries, self._down_since, self._banned = 0, 0.0, False
         if self.state == "connected":
             self.send("QUIT", reason if reason is not None else self.cfg.quit_reason)
             self.sock.flush()
@@ -564,6 +580,7 @@ class Session(QObject):
         self._reconnect.stop()
         was_live = self.sock.state() != QAbstractSocket.SocketState.UnconnectedState
         self.want_connected = True
+        self._tries, self._banned = 0, False
         if was_live:
             self.sock.abort()
         self._repeat = self.server_index >= 0 and self._cur_port > 0
@@ -740,7 +757,10 @@ class Session(QObject):
 
     def _on_socket_error(self, err) -> None:
         if err == QAbstractSocket.SocketError.RemoteHostClosedError:
+            self._drop_why = self._drop_why or "closed by the server"
             return
+        if self._welcomed and not self._drop_why:
+            self._drop_why = self.sock.errorString().rstrip(".").lower()
         self.add(self.server_buffer, ERROR, "*", f"Connection failed: {self.sock.errorString()}")
         host = getattr(self, "_dial_host", "")
         if err == QAbstractSocket.SocketError.HostNotFoundError and self.cfg.ip_mode in ("ipv4", "ipv6") and host:
@@ -797,27 +817,45 @@ class Session(QObject):
             return
         self._keepalive.stop()
         self._who.stop()
+        if self.online_since and self.want_connected and not self._down_since:
+            self._down_since = time.time()        # dropped by itself: "Back after X" when it returns
         self.online_since = 0.0
+        self._ns_wait = 0
         self._set_state("disconnected")
+        gone = f"Disconnected ({self._drop_why})." if self._drop_why else "Disconnected."
         for b in self.all_buffers():
-            self.add(b, INFO, "*", "Disconnected.")
+            self.add(b, INFO, "*", gone)
             if b.kind == CHANNEL:
                 b.joined = False
                 b.users.clear()
                 self.users_changed.emit(b)
                 self.buffer_changed.emit(b)
         self.notify.emit(self.server_buffer, "disconnect")
+        if self._killed:
+            self.add(self.server_buffer, INFO, "*", "BChat won't reconnect after a kill. Use Server > Reconnect when you're ready.")
         if self.want_connected:
-            delay = max(1, self.cfg.reconnect_delay)
-            self.add(self.server_buffer, INFO, "*", f"Reconnecting in {delay} seconds...")
+            self._tries += 1
+            delay, note = self.reconnect_wait(self._tries)
+            self.add(self.server_buffer, INFO, "*", f"Reconnect try {self._tries} in {delay} seconds...{note}")
             self._reconnect.start(delay * 1000)
+
+    def reconnect_wait(self, tries: int) -> tuple[int, str]:
+        """Seconds before reconnect try N: the set delay for 10 tries, then once a minute. Never gives up."""
+        if self._banned:
+            return 60, ""
+        if tries > 10:
+            return max(60, self.cfg.reconnect_delay), " (still down, trying less often)"
+        return max(1, self.cfg.reconnect_delay), ""
 
     def _tick(self) -> None:
         if self._znc_collect is not None and time.time() - self._znc_collect[2] > 10:
             self._end_znc_playback()           # "Playback Complete." never came: show what arrived
         if self.state in ("connected", "registering"):
-            if time.time() - self._last_rx > 240:
-                self.add(self.server_buffer, ERROR, "*", "Server stopped responding.")
+            limit = min(600, max(60, self.cfg.server_timeout))
+            if time.time() - self._last_rx > limit:
+                span = (("1 minute" if limit == 60 else f"{limit // 60} minutes") if limit % 60 == 0 else f"{limit} seconds")
+                self.add(self.server_buffer, ERROR, "*", f"No reply from the server for {span}, so BChat closed the link.")
+                self._drop_why = "no reply"
                 self.sock.abort()
                 return
             if not self._ping_sent:  # keep timing the oldest unanswered ping, so a stalled server keeps counting up
@@ -1431,10 +1469,32 @@ class Session(QObject):
         self.add(self.server_buffer, NOTICE, f"-{m.nick}/Wallops-", m.param(-1), self._ts(m))
 
     def _irc_kill(self, m: Message) -> None:
-        self.add(self.server_buffer, ERROR, "*", f"You have been killed by {m.nick} ({m.param(-1)})")
+        target = m.param(0)
+        # before the welcome the server may not know our nick yet and sends KILL * : that is still us
+        if self._welcomed and target != "*" and self.fold(target) != self.fold(self.nick):
+            self.add(self.server_buffer, INFO, "*", f"{m.param(0)} was killed by {m.nick} ({m.param(-1)})")
+            return
+        # an oper put us off on purpose: coming straight back is what gets a K-line, so wait for the user
+        self._killed = True
+        self.want_connected = False
+        self._reconnect.stop()
+        self.add(self.server_buffer, ERROR, "*", f"You were killed by {m.nick} ({m.param(-1)})")
+
+    BAN_WORDS = ("k-lined", "g-lined", "z-lined", "d-lined", "banned")
+
+    def _ban_seen(self, text: str) -> None:
+        """465 or a ban ERROR: not a password problem, and bans are often lifted, so keep trying once a minute."""
+        if not self._banned:
+            self._banned = True
+            self.add(self.server_buffer, ERROR, "*", f"Banned from this server: {text}")
+            self.add(self.server_buffer, INFO, "*", "BChat will try again every 60 seconds. Server > Disconnect stops it.")
 
     def _irc_error(self, m: Message) -> None:
-        if not self._welcomed and "password" in m.param(-1).lower():
+        low = m.param(-1).lower()
+        if not self._welcomed and any(w in low for w in self.BAN_WORDS):
+            self._ban_seen(m.param(-1))
+            return
+        if not self._welcomed and "password" in low:
             self._login_refused(m.param(-1))
             return
         self.add(self.server_buffer, ERROR, "*", m.param(-1))
@@ -1750,6 +1810,9 @@ class Session(QObject):
         if not self._welcomed and "invalid password" in text.lower():
             self._login_refused(text)
             return
+        if self._ns_wait and self.fold(m.nick) == "nickserv" and any(
+                w in text.lower() for w in ("identified", "recognized", "recognised", "incorrect", "isn't registered", "not registered")):
+            self._join_all(self._ns_wait)        # NickServ answered (yes or no): no point waiting longer
         if self.chanserv_sink is not None and self.fold(m.nick) == "chanserv" and self.chanserv_sink(text):
             return
         if not m.nick or "." in m.nick or self.state != "connected":
@@ -2060,6 +2123,11 @@ class Session(QObject):
             return
         if n in (376, 422) and self._friends_wait:
             self._friends_after_005()
+        if n in (376, 422) and self._welcomed and not self._performed:
+            gen = self._conn_gen                   # end of the welcome text: log in and join a moment later
+            QTimer.singleShot(1000, lambda: self._perform(gen))
+        if n == 396 and self._ns_wait:                  # hidden host set: NickServ has logged us in
+            self._join_all(self._ns_wait)
         if n in (372, 375, 376, 422):
             if self.cfg.skip_motd and not self.motd_asked:
                 return                             # Preferences > General: skip the welcome message (/motd shows it)
@@ -2081,6 +2149,9 @@ class Session(QObject):
             self.notify.emit(self.server_buffer, "connect")
             self._who.start()
             self.add(self.server_buffer, INFO, "*", m.param(-1))
+            if self._down_since:
+                self.add(self.server_buffer, INFO, "*", f"Connected. Back after {duration(time.time() - self._down_since)}.")
+            self._tries, self._down_since, self._banned = 0, 0.0, False
             self._after_welcome()
         elif n in (321, 322, 323) and self.list_sink is not None:
             if n == 322:
@@ -2157,7 +2228,10 @@ class Session(QObject):
             self._whox_reply(m)
         elif n == 900:
             self.add(self.server_buffer, INFO, "*", m.param(-1))
+            if self._ns_wait:
+                self._join_all(self._ns_wait)
         elif n == 903:
+            self._sasl_ok = True
             self._sasl_done(True, "SASL login successful.")
         elif n in (902, 904, 905, 906, 907, 908):
             if n != 908 and self._sasl_state == "external":
@@ -2165,7 +2239,9 @@ class Session(QObject):
                                        "your password, then Edit Network > Add to NickServ.")
             elif n != 908:
                 self._sasl_done(False, f"SASL login failed: {m.param(-1)}")
-        elif n in (464, 465):
+        elif n == 465:
+            self._ban_seen(m.param(-1))
+        elif n == 464:
             self._login_refused(m.param(-1))
         elif n in self.JOIN_REFUSED and self._join_refused(n, m):
             pass
@@ -2372,10 +2448,33 @@ class Session(QObject):
         QTimer.singleShot(5000, lambda: self._friends_after_005(ticket))
         if self.cfg.local_find:              # the address others can reach us on, for DCC offers
             self.find_local()
-        if self.net.nickserv:
+        # 0.8.2: NickServ, connect commands and joins wait for the end of the welcome text (376/422, see
+        # _numeric), so they don't land in the middle of it. No welcome text at all: go ahead after 5 s.
+        gen = self._conn_gen
+        QTimer.singleShot(5000, lambda: self._perform(gen))
+
+    def _perform(self, gen: int) -> None:
+        if gen != self._conn_gen or self._performed or self.state != "connected":
+            return
+        self._performed = True
+        ns_login = bool(self.net.nickserv)
+        if ns_login:
             self.send_raw(f"PRIVMSG NickServ :IDENTIFY {self.net.nickserv}", secret=True)
         for cmd in self.net.commands:
             self.send_raw(cmd.lstrip("/"))
+        has_joins = bool(self.net.autojoin or self.join_once or any(b.kind == CHANNEL for b in self.buffers.values()))
+        if ns_login and has_joins and self.net.join_after_login and not self._sasl_ok:
+            self._ns_wait = gen                # joined before the login, a +r channel would refuse us
+            self.add(self.server_buffer, INFO, "*", "Waiting for NickServ before joining...")
+            QTimer.singleShot(10000, lambda: self._join_all(gen))
+        else:
+            self._join_all(gen)
+
+    def _join_all(self, gen: int) -> None:
+        if gen != self._conn_gen or self._joins_sent or self.state != "connected":
+            return
+        self._joins_sent = True
+        self._ns_wait = 0
         rejoin = [b.name for b in self.buffers.values() if b.kind == CHANNEL]
         if self.net.autojoin:
             chans = self.net.autojoin.split(" ", 1)

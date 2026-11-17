@@ -547,9 +547,9 @@ def test_conn_silent_server_is_noticed(app, bchat):
     w.cfg.reconnect_delay = 1
     assert up(app, s)
     srv.silent = True
-    s._last_rx = time.time() - 300                            # as if 5 minutes passed without a line (limit: 240 s)
+    s._last_rx = time.time() - 300                            # as if 5 minutes passed without a line (limit: 180 s)
     s._tick()
-    assert wait(app, lambda: any("stopped responding" in t for t in texts(s.server_buffer)))
+    assert wait(app, lambda: any("No reply from the server" in t for t in texts(s.server_buffer)))
     srv.silent = False
     assert wait(app, lambda: s.state == "connected", 20000)   # and it reconnects by itself
 
