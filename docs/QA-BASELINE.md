@@ -3,7 +3,42 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.8.2 release (18 Nov 2026)
+## Current baseline: 0.8.3 release (18 Nov 2026)
+
+Released as `v0.8.3` from commit `6be690c` (bug fix `2b1cd59`: through ZNC at a server's channel limit, 0.8.2's
+joins asked again for channels the bouncer had already joined, the server answered 405 "too many channels" and
+every tab emptied; 405 no longer empties a tab and joined channels are not asked for again). Numbers from QA run
+`20261118-090332` on the release build (`build-check audit packaged ui perf`, full perf mode); source stages from
+run `20261118-083533`, TEST1 build checks `20261118-085053`.
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.8.3` (`version_info` 0.8.3.0) |
+| Installer | `BChat-0.8.3-setup.exe`, 35,897,214 bytes |
+| Installer SHA-256 | `1c06d46d1e3654010de0d7fe4b5a5d3c6f88d12b92f333f419ed521883736327` |
+| `BChat.exe` SHA-256 | `80291bbbacbc60ae7022b39fbb00edcc3403efc118fec2b5aeefd123afdd1fcc` |
+| Packaged files | 209 |
+| VirusTotal installer | 0 / 69 |
+| VirusTotal `BChat.exe` | 1 / 71 (APEX, as on every build) |
+
+### Performance (full mode)
+
+| Measure | 0.8.3 |
+| --- | --- |
+| Start to window | 0.53 s |
+| Start to joined (15 channels) | 1.6 s (by design, as 0.8.2) |
+| Idle working set | 106.1 MB |
+| Load 300 msg/s: CPU / worst UI stall | 54.7 % / 51 ms |
+| Burst of 5000 messages: time / worst UI stall | 4.3 s / 48 ms |
+| History 10k lines / all 15 tabs full | 172.3 / 293.8 MB |
+
+### Test results
+
+pytest 708 (+5 `test_083`) all passed, protocol PASS; release build: build-check, secret scan, packaged 5/5,
+ui 731 controls no problems, perf PASS. A fake-ZNC socket check (bouncer replays channels, server answers 405)
+kept every tab full. The user confirmed 0.8.3-TEST1 works on Wixchat through ZNC.
+
+## Previous baseline: 0.8.2 release (18 Nov 2026)
 
 Released as `v0.8.2` from commit `85418c3` (connect and disconnect fixes `ba3d5b8`: joins wait 1 s after the
 welcome text and optionally for the NickServ login, 5 s reconnects with numbered tries, no reconnect after a KILL,
