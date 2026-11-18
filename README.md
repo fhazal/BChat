@@ -33,13 +33,19 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 
 ---
 
-## 🆕 What's new in 0.8.2
+## 🆕 What's new in 0.8.3
+
+- 🔌 **ZNC at the channel limit**: on a server where you were already at its channel limit, 0.8.2 showed you outside every channel after a restart, with "You have joined too many channels". BChat no longer asks the bouncer to join channels it already put you in, and that message no longer empties a tab.
+
+<details><summary>0.8.2</summary>
 
 - 🔑 **Joins wait for the login**: NickServ, your connect commands and your channels now go out a moment after the welcome text, and a network can wait for the NickServ login before it joins (*Network List → Edit*), so channels that need a registered nick let you in.
 - 🔁 **Faster, clearer reconnects**: BChat tries again after 5 seconds and says which try it is; after 10 tries it slows to once a minute. When you're back it says how long you were gone.
 - 🚫 **Kills and bans**: when an operator kills your link, BChat stays off instead of reconnecting. A server ban shows the ban text and retries once a minute.
 - ⏱️ **Silent servers**: a server that stops answering is dropped after 3 minutes (*Settings → Advanced*, 1 to 10 minutes) and BChat reconnects.
 - `-s` on the command line connects at once, and the saved-passwords warning no longer holds up auto-connect.
+
+</details>
 
 <details><summary>0.8.1</summary>
 
