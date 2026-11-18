@@ -65,7 +65,7 @@ def test_oper_only_refusal_empties_a_stale_tab(app):
 
 
 def test_every_join_refusal_empties_the_tab_and_still_says_why(app):
-    for n in (405, 471, 473, 474, 475, 477, 489, 520):
+    for n in (471, 473, 474, 475, 477, 489, 520):     # not 405: see test_083
         s, b = inside(app)
         feed(s, f":srv {n} Fhazal #opers :Cannot join channel")
         assert not b.joined and not b.users, n

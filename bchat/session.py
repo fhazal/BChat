@@ -152,7 +152,9 @@ class Session(QObject):
                        ("Friends' away status", ("extended-monitor",)))
     PACE = {"careful": 1.5, "normal": 1.0, "fast": 0.5}   # Preferences > Network > Flood: how quickly lines go out
     ZNC_LOST = ("disconnected from irc", "irc connection timed out", "connection refused", "cannot connect to irc")
-    JOIN_REFUSED = {405, 471, 473, 474, 475, 477, 489, 520}   # 477 registered only, 489 TLS only, 520 opers only (+O)
+    # 477 registered only, 489 TLS only, 520 opers only (+O). 0.8.3: not 405 (too many channels): that is about us,
+    # not the channel, and a server at its limit says it even for a channel we are already in.
+    JOIN_REFUSED = {471, 473, 474, 475, 477, 489, 520}
     HISTORY_LINES = 50     # asked for on join when the server keeps channel history (IRCv3 chathistory)
 
     def __init__(self, net: NetworkConfig, cfg: Config, parent=None):
@@ -2476,11 +2478,23 @@ class Session(QObject):
         self._joins_sent = True
         self._ns_wait = 0
         rejoin = [b.name for b in self.buffers.values() if b.kind == CHANNEL]
+        # 0.8.3: a bouncer has already put us back in its channels (JOIN + names before this). Asking again only
+        # makes the server answer, and one at its channel limit answers 'too many channels' even for those.
+        inside = {k for k, b in self.buffers.items() if b.kind == CHANNEL and b.joined}
+        auto = set()
         if self.net.autojoin:
-            chans = self.net.autojoin.split(" ", 1)
-            self.send("JOIN", *chans)
+            parts = self.net.autojoin.strip().split(" ", 1)
+            names = [n.strip() for n in parts[0].split(",")]
+            keys = [k.strip() for k in parts[1].split(",")] if len(parts) > 1 else []
+            auto = {self.fold(n) for n in names if n}
+            pairs = [(n, keys[i] if i < len(keys) else "") for i, n in enumerate(names)
+                     if n and self.fold(n) not in inside]
+            if pairs:
+                keyed = [p for p in pairs if p[1]] + [p for p in pairs if not p[1]]   # keys line up from the front
+                self.send("JOIN", ",".join(n for n, _ in keyed),
+                          *([",".join(k for _, k in keyed if k)] if any(k for _, k in keyed) else []))
         for name in rejoin:
-            if not self.net.autojoin or self.fold(name) not in self.fold(self.net.autojoin):
+            if self.fold(name) not in auto and self.fold(name) not in inside:
                 self.send("JOIN", name)
         for name, key in self.join_once:
             if self.fold(name) not in {self.fold(n) for n in rejoin}:
