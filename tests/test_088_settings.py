@@ -44,6 +44,17 @@ def test_proxy_off_shows_only_the_type(app, dialog):
         assert not w.isVisible(), w
 
 
+def test_proxy_type_menu_does_not_move_when_rows_show(app, dialog):
+    d = dialog()
+    d.proxy_type.setCurrentIndex(0)
+    settle(app)
+    x = d.proxy_type.mapTo(d, d.proxy_type.rect().topLeft()).x()
+    for index in range(1, 5):
+        d.proxy_type.setCurrentIndex(index)
+        settle(app)
+        assert d.proxy_type.mapTo(d, d.proxy_type.rect().topLeft()).x() == x, index
+
+
 @pytest.mark.parametrize("index", [1, 2])                 # Socks5, HTTP
 def test_socks5_and_http_ask_for_a_login_only_when_ticked(app, dialog, index):
     d = dialog()

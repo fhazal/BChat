@@ -1563,7 +1563,8 @@ class PreferencesDialog(FramedDialog):
         self.proxy_host = self._entry(g, 1, "Hostname:", c.proxy_host)
         self.proxy_port = self._number(g, 2, "Port:", c.proxy_port, 0, 65535)
         g.setColumnStretch(1, 1)                       # the Type menu stays left when the rows below hide
-        lay.addLayout(g)
+        g.setColumnMinimumWidth(0, max(g.itemAtPosition(r, 0).widget().sizeHint().width() for r in range(3)))
+        lay.addLayout(g)                               # ...and does not shift right when they show
         self._proxy_grid = g
         self.proxy_auth = self._check(lay, "Use a login", c.proxy_auth)
         g = QGridLayout()
