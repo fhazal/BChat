@@ -24,7 +24,7 @@ PROBE = r'''
 __module_name__ = "probe"
 __module_version__ = "1"
 __module_description__ = "frozen check"
-import xchat, json, importlib, traceback
+import xchat, json, importlib, traceback, time
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 results = {}
@@ -176,15 +176,22 @@ def run(userdata):
         from PySide6.QtGui import QColor
         old = (win.updater.state, win.updater.entry)
         win.updater._set(_up.FAILED, "probe")
-        for _ in range(5):
-            QApplication.processEvents()
         bar = win.menubar_
-        img = bar.grab().toImage(); dpr = img.devicePixelRatio()
-        g = bar.actionGeometry(win.update_act)
-        a = QColor(img.pixel(int((g.right() - 2) * dpr), int((g.top() + 2) * dpr))).name()
-        b = QColor(img.pixel(int((bar.width() - 6) * dpr), int((g.top() + 2) * dpr))).name()
+        same = False
+        # the bar relayouts and repaints after the entry changes; a busy PC can need more than a few event passes
+        for _ in range(40):
+            QApplication.processEvents(); time.sleep(0.05)
+            img = bar.grab().toImage(); dpr = img.devicePixelRatio()
+            g = bar.actionGeometry(win.update_act)
+            if not g.isValid():
+                continue
+            a = QColor(img.pixel(int((g.right() - 2) * dpr), int((g.top() + 2) * dpr))).name()
+            b = QColor(img.pixel(int((bar.width() - 6) * dpr), int((g.top() + 2) * dpr))).name()
+            if a == b:
+                same = True
+                break
         win.updater.entry = old[1]; win.updater._set(old[0])
-        return g.isValid() and a == b
+        return same
     note("update entry has the menu bar's background", badge_bg)
     # TEST24: Preferences > BChat > Updates card, About status, Help icon
     def updates_page():
