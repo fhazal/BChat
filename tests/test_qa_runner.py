@@ -117,7 +117,8 @@ def test_known_flaky_failure_is_labelled_not_retried(tmp_path, monkeypatch):
             assert False
     """))
     junit = tmp_path / "j.xml"
-    st = qa.Step("pytest", [PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", f"--junitxml={junit}", str(tdir / "test_flaky_one.py")],
+    st = qa.Step("pytest", [PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", f"--rootdir={tmp_path}",   # same test id in both runs
+                       f"--junitxml={junit}", str(tdir / "test_flaky_one.py")],
                  junit=junit, needs=["pytest"])
     rc, rep, summary = go(tmp_path, [qa.Stage("tests", "x", steps=[st])])
     failed = rep["stages"][0]["steps"][0]["details"]["failed_tests"]
