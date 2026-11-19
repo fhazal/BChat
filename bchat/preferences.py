@@ -169,14 +169,22 @@ class PreferencesDialog(FramedDialog):
         self.tree.setCurrentItem(self._items[start if start in BUILT else "Text box"])
         self._fit_screen()
 
-    def _scrolled(self, page: QWidget) -> QScrollArea:
-        """Every page scrolls on its own, so a small or scaled screen gets a scroll bar, never a dialog
-        that runs off the bottom with OK out of reach."""
-        area = QScrollArea(self)
-        area.setWidget(page)
+    def _page_area(self) -> QWidget:
+        """A new scroll area in the page stack, for the page about to be built; returns the parent
+        to build the page in. Every page scrolls on its own, so a small or scaled screen gets a
+        scroll bar, never a dialog that runs off the bottom with OK out of reach. Pages are made
+        where they will live: moving a built page restyles every control on it, and 20 pages of
+        that made Preferences slow to open."""
+        area = QScrollArea(self.pages)
         area.setWidgetResizable(True)
         area.setFrameShape(QFrame.Shape.NoFrame)
         area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        return area.viewport()
+
+    def _scrolled(self, page: QWidget) -> QScrollArea:
+        """The scroll area the page was built in (_page_area), with the page set in it."""
+        area = page.parentWidget().parentWidget()
+        area.setWidget(page)
         return area
 
     def page_widget(self, name: str) -> QWidget:
@@ -211,7 +219,7 @@ class PreferencesDialog(FramedDialog):
 
     def _text_page(self) -> QWidget:
         c = self.cfg
-        page = QWidget(self)
+        page = QWidget(self._page_area())
         lay = QVBoxLayout(page)
         lay.setContentsMargins(14, 6, 14, 6)
         lay.addWidget(_heading("Text Box Appearance"))
@@ -305,7 +313,7 @@ class PreferencesDialog(FramedDialog):
     # small helpers so each page reads like XChat's table in setup.c
 
     def _new_page(self):
-        page = QWidget(self)
+        page = QWidget(self._page_area())
         lay = QVBoxLayout(page)
         lay.setContentsMargins(14, 6, 14, 6)
         return page, lay
@@ -1656,7 +1664,7 @@ class PreferencesDialog(FramedDialog):
     # --- Colors -------------------------------------------------------------------------
 
     def _colors_page(self) -> QWidget:
-        page = QWidget(self)
+        page = QWidget(self._page_area())
         lay = QVBoxLayout(page)
         lay.setContentsMargins(14, 6, 14, 6)
         self.swatches: dict[str, Swatch] = {}
