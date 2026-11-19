@@ -8,7 +8,7 @@ import re
 
 import zlib
 
-from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QPoint, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetrics, QImage, QPainter, QPen, QTextBlockFormat,
                            QTextCharFormat, QTextCursor, QTextDocument, QTextFormat, QTextImageFormat)
 from PySide6.QtWidgets import QTextBrowser, QWidget
@@ -19,6 +19,8 @@ from .session import (ACTION, CONNECT, ERROR, HILITE, INFO, JOIN, MSG, NOTICE, N
                       WHOIS, Buffer, Line)
 from . import tabopts
 from .widgets import ASSETS
+
+LINESEP = "linesep"     # 0.8.8 /linesep: a line kind of its own, drawn as a dim row of ─
 
 
 
@@ -41,7 +43,9 @@ class ChatView(QTextBrowser):
     menu_provider = None  # set by the main window; builds the right-click menu
     colour_rule = None    # set by the main window: (buffer, nick) -> colour from Nick Colours / Address Book, or None
     reply_jump = None     # set by the main window: a click on a reply's quote line (buffer, msgid)
+    double_click = None   # 0.8.7, set by the main window: (buffer, word, on_link) -> True done, False select the word
     hidden_tab = False    # ChatPane sets it while this tab's view is not on show
+    find_marks: tuple = ()   # the find bar's highlights (extra selections); never part of the document
 
     PICTURES = {WHOIS: "info", JOIN: "te-join", NOW_TALKING: "te-join", PART: "te-part", ACTION: "te-action"}
     MAX_BLOCKS = 5000
@@ -67,14 +71,33 @@ class ChatView(QTextBrowser):
         super().changeEvent(ev)
         if ev.type() == QEvent.Type.FontChange:    # Qt hands the document the widget's UI font (first show, styles)
             d = self.document()
-            if d is not None and d.defaultFont() != self.chat_font:
-                d.setDefaultFont(self.chat_font)
+            f = self.font_for(getattr(self, "current", None))   # 0.8.8: this tab's /font
+            if d is not None and d.defaultFont() != f:
+                d.setDefaultFont(f)
 
     def apply_font(self) -> None:
         self.chat_font = QFont(self.cfg.chat_font, self.cfg.chat_font_size)
         self.chat_font.setStyleHint(QFont.StyleHint.Monospace)
         fm = QFontMetrics(self.chat_font)
         self.fm = fm
+        self._fonts: dict = {}           # 0.8.8 /font: "family|size" -> (QFont, QFontMetrics)
+
+    def _font_pair(self, b: Buffer | None) -> tuple[QFont, QFontMetrics]:
+        """0.8.8 /font: this tab's own font, or the chat font. A blank family or size follows Preferences."""
+        spec = tabopts.get(self.cfg, b, "font") if b is not None else ""
+        if not spec:
+            return self.chat_font, self.fm
+        pair = self._fonts.get(spec)
+        if pair is None:
+            family, _, size = str(spec).partition("|")
+            f = QFont(family.strip() or self.cfg.chat_font,
+                      int(size) if size.strip().isdigit() else self.cfg.chat_font_size)
+            f.setStyleHint(QFont.StyleHint.Monospace)
+            pair = self._fonts[spec] = (f, QFontMetrics(f))
+        return pair
+
+    def font_for(self, b: Buffer | None) -> QFont:
+        return self._font_pair(b)[0]
 
     def _new_doc(self) -> QTextDocument:
         d = QTextDocument(self)
@@ -93,6 +116,7 @@ class ChatView(QTextBrowser):
         d = self.docs.get(id(b))
         if d is None:
             d = self._new_doc()
+            d.setDefaultFont(self.font_for(b))
             self.docs[id(b)] = d
             for ln in b.lines:
                 self._render(d, b, ln)
@@ -114,7 +138,7 @@ class ChatView(QTextBrowser):
         self.current = b
         d = self.doc_for(b) if b is not None else self._empty
         self.setDocument(d)
-        d.setDefaultFont(self.chat_font)  # setDocument hands the document the widget's UI font
+        d.setDefaultFont(self.font_for(b))  # setDocument hands the document the widget's UI font
         self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
         self.viewport().update()
 
@@ -177,6 +201,7 @@ class ChatView(QTextBrowser):
         cur.removeSelectedText()
         cur.setBlockFormat(keep)
         cur.endEditBlock()
+        d.setProperty("bchat_dropped", int(d.property("bchat_dropped") or 0) + n)   # 0.8.8: shading keeps its stripes
         if b.marker is not None:
             b.marker = b.marker - n if b.marker >= n else None
         if top is not None:          # by the line itself, not the scroll bar: Qt lays big tabs out a bit at a time
@@ -205,7 +230,26 @@ class ChatView(QTextBrowser):
     def _render(self, d: QTextDocument, b: Buffer, ln: Line) -> None:
         if ln.hidden:
             return                              # per-tab setting: join and part lines hidden here
+        if ln.kind == LINESEP:
+            return self._render_linesep(d, b)
         self._render_flow(d, ln, server=b.kind == SERVER, b=b)
+
+    def _render_linesep(self, d: QTextDocument, b: Buffer | None) -> None:
+        """0.8.8 /linesep: a row of box lines across the window in the theme's dim colour, no stamp."""
+        fm = self._font_pair(b)[1]
+        width = self.viewport().width() - 2 * int(d.documentMargin()) - 4
+        n = max(8, width // max(1, fm.horizontalAdvance("─")) - 1)
+        cur = QTextCursor(d)
+        cur.movePosition(QTextCursor.MoveOperation.End)
+        bf = QTextBlockFormat()
+        bf.setLineHeight(max(100, self.cfg.line_spacing), QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+        if d.isEmpty():
+            cur.setBlockFormat(bf)
+        else:
+            cur.insertBlock(bf)
+        cf = QTextCharFormat()
+        cf.setForeground(QColor(self.cfg.theme.stamp))
+        cur.insertText("─" * n, cf)
 
     def _left_parts(self, ln: Line, colour: str) -> list[tuple[str, str]]:
         """XChat's text events colour the brackets apart from the name (textevents.in):
@@ -235,15 +279,16 @@ class ChatView(QTextBrowser):
             left_col = text_col = ln.colour
         stamp = self._stamp(ln.ts, b)
         pic = self.PICTURES.get(ln.kind)
-        side = self.fm.height() - 2
+        fm = self._font_pair(b)[1]                       # 0.8.8: this tab's /font
+        side = fm.height() - 2
         light = self._light_slot(ln, server)   # None, "" (empty slot) or a light name
-        slot = (self.LIGHT + self.fm.horizontalAdvance(" ")) if light is not None else 0
+        slot = (self.LIGHT + fm.horizontalAdvance(" ")) if light is not None else 0
         if server:
-            indent = self.fm.horizontalAdvance(stamp + "* ")
+            indent = fm.horizontalAdvance(stamp + "* ")
         elif pic:
-            indent = self.fm.horizontalAdvance(stamp + " ") + side
+            indent = fm.horizontalAdvance(stamp + " ") + side
         else:
-            indent = self.fm.horizontalAdvance(stamp + (ln.left + " " if ln.left else "")) + slot
+            indent = fm.horizontalAdvance(stamp + (ln.left + " " if ln.left else "")) + slot
         bf = QTextBlockFormat()
         bf.setLeftMargin(indent)
         bf.setTextIndent(-indent)
@@ -316,8 +361,8 @@ class ChatView(QTextBrowser):
         sel.cursor = QTextCursor(block)
         sel.cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
         sel.format.setBackground(QColor(self.cfg.theme.selected))
-        self.setExtraSelections([sel])
-        QTimer.singleShot(1200, lambda: self.setExtraSelections([]))
+        self.setExtraSelections([*self.find_marks, sel])         # the find bar's marks stay lit
+        QTimer.singleShot(1200, lambda: self.setExtraSelections(list(self.find_marks)))
     NICK_COLOURS = ("flamingo", "pink", "mauve", "maroon", "peach", "yellow", "green", "teal", "sky", "sapphire", "blue")
 
     def _stamp(self, ts: float, b: Buffer | None = None) -> str:
@@ -473,6 +518,13 @@ class ChatView(QTextBrowser):
             self.channel_double_clicked.emit(word)
             ev.accept()
             return
+        done = self.double_click(self.current, word, bool(self.anchorAt(ev.position().toPoint())))             if self.double_click is not None else None
+        if done is not None:                   # 0.8.7: Settings > Windows > Double-click does
+            if done:
+                ev.accept()
+            else:
+                super().mouseDoubleClickEvent(ev)
+            return
         b = self.current
         if b is not None and getattr(b, "kind", "") == "channel" and not self.anchorAt(ev.position().toPoint()):
             self.central_requested.emit(b)     # like mIRC; words still copy by dragging over them
@@ -491,10 +543,54 @@ class ChatView(QTextBrowser):
 
     # --- unread marker ----------------------------------------------------------
 
+    def _visible_blocks(self):
+        """(block, top, bottom) in viewport pixels for the lines on show: the paint only walks these."""
+        d, vh = self.document(), self.viewport().height()
+        lay, top = d.documentLayout(), self.verticalScrollBar().value()
+        block = self.cursorForPosition(QPoint(0, 0)).block()
+        while block.isValid():
+            r = lay.blockBoundingRect(block)
+            y0, y1 = r.top() - top, r.bottom() - top
+            if y0 > vh:
+                break
+            yield block, y0, y1
+            block = block.next()
+
+    def _paint_shading(self, p: QPainter) -> None:
+        """0.8.8 Settings > Text: every other line a shade off the background (theme text colour, very faint, so
+        it follows the theme and a background picture). Counted from the first line ever added, so a trim keeps
+        the stripes where they are; hidden lines have no block, so they don't break the pattern."""
+        d = self.document()
+        if d is None or d.isEmpty():
+            return
+        shade = QColor(self.cfg.theme.chat_fg)
+        shade.setAlpha(14)
+        dropped, w = int(d.property("bchat_dropped") or 0), self.viewport().width()
+        for block, y0, y1 in self._visible_blocks():
+            if (block.blockNumber() + dropped) % 2:
+                p.fillRect(QRectF(0, y0, w, y1 - y0), shade)
+
+    def _paint_rules(self, p: QPainter) -> None:
+        """0.8.8 Settings > Text: a thin dim line between messages."""
+        d = self.document()
+        if d is None or d.isEmpty():
+            return
+        p.setPen(QPen(QColor(self.cfg.theme.border), 1))
+        w = self.viewport().width()
+        for block, _y0, y1 in self._visible_blocks():
+            if block.next().isValid():
+                p.drawLine(0, int(y1), w, int(y1))
+
     def paintEvent(self, ev):
+        if self.cfg.shade_lines:
+            sp = QPainter(self.viewport())
+            self._paint_shading(sp)
+            sp.end()
         super().paintEvent(ev)
         p = QPainter(self.viewport())
         t = self.cfg.theme
+        if self.cfg.line_rules:
+            self._paint_rules(p)
         b = self.current
         if b is not None and b.marker is not None and self.cfg.marker_line:
             block = self.document().findBlockByNumber(b.marker)
@@ -524,6 +620,8 @@ class ChatPane(QWidget):
         self.menu_provider = None              # (pos, view) -> menu; set by the main window
         self.colour_rule = None
         self.reply_jump = None
+        self.double_click = None               # 0.8.7: (buffer, word, on_link) -> bool; see ChatView
+        self.on_switch = None                  # () -> None after another view comes on show (the find bar follows)
         self._shown: ChatView | None = None
         self._blank = self._make()
         self.setCurrentWidget(self._blank)
@@ -533,6 +631,7 @@ class ChatPane(QWidget):
         v.menu_provider = lambda pos, v=v: self.menu_provider(pos, v) if self.menu_provider else None
         v.colour_rule = lambda b, nick: self.colour_rule(b, nick) if self.colour_rule else None
         v.reply_jump = lambda b, msgid: self.reply_jump(b, msgid) if self.reply_jump else None
+        v.double_click = lambda b, word, link: self.double_click(b, word, link) if self.double_click else None
         v.channel_double_clicked.connect(self.channel_double_clicked)
         v.central_requested.connect(self.central_requested)
         v.hidden_tab = True
@@ -554,6 +653,8 @@ class ChatPane(QWidget):
         if old is not None:
             old.hidden_tab = True
             old.hide()
+        if self.on_switch is not None:
+            self.on_switch()
         # A size change comes after the switch (the nick list shows or hides). Fit once, after that, not twice.
         QTimer.singleShot(0, self._fit)
 

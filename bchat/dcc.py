@@ -524,6 +524,9 @@ class DccManager(QObject):
         c = self.cfg
         if c.dcc_ip.strip():
             return c.dcc_ip.strip()
+        upnp = getattr(self.win, "upnp", None)
+        if upnp is not None and upnp.external_ip:     # 0.8.8: the router opened the ports and told us its address
+            return upnp.external_ip
         if s.external_ip:                    # Network > Local found it (this PC, the server or a website)
             return s.external_ip
         return plain_v4(s.sock.localAddress().toString()) or "127.0.0.1"

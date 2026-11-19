@@ -6,6 +6,7 @@ import fnmatch
 from collections import deque
 import random
 import re
+import struct
 import sys
 import time
 import base64
@@ -256,6 +257,9 @@ class Session(QObject):
         self._queue_timer.timeout.connect(self._drain_queue)
 
         self._special_socket = False
+        self._socks4 = ""            # 0.8.8: "socks4" / "socks4a" when Network setup uses one (BChat talks it itself)
+        self._socks: dict | None = None   # ... the handshake under way: target host, port, SSL, step
+        self._uh_typed: list = []    # 0.8.8 /userhost: (buffer, nicks asked (folded), when) per USERHOST typed
         self.on_dcc = None           # the DCC manager
         self.dcc_say = None
         self.server_hook = None      # plugins
@@ -426,6 +430,40 @@ class Session(QObject):
             return self._route
         return self.current if self.current is not None and self.current.session is self else self.server_buffer
 
+    # --- 0.8.7: Settings > Windows > Where events show -----------------------------------------
+    active_window = None     # set by the main window: () -> the focused chat tab, on any server
+
+    def _active_window(self) -> tuple[Buffer, str]:
+        """The focused chat window and the prefix for a line from here; one on another server gets '[Network] '."""
+        if self._route is not None:
+            return self._route, ""
+        b = self.active_window() if self.active_window is not None else None
+        if b is None or getattr(b, "session", None) is None:
+            return self._front(), ""
+        if b.session is self:
+            return b, ""
+        return self.server_buffer, ""     # another server's window has focus: this server's tab, as before 0.8.7
+
+    def _show_where(self, event: str, nick: str = "", default: Buffer | None = None) -> tuple[Buffer, str]:
+        """Where an event's line goes, by the user's choice for it (cfg.show_<event>), with its prefix."""
+        where = getattr(self.cfg, "show_" + event, "active")
+        if where == "query" and nick:
+            q = self.buffers.get(self.fold(nick))
+            if q is not None and q.kind == QUERY:
+                return q, ""
+        elif where == "server":
+            return self.server_buffer, ""
+        elif where == "messages":
+            return self.buffer(self.MESSAGES), ""
+        if default is not None:
+            return default, ""
+        return self._active_window()
+
+    def add_to(self, b: Buffer, kind: str, left: str, text: str, prefix: str = "", **kw) -> None:
+        """add(), on the session that owns b (a line shown in another server's window)."""
+        owner = b.session if getattr(b, "session", None) is not None else self
+        owner.add(b, kind, left, prefix + text if prefix else text, **kw)
+
     def send_labeled(self, b: Buffer, line: str) -> None:
         """A raw line the user typed: with labeled-response its answer comes back to tab b."""
         if "labeled-response" in self._cap_active and self.state == "connected" and not line.startswith("@"):
@@ -472,11 +510,22 @@ class Session(QObject):
         unless 'If this address is gone, don't connect at all' is ticked (VPN users): then False = don't connect."""
         c = self.cfg
         kinds = {"socks5": QNetworkProxy.ProxyType.Socks5Proxy, "http": QNetworkProxy.ProxyType.HttpProxy}
-        use_proxy = c.proxy_type in kinds and bool(c.proxy_host)
+        # 0.8.8: Qt has no Socks4: BChat dials the proxy itself and talks Socks4 / 4a before the IRC login
+        self._socks4 = c.proxy_type if c.proxy_type in ("socks4", "socks4a") and c.proxy_host else ""
+        use_proxy = (c.proxy_type in kinds and bool(c.proxy_host)) or bool(self._socks4)
         # QSslSocket's inner socket keeps its old proxy and bound address, so these need a clean socket
         if use_proxy or c.bind_host or self._special_socket:
             self._new_socket()
         self._special_socket = use_proxy or bool(c.bind_host)
+        if self._socks4:
+            if self._ws_path:
+                self.add(self.server_buffer, ERROR, "*", "A Socks4 proxy can't carry a WebSocket connection, so BChat "
+                                                          "didn't connect. Use Socks5 or HTTP (Preferences > Network setup).")
+                return False
+            self.sock.setProxy(QNetworkProxy(QNetworkProxy.ProxyType.NoProxy))
+            if c.bind_host:
+                self.add(self.server_buffer, INFO, "*", f"Using the proxy, so the address {c.bind_host} isn't used.")
+            return True
         if use_proxy:
             p = QNetworkProxy(kinds[c.proxy_type], c.proxy_host, c.proxy_port)
             if c.proxy_auth:
@@ -619,16 +668,119 @@ class Session(QObject):
             self.cfg.ip_mode, QAbstractSocket.NetworkLayerProtocol.AnyIPProtocol)
         mode = QAbstractSocket.OpenModeFlag.ReadWrite
         self._dial_host = host
+        self._socks = None
+        self._ident_start()
         if self.cfg.connect_timeout > 0:
             self._dial.start(self.cfg.connect_timeout * 1000)
-        if tls:
+        if self._socks4:
+            # 0.8.8: a plain link to the proxy first; Socks4 then reaches the server, and SSL starts after that
+            self._socks = {"host": host, "port": port, "tls": tls, "step": "dial", "got": b""}
+            self._dial_host = self.cfg.proxy_host
+            self.sock.connectToHost(self.cfg.proxy_host, self.cfg.proxy_port, mode, proto)
+        elif tls:
             self.sock.connectToHostEncrypted(host, port, mode, proto)
         else:
             self.sock.connectToHost(host, port, mode, proto)
 
+    # --- 0.8.8: ident server while connecting ----------------------------------------------------------
+
+    def _ident_start(self) -> None:
+        if not self.cfg.identd_on:
+            return self._ident_stop()
+        from . import identd
+        why = identd.shared().acquire(self, self.cfg.identd_user or self._identity("user"))
+        if why:
+            self.add(self.server_buffer, INFO, "*", f"Ident is off: port {identd.PORT} is in use or blocked ({why}). "
+                                                    "Connecting anyway.")
+            return
+        if getattr(self, "_ident_timer", None) is None:
+            self._ident_timer = QTimer(self, singleShot=True)
+            self._ident_timer.timeout.connect(self._ident_stop)
+        self._ident_timer.start(identd.HOLD_S * 1000)
+
+    def _ident_stop(self) -> None:
+        """Welcome, a failed try or 60 seconds: this connection no longer needs the ident server."""
+        timer = getattr(self, "_ident_timer", None)
+        if timer is not None:
+            timer.stop()
+        from . import identd
+        if identd._shared is not None:
+            identd._shared.release(self)
+
+    # --- 0.8.8: Socks4 / Socks4a ------------------------------------------------------------------------
+
+    SOCKS4_REFUSED = {0x5B: "the proxy refused or couldn't make the connection",
+                      0x5C: "the proxy couldn't check who you are (it asks this PC's ident server, which didn't answer)",
+                      0x5D: "the proxy's ident check didn't match the user ID BChat sent"}
+
+    def _socks_connected(self) -> None:
+        """Connected to the proxy: ask it for the IRC server. Socks4 needs the server's IPv4 address, 4a lets the
+        proxy look the name up."""
+        st = self._socks
+        host = st["host"]
+        literal = QHostAddress(host)
+        if self._socks4 == "socks4a" and literal.isNull():
+            return self._socks_request("0.0.0.1", host)
+        if not literal.isNull():
+            return self._socks_request(host, "")
+        gen = self._conn_gen
+        st["step"] = "lookup"
+        QHostInfo.lookupHost(host, lambda info, g=gen: self._socks_looked_up(info, g))
+
+    def _socks_looked_up(self, info, gen: int) -> None:
+        if gen != self._conn_gen or not self._socks or self._socks["step"] != "lookup":
+            return
+        v4 = [a.toString() for a in info.addresses() if a.protocol() == QAbstractSocket.NetworkLayerProtocol.IPv4Protocol]
+        if not v4:
+            why = "wasn't found" if not info.addresses() else "has no IPv4 address, and Socks4 can't reach IPv6"
+            return self._socks_failed(f"{self._socks['host']} {why}. Socks4a lets the proxy look names up "
+                                      "(Preferences > Network setup).")
+        self._socks_request(v4[0], "")
+
+    def _socks_request(self, ip: str, name: str) -> None:
+        st = self._socks
+        a = QHostAddress(ip)
+        if a.protocol() != QAbstractSocket.NetworkLayerProtocol.IPv4Protocol:
+            return self._socks_failed(f"{ip} is an IPv6 address, and Socks4 can only reach IPv4 addresses.")
+        user = self.cfg.proxy_user.strip().encode("utf-8", "replace").replace(b"\0", b"")
+        req = struct.pack(">BBHI", 4, 1, st["port"], a.toIPv4Address()) + user + b"\0"
+        if name:
+            req += name.encode("idna") + b"\0"
+        st["step"] = "reply"
+        self.sock.write(req)
+
+    def _socks_reply(self) -> None:
+        st = self._socks
+        st["got"] += bytes(self.sock.readAll())
+        if len(st["got"]) < 8:
+            return
+        head, rest = st["got"][:8], st["got"][8:]
+        code = head[1]
+        if code != 0x5A:
+            why = self.SOCKS4_REFUSED.get(code, f"the proxy answered with an unknown code {code:#04x}")
+            return self._socks_failed(f"Socks4 proxy {self.cfg.proxy_host}: {why} (code {code:#04x}).")
+        host, tls = st["host"], st["tls"]
+        self._socks = None
+        self._dial_host = host
+        self.add(self.server_buffer, CONNECT, "*", f"The proxy reached {host}.")
+        if tls:
+            self.sock.setPeerVerifyName(host)        # the certificate must be the server's, not the proxy's
+            self.sock.startClientEncryption()
+        self._on_tcp()
+        if rest and not tls:                         # the server already spoke: those lines go the normal way
+            self._buf += rest
+            self._on_read()
+
+    def _socks_failed(self, why: str) -> None:
+        self._socks = None
+        self.add(self.server_buffer, ERROR, "*", why)
+        self.sock.abort()
+        self._on_disconnected()
+
     def _dial_timed_out(self) -> None:
         """No answer to the connect in time: give up on this server and go on as for any failed try."""
-        if self.state != "connecting" or self.sock.state() == QAbstractSocket.SocketState.ConnectedState:
+        if self.state != "connecting" or (self.sock.state() == QAbstractSocket.SocketState.ConnectedState
+                                          and not self._socks):
             return
         self.add(self.server_buffer, ERROR, "*", f"No answer from {self._dial_host} after {self.cfg.connect_timeout} seconds.")
         self.sock.abort()
@@ -714,6 +866,9 @@ class Session(QObject):
         self._cert_loaded = True
 
     def _on_tcp(self) -> None:
+        if self._socks and self._socks["step"] == "dial":       # 0.8.8: reached the Socks4 proxy, not the server yet
+            self.add(self.server_buffer, CONNECT, "*", f"Connected to the proxy. Asking it for {self._socks['host']}...")
+            return self._socks_connected()
         self._dial.stop()
         if self._starttls == "waiting" and not self._tls_now:
             self.add(self.server_buffer, CONNECT, "*", "Connected. Asking the server to switch to SSL (STARTTLS)...")
@@ -825,6 +980,8 @@ class Session(QObject):
     READ_SLICE_S = 0.03     # 0.6.1: work through incoming lines 30 ms at a time, so a burst doesn't freeze the window
 
     def _on_read(self) -> None:
+        if self._socks:                       # 0.8.8: the Socks4 proxy's answer comes before any IRC line
+            return self._socks_reply()
         self._buf += bytes(self.sock.readAll())
         *lines, self._buf = self._buf.split(b"\n")
         self._rx.extend(lines)
@@ -930,6 +1087,12 @@ class Session(QObject):
 
     def _on_disconnected(self) -> None:
         self._dial.stop()
+        self._ident_stop()
+        if self._socks:                         # 0.8.8: the Socks4 proxy hung up before it answered
+            self._socks = None
+            if self.state != "disconnected":
+                self.add(self.server_buffer, ERROR, "*", f"The Socks4 proxy {self.cfg.proxy_host} closed the connection "
+                                                          "without an answer.")
         if self._rx:
             self._drain(everything=True)       # the server's last words (ERROR :Closing link) before 'Disconnected.'
         if self.state == "disconnected":
@@ -1939,8 +2102,8 @@ class Session(QObject):
         if "echo-message" not in self._cap_active:
             self.add(self.buffer(target), SELF, self.nick, self.hide_typed(target, text))
 
-    def te(self, event: str, b: Buffer, kind: str, args, ts: float | None = None) -> None:
-        """Prints a Text Event with the user's format."""
+    def te(self, event: str, b: Buffer, kind: str, args, ts: float | None = None, prefix: str = "") -> None:
+        """Prints a Text Event with the user's format (prefix: '[Network] ' for another server's window)."""
         if self.print_hook is not None and self.print_hook(event, args):
             return
         from . import tabopts
@@ -1949,7 +2112,7 @@ class Session(QObject):
         if not fmt and event in SHORT and joins in ("short", "hide"):
             fmt = SHORT[event]                 # only the default wording: the user's own Text Events stay as they are
         left, text = render(fmt or EVENTS[event][0], args)
-        self.add(b, kind, left, text, ts, hidden=joins == "hide")   # hidden: kept and logged, just not drawn
+        self.add_to(b, kind, left, text, prefix, ts=ts, hidden=joins == "hide")   # hidden: kept and logged, just not drawn
 
     def _ctcp_reply_list(self) -> list:
         if self.cfg.ctcp_replies is not None:
@@ -1968,7 +2131,10 @@ class Session(QObject):
             return
         if not own and not self._ctcp_allowed(nick, now):     # 0.8.5: someone past their share of the flood buffer
             return
-        self.te("CTCP Generic", self._front(), INFO, (verb, nick))
+        where, prefix = self._show_where("ctcp", nick)        # 0.8.7: Settings > Windows
+        self.te("CTCP Generic", where, INFO, (verb, nick), prefix=prefix)
+        if not self.cfg.ctcp_reply_enabled:                  # 0.8.7 /ctcps off: shown and logged, never answered
+            return
         mine = [c for n, c in self._ctcp_reply_list() if n.upper() == verb.upper()]
         if mine and self.on_command is not None:
             from . import full_version
@@ -2115,10 +2281,13 @@ class Session(QObject):
             where = self.buffer("(notices)") if self.cfg.notices_tab else self.server_buffer
             self.add(where, NOTICE, "-" + (m.nick or "server") + "-", text, self._ts(m))
             return
-        b = self.buffers.get(self.fold(target)) if self.is_channel(target) else (self._notice_channel(m, text) or self._front())
-        self.add(b or self._front(), NOTICE, f"-{m.nick}-", text, self._ts(m))
+        b = self.buffers.get(self.fold(target)) if self.is_channel(target) else self._notice_channel(m, text)
+        prefix = ""
+        if b is None:                                   # 0.8.7: a private notice: Settings > Windows > Notices
+            b, prefix = self._show_where("notices", m.nick)
+        self.add_to(b, NOTICE, f"-{m.nick}-", text, prefix, ts=self._ts(m))
         if self.fold(m.nick) != self.fold(self.nick) and not self.ignored(m.prefix, "H"):     # 0.8.5: our own, echoed by the bouncer: no alert; /ignore -h: none
-            self._notify(b or self._front(), "notice")
+            self._notify(b, "notice")
 
     def _irc_join(self, m: Message) -> None:
         chan = m.param(0)
@@ -2332,14 +2501,17 @@ class Session(QObject):
         if was_me:
             self.nick = new
             self.state_changed.emit()
+        shared = self.cfg.show_nicks not in ("active", "server")   # 0.8.7 Settings > Windows: one line elsewhere instead
+        seen = False
         for b in self.buffers.values():
             u = b.users.pop(self.fold(old), None)
             if u:
                 u.nick = new
                 b.users[self.fold(new)] = u
-                if was_me:
+                seen = True
+                if shared and was_me:
                     self.te("Your Nick Changing", b, INFO, (new,))
-                else:
+                elif shared:
                     self.te("Change Nick", b, INFO, (old, new))
                 self.users_changed.emit(b)
         q = self.buffers.pop(self.fold(old), None)
@@ -2348,6 +2520,11 @@ class Session(QObject):
             self.buffers[self.fold(new)] = q
             self.te("Change Nick", q, INFO, (old, new))
             self.buffer_changed.emit(q)
+        where, prefix = (self.server_buffer, "") if self.cfg.show_nicks == "server" else self._active_window()
+        if not shared and seen and not was_me and where is not q:
+            self.te("Change Nick", where, INFO, (old, new), prefix=prefix)
+        if not shared and was_me and where is not self.server_buffer:
+            self.te("Your Nick Changing", where, INFO, (new,), prefix=prefix)
         if was_me:
             self.te("Your Nick Changing", self.server_buffer, INFO, (new,))
 
@@ -2503,6 +2680,54 @@ class Session(QObject):
         from . import everyday
         return everyday.userhost_answer(self, m)
 
+    def userhost_typed(self, b, nicks: list[str]) -> None:
+        """0.8.8 /userhost nick [nick...] (the server takes up to 5): the answer goes to the tab it was typed in."""
+        self._uh_typed.append((b, {self.fold(n) for n in nicks}, list(nicks), time.time()))
+        self.send("USERHOST", *nicks)
+
+    def _userhost_typed_answer(self, m: Message) -> bool:
+        """302 for a typed /userhost: 'ana is ana@host (here), bob is ~bob@10.0.0.2 (away)'. Matched by its nicks,
+        so a /ban or /dns lookup that crossed it still gets its own answer. True when it was printed."""
+        now = time.time()
+        self._uh_typed = [e for e in self._uh_typed if now - e[3] < 30]
+        got = {}
+        for item in m.param(-1).split():
+            nick, eq, host = item.partition("=")
+            if eq and nick:
+                oper = nick.endswith("*")
+                nick = nick.rstrip("*")
+                got[self.fold(nick)] = (nick, oper, host[:1] == "-", host.lstrip("+-"))
+        others = bool(self._addr_waiting or self.dns_waiting or self._local_waiting)
+        for i, (b, asked, typed, _when) in enumerate(self._uh_typed):
+            if (got and set(got) <= asked) or (not got and i == 0 and not others):
+                break
+        else:
+            return False
+        del self._uh_typed[i]
+        parts = []
+        for n in typed:
+            key = self.fold(n)
+            if key in got:
+                nick, oper, away, host = got.pop(key)
+                parts.append(f"{nick} is {host} ({'away' if away else 'here'})" + (" (IRC operator)" if oper else ""))
+            elif not any(p.startswith(f"{n} isn't") for p in parts):
+                parts.append(f"{n} isn't on IRC")
+        target = b if b in self.all_buffers() else self.server_buffer
+        self.add(target, INFO, "*", ", ".join(parts))
+        if self._addr_waiting and any(self.fold(n) in self._addr_waiting for n in typed):
+            self._addr_answer(m)                      # a /ban lookup for the same nick is answered too
+        return True
+
+    def flush_queue(self) -> int:
+        """0.8.8 /flush: drop every line still waiting in the flood-protection send queue (and CTCP replies held
+        back for it). Returns how many were dropped."""
+        dropped = len(self._queue) + sum(len(q) for q in self._flood_lines.values())
+        self._queue.clear()
+        self._flood_lines.clear()
+        self._flood_order.clear()
+        self._ctcp_held = False                       # flood ignores stay: /flood clear ends those
+        return dropped
+
     def _numeric(self, n: int, m: Message) -> None:
         if self._starttls == "waiting" and self._starttls_answer(n, m):
             return
@@ -2532,6 +2757,7 @@ class Session(QObject):
                 st["known"] = False                 # 0.8.5: after a reconnect, friends online are announced again
             self.server_name = m.prefix
             self._welcomed = True
+            self._ident_stop()                      # 0.8.8: ident is only for the login
             self.online_since = time.time()
             self._set_state("connected")
             self.notify.emit(self.server_buffer, "connect")
@@ -2561,6 +2787,8 @@ class Session(QObject):
             self.ban_sinks[self.fold(m.param(1))].ban_end({368: "b", 349: "e", 347: "I"}[n])
         elif n in (367, 348, 346, 368, 349, 347):
             self._list_line(n, m)                   # 0.8.5: no Ban List window open: a readable line, not raw text
+        elif n == 302 and self._uh_typed and self._userhost_typed_answer(m):
+            pass                                               # 0.8.8: a /userhost the user typed
         elif n == 302 and self._addr_waiting and self._addr_answer(m):
             pass
         elif n == 302 and self.dns_waiting and self._dns_answer(m):
@@ -3188,9 +3416,11 @@ class Session(QObject):
             if self.cfg.away_once and self._away_seen.get(key) == m.param(-1):
                 return
             self._away_seen[key] = m.param(-1)
-            self.te("Away Line", self._front(), INFO, (m.param(1), m.param(-1)))
+            where, prefix = self._show_where("away", m.param(1))     # 0.8.7: Settings > Windows
+            self.te("Away Line", where, INFO, (m.param(1), m.param(-1)), prefix=prefix)
             return
-        b = self._whois_target or self._front()
+        # 0.8.7 Settings > Windows: "Active window" is still the tab the /whois was typed in
+        b, prefix = self._show_where("whois", m.param(1), default=self._whois_target)
         p = m.params
         nick = m.param(1)
         tag = f"\x0312[\x0f{nick}\x0312]\x0f"
@@ -3212,7 +3442,7 @@ class Session(QObject):
                 self._whois_target = None
                 self._whois_nick = ""
         elif n in (314, 369):
-            b = self._front()                       # 0.8.5: /whowas stays in the tab it was typed in
+            b, prefix = self._front(), ""           # 0.8.5: /whowas stays in the tab it was typed in
             text = f"{tag} was ({m.param(2)}@{m.param(3)}): {m.param(-1)}" if n == 314 else f"{tag} End of WHOWAS list."
         elif n == 301:
             text = f"{tag} is away ({m.param(-1)})"
@@ -3229,4 +3459,4 @@ class Session(QObject):
                     u.country = country
         else:
             text = f"{tag} {' '.join(p[2:])}"
-        self.add(b, WHOIS, "i", text)
+        self.add_to(b, WHOIS, "i", text, prefix)

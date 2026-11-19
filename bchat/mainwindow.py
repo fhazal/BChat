@@ -11,13 +11,17 @@ import weakref
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QInputMethodEvent, QTextCharFormat, QTextCursor, QActionGroup, QShortcut, QAction, QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence, QPixmap, QTextDocument
+from PySide6.QtGui import QInputMethodEvent, QTextCharFormat, QTextCursor, QActionGroup, QShortcut, QAction, QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (QBoxLayout, QProgressBar, QTabBar, QToolButton, QApplication, QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QSystemTrayIcon, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction)
 
+from shiboken6 import isValid
+
 from . import __version__, commands, config, popups
+from . import sound, speech
 from .chatview import ChatPane
+from .findbar import FilterWindow, FindBar, compile_pattern, filter_lines, filter_title
 from .config import Config, NetworkConfig, Server
 from .protocol import URL_RE, lower, strip_format, trim_url
 from .session import ACTION, CHANNEL, HILITE, INFO, MSG, NOTICE, QUERY, SELF, SERVER, Buffer, Line, Session, User
@@ -36,6 +40,7 @@ from .updatewindow import UpdateBadge, UpdateDialog
 from .switchertree import SwitcherTree, tree_icon
 from .quitdialog import QuitDialog
 from .dcc import DccManager
+from .upnp import Manager as UpnpManager
 from .plugins import PluginManager
 
 
@@ -581,6 +586,8 @@ class MainWindow(FramelessWindow):
         self.detached: dict = {}
         self.dcc = DccManager(self)
         self.dcc.on_exists = self._file_exists
+        self.upnp = UpnpManager(self)          # 0.8.8 Settings > Network setup > Router: DCC ports on the router
+        self.upnp.apply(cfg)
         self.plugins = PluginManager(self)
         self._tabs_busy = False
         self.updater = Updater(cfg, cfg_dir, self)
@@ -588,6 +595,7 @@ class MainWindow(FramelessWindow):
         self.notifier.open_requested.connect(self._open_from_notice)
         self._last_sound = 0.0
         self._last_chime = -100.0
+        sound.player().report = self._sound_trouble     # 0.8.8: a file that can't play says so once, in a tab
         self.updater.install_requested.connect(self._install_update_now)
         self._update_restart = False
         self.update_window: UpdateDialog | None = None
@@ -632,6 +640,7 @@ class MainWindow(FramelessWindow):
         self.tabbar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tabbar.customContextMenuRequested.connect(self._tab_menu)
         self.tabbar.currentChanged.connect(self._tab_selected)
+        self.tabbar.tabBarDoubleClicked.connect(self._tab_double_clicked)     # 0.8.7: Settings > Windows
 
         mid = QWidget(self.split)
         ml = QVBoxLayout(mid)
@@ -669,9 +678,14 @@ class MainWindow(FramelessWindow):
         self.chat.menu_provider = self._chat_menu
         self.chat.colour_rule = self.chat_colour_rule
         self.chat.reply_jump = self.reply_jump
+        self.chat.double_click = self._chat_double
         self.chat.channel_double_clicked.connect(self._join_clicked)
         self.chat.central_requested.connect(self.open_channel_central)
         ml.addWidget(self.chat, 1)
+        self.find_bar = FindBar(self.cfg, mid, self.chat.view, lambda: self.chat.current, self._filter_from_bar,
+                                lambda: self.input.setFocus())         # 0.8.7 Ctrl+F: find bar under the chat
+        ml.addWidget(self.find_bar)
+        self.chat.on_switch = self.find_bar.retarget       # another tab on show: the bar searches that one
         self.typing_label = QLabel(mid, objectName="typing")       # 0.3.0 +typing: "Aiman is typing..."
         self.typing_label.setTextFormat(Qt.TextFormat.PlainText)
         self.typing_label.setStyleSheet(f"color: {self.cfg.theme.muted}; font-style: italic; padding: 1px 6px;")
@@ -880,7 +894,7 @@ class MainWindow(FramelessWindow):
         w.addSeparator()
         self._act(w, "Reset Marker Line", self.chat.reset_marker, "Ctrl+M")
         self._act(w, "C&lear Text", self._clear_current, "Ctrl+L", "clear")
-        self._act(w, "Search Text...", self._search, "Ctrl+F", "find")
+        self.search_action = self._act(w, "Search Text...", self._search, "Ctrl+F", "find")
         self._act(w, "Save Text...", self._save_text, "", "save")
 
         h = m.addMenu("&Help")
@@ -935,6 +949,7 @@ class MainWindow(FramelessWindow):
             s.pins_changed.connect(self.save_config)
             s.servers_moved.connect(self.save_config)
             s.on_command = self.run_command
+            s.active_window = lambda: self.buf     # 0.8.7: "Active window" in Settings > Windows
             s.on_dcc = self.dcc.incoming
             s.dcc_say = self.dcc.say
             s.server_hook = self.plugins.on_server
@@ -1117,8 +1132,82 @@ class MainWindow(FramelessWindow):
 
     def _tree_double_clicked(self, it, _col=0) -> None:
         b = it.data(0, Qt.ItemDataRole.UserRole)
-        if b is not None and b.kind == SERVER:
+        if b is not None:
+            self._switcher_double(b, it)
+
+    def _tab_double_clicked(self, index: int) -> None:
+        b = self.tabbar.tabData(index) if index >= 0 else None
+        if b is not None:
+            self._switcher_double(b)
+
+    # --- 0.8.7: Settings > Windows > Double-click does ---------------------------------
+
+    def _run_double(self, cmd: str, b: Buffer, nick: str = "", typed: bool = True) -> None:
+        """A Custom command… double-click: $nick, $chan and $network filled in, then run like typed input."""
+        text = cmd.strip()
+        if not text:
+            return
+        s = b.session
+        text = (text.replace("$network", s.net.name or s.network_token)
+                .replace("$chan", b.name if b.kind == CHANNEL else "")
+                .replace("$nick", nick or (b.name if b.kind == QUERY else s.nick)))
+        commands.run(self, s, b, self.expand_input(text, b) if typed else text)
+
+    def _switcher_double(self, b: Buffer, it=None) -> None:
+        """A double-click on a tab or a tree row. Expand/collapse is the tree's own: a tab has nothing to fold."""
+        c, s = self.cfg, b.session
+        if b.kind == SERVER:
+            act, cmd, nick = c.dbl_server, c.dbl_server_cmd, ""
+        elif b.kind == CHANNEL:
+            act, cmd, nick = c.dbl_channel, c.dbl_channel_cmd, ""
+        else:
+            act, cmd, nick = c.dbl_query, c.dbl_query_cmd, b.name
+        if act == "expand" and b.kind == SERVER and it is not None:
             it.setExpanded(not it.isExpanded())
+        elif act == "modes" and b.kind == CHANNEL:
+            self.open_channel_central(b)
+        elif act == "list":
+            self.open_channel_list(s)
+        elif act in ("part", "close"):
+            self.close_buffer(b)
+        elif act == "whois" and b.kind == QUERY and not b.name.startswith(("(", "=")):
+            s.whois(b.name, b)
+        elif act == "custom":
+            self._run_double(cmd, b, nick)
+
+    def _chat_double(self, b: Buffer | None, word: str, on_link: bool) -> bool | None:
+        """ChatView's double-click (a #channel word has already joined). True: done; False: Qt selects the word."""
+        if b is None or getattr(b, "session", None) is None:
+            return None
+        if on_link:
+            return False
+        c, s = self.cfg, b.session
+        nick = ""
+        if word:
+            u = b.users.get(s.fold(word))
+            if u is not None:
+                nick = u.nick
+            elif b.kind == QUERY and s.fold(word) == s.fold(b.name) and not b.name.startswith(("(", "=")):
+                nick = b.name
+        if nick and c.dbl_nick != "nothing":
+            if c.dbl_nick == "query":
+                commands.run(self, s, b, "/query " + nick)
+            elif c.dbl_nick == "whois":
+                s.whois(nick, b)
+            elif c.dbl_nick == "custom":
+                self._run_double(c.dbl_nick_cmd, b, nick)
+            return True
+        if c.dbl_chat == "modes":
+            if b.kind != CHANNEL:
+                return False
+            self.open_channel_central(b)
+        elif c.dbl_chat == "list":
+            self.open_channel_list(s)
+        elif c.dbl_chat == "custom" and c.dbl_chat_cmd.strip():
+            self._run_double(c.dbl_chat_cmd, b)
+        else:
+            return False
+        return True
 
     def _file_item(self, b: Buffer) -> None:
         """Puts a tab in its server's Channel or Private folder, making the folder when it's the first one."""
@@ -1586,8 +1675,8 @@ class MainWindow(FramelessWindow):
         word = pattern.lstrip("/").split(" ")
         if lower(" ".join(word[:2])) == "quote whois" or lower(word[0]) == "whois":
             s.whois(u.nick)      # keeps the answer in this tab
-        elif pattern:
-            commands.run(self, s, self.buf, "/" + pattern.lstrip("/").replace("%s", u.nick))
+        elif pattern:            # 0.8.7: $nick, $chan, $network too (Settings > Windows > Custom command)
+            self._run_double("/" + pattern.lstrip("/").replace("%s", u.nick), self.buf, u.nick, typed=False)
 
     def _nick_menu(self, pos) -> None:
         b = self.buf
@@ -2197,7 +2286,7 @@ class MainWindow(FramelessWindow):
         menu.addAction("Select All", chat.selectAll)
         menu.addSeparator()
         menu.addAction(icon("clear"), "Clear Text", self._clear_current)
-        menu.addAction(icon("find"), "Search Text...", self._search)
+        menu.addAction(icon("find"), "Search Text...", lambda: self._find_bar_for(chat).open())
         if b is not None and s is not None and not href:
             key = {CHANNEL: "channel", QUERY: "query", SERVER: "server"}.get(b.kind)
             if key:
@@ -2274,6 +2363,8 @@ class MainWindow(FramelessWindow):
     def _on_notify(self, b: Buffer, kind: str) -> None:
         if self.cfg.do_not_disturb:
             return
+        if kind in ("hilight", "priv", "notice"):
+            self._speak_event(b, kind)
         if kind in ("friend", "friend_off"):
             name = getattr(b.session, "last_friend", "")
             opts = self.cfg.friend_opts.get(name.lower(), {})
@@ -2370,12 +2461,7 @@ class MainWindow(FramelessWindow):
         self._last_chime = now
         name = name or ("bee" if self.cfg.popup_sound_name == "bee" else "soft")
         path = Path(__file__).resolve().parent / "assets" / "sounds" / f"{name}.wav"
-        try:
-            import winsound
-            winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
-        except (ImportError, RuntimeError):
-            return False
-        return True
+        return sound.play(str(path), self.cfg.sound_volume)
 
     def _pop_up(self, b: Buffer, kind: str) -> str:
         """A card above the taskbar for the line that just came in (notify.py does the flood rules)."""
@@ -2403,7 +2489,8 @@ class MainWindow(FramelessWindow):
             self.select_buffer(b)
 
     def _play_sound(self, kind: str, path: str = "") -> bool:
-        """The .wav picked for this event on the Sound page. True when one played (then no chime as well)."""
+        """The .wav, .mp3 or .ogg picked for this event on the Sound page, at the Sound page's volume. True when one
+        played (then no chime as well)."""
         path = path or self.cfg.sounds.get(kind)
         if not path:
             return False
@@ -2411,12 +2498,42 @@ class MainWindow(FramelessWindow):
         if now - self._last_sound < 2:                    # a flood plays one sound, not hundreds
             return True
         self._last_sound = now
-        try:
-            import winsound
-            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
-        except (ImportError, RuntimeError):
+        return sound.play(path, self.cfg.sound_volume)
+
+    def _sound_trouble(self, text: str) -> None:
+        """0.8.8: a sound file that can't play: one line in the server tab (once per file, see sound.py)."""
+        s = self.session or next(iter(self.sessions.values()), None)
+        if s is not None:
+            s.add(s.server_buffer, INFO, "*", text)
+
+    # --- 0.8.8 Speech: reading messages aloud (Settings > Sound) -------------------------------------
+
+    SPEAK_SWITCH = {"hilight": "speak_hilights", "priv": "speak_private", "notice": "speak_notices"}
+
+    def _speak_event(self, b: Buffer, kind: str) -> bool:
+        """A highlight, private message or notice read aloud when its Speech tick is on (and, by default, only
+        while BChat isn't the active window). Notices: from people only, like their pop-up card."""
+        c = self.cfg
+        if not getattr(c, self.SPEAK_SWITCH[kind]) or not b.lines or b.session is None:
             return False
-        return True
+        if c.speak_only_away and self.isActiveWindow():
+            return False
+        line = b.lines[-1]
+        left, text = line.left, line.text
+        if left == "*":                                    # /me: "* nick does something"
+            nick, _, text = text.partition(" ")
+        elif left.startswith("*") and left.endswith("*") and len(left) > 2:
+            nick = left.strip("*")                         # a private message shown in the current tab
+        else:
+            nick = left.strip("-<>")
+        nick = nick.lstrip("@+")                           # "<@ana>": the op/voice sign isn't read out
+        if kind == "notice":
+            from .control import SERVICES
+            if not nick or "." in nick or nick.lower() in SERVICES or b is b.session.server_buffer:
+                return False
+        elif kind == "hilight" and b.kind == QUERY:
+            kind = "priv"
+        return speech.speaker().say(speech.event_text(kind, nick, b.name, text), c.speak_voice, c.speak_rate)
 
     def _sync_tray(self) -> None:
         wanted = (self.cfg.tray_icon or self.cfg.minimize_to_tray or self.cfg.close_to_tray or self.cfg.start_in_tray
@@ -2795,12 +2912,36 @@ class MainWindow(FramelessWindow):
             self.buf.session.clear_buffer(self.buf)
             self.chat.reload(self.buf)
 
-    def _search(self) -> None:
-        text, ok = QInputDialog.getText(self, "Search Text", "Find:")
-        if ok and text:
-            if not self.chat.find(text, QTextDocument.FindFlag.FindBackward):
-                self.chat.moveCursor(self.chat.textCursor().MoveOperation.End)
-                self.chat.find(text, QTextDocument.FindFlag.FindBackward)
+    def _search(self, *_) -> None:
+        """Window > Search Text (Ctrl+F): open the find bar under the chat, or put the cursor back in it."""
+        self.find_bar.open()
+
+    def _find_bar_for(self, chat) -> FindBar:
+        """The find bar of the window a chat view lives in (a tab in its own window has its own bar)."""
+        for w in self.detached.values():
+            if w.chat is chat:
+                return w.find_bar
+        return self.find_bar
+
+    def _filter_from_bar(self, b: Buffer, text: str, case: bool, regex: bool) -> None:
+        self.open_filter(b, text, compile_pattern(text, case, regex))
+
+    def open_filter(self, b: Buffer, text: str, pat, new: bool = False) -> FilterWindow:
+        """/filter and the find bar's Filter...: the tab's matching lines in a window. new (-w): a window of its
+        own; otherwise the one filter window is used again."""
+        lines = filter_lines(b, pat)
+        w = getattr(self, "filter_window", None)
+        if new or w is None or not isValid(w):
+            w = FilterWindow(self)
+            if new:
+                w.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            else:
+                self.filter_window = w
+        w.show_result(filter_title(text, b.name, len(lines)), lines, b.name)
+        w.show()
+        w.raise_()
+        w.activateWindow()
+        return w
 
     def _save_text(self) -> None:
         if self.buf is None:
@@ -2965,9 +3106,13 @@ class MainWindow(FramelessWindow):
         self._style_emoji_btn()
         set_icon_theme(self.cfg.theme, self)
         set_light_palette(self.cfg.theme)
+        self.find_bar.apply_theme()
+        for w in self.detached.values():
+            w.find_bar.apply_theme()
         for b in [b for s in self.sessions.values() for b in s.all_buffers()]:
             self._buffer_changed(b)
         self.announcer.refresh()
+        self.upnp.apply(self.cfg)
         config.save(self.cfg, self.cfg_dir)
 
     def _apply_widget_prefs(self) -> None:
@@ -3616,6 +3761,7 @@ class MainWindow(FramelessWindow):
                 self.cfg.ask_on_quit = False
         self.notifier.clear()
         self.dcc.shutdown()
+        self.upnp.shutdown()                   # 0.8.8: the router's DCC ports close again
         for s in self.sessions.values():
             s.disconnect_from_network()
         self.cfg.win_maximized = self.isMaximized()

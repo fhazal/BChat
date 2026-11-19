@@ -130,7 +130,8 @@ class HighlightDialog(FramedDialog):
     def _sound_picked(self, _i: int) -> None:
         value = self.sound.currentData()
         if value == "?":
-            path, _ = QFileDialog.getOpenFileName(self, "Highlight sound", "", "Sounds (*.wav)")
+            from .sound import FILTER
+            path, _ = QFileDialog.getOpenFileName(self, "Highlight sound", "", FILTER)
             if path:
                 self.sound_value = path
         else:
@@ -144,11 +145,9 @@ class HighlightDialog(FramedDialog):
         if not path:
             path = getattr(self.parent(), "cfg", None).sounds.get("hilight", "") if getattr(self.parent(), "cfg", None) else ""
         if path:
-            try:
-                import winsound
-                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
-            except (ImportError, RuntimeError):
-                pass
+            from . import sound
+            cfg = getattr(self.parent(), "cfg", None)
+            sound.play(path, getattr(cfg, "sound_volume", 100))
 
     def result_rule(self) -> dict:
         bt = self.colour_group.checkedButton()

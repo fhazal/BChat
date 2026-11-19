@@ -103,6 +103,34 @@ def run(userdata):
         del win.cfg.sounds["x"]
         return True
     note("sound call doesn't fail", sound)
+    # 0.8.8: .mp3 and .ogg decode through the bundled FFmpeg plugin (muted), and Windows' speech engine loads
+    MEDIA = %%MEDIA%%
+    def media(name):
+        from PySide6.QtCore import QEventLoop, QTimer, QUrl
+        from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+        out = QAudioOutput(); out.setMuted(True)
+        pl = QMediaPlayer(); pl.setAudioOutput(out)
+        seen = []
+        loop = QEventLoop()
+        def st(x):
+            seen.append(x)
+            if x in (QMediaPlayer.MediaStatus.EndOfMedia, QMediaPlayer.MediaStatus.InvalidMedia):
+                loop.quit()
+        pl.mediaStatusChanged.connect(st)
+        pl.errorOccurred.connect(lambda *_: loop.quit())
+        QTimer.singleShot(8000, loop.quit)
+        pl.setSource(QUrl.fromLocalFile(MEDIA + "/" + name)); pl.play()
+        loop.exec()
+        pl.stop()
+        return QMediaPlayer.MediaStatus.EndOfMedia in seen and pl.error() == QMediaPlayer.Error.NoError
+    note("mp3 sound decodes (FFmpeg)", lambda: media("tone.mp3"))
+    note("ogg sound decodes (FFmpeg)", lambda: media("tone.ogg"))
+    def speech_engine():
+        from PySide6.QtTextToSpeech import QTextToSpeech
+        from bchat import speech
+        names = list(QTextToSpeech.availableEngines())
+        return ("sapi" in names or "winrt" in names) and speech.Speaker().available()
+    note("speech engine (SAPI or WinRT) loads", speech_engine)
     note("autostart skipped from no crash", lambda: callable(win.set_autostart))
     # TEST3 (0.3.0): Start with Windows self-repair, on a throwaway key; the real Run value is never changed here
     def autostart_check():
@@ -310,7 +338,8 @@ xchat.hook_timer(3000, run)
 # entry with the private release key; the published entry proves the same thing without touching that key.
 _pub = json.loads((Path(__file__).with_name("data") / "signed-release-entry.json").read_text())
 _signed = {k: _pub[k] for k in ("version", "sha256", "sig")}
-PROBE = PROBE.replace("%SIGNED%", repr(_signed)).replace("%EXPECT%", repr(ARGS.expect))   # the % formatting above turned %%SIGNED%% into %SIGNED%
+PROBE = PROBE.replace("%SIGNED%", repr(_signed)).replace("%EXPECT%", repr(ARGS.expect)).replace(
+    "%MEDIA%", repr((ROOT / "tests" / "data").as_posix()))   # the % formatting above turned %%SIGNED%% into %SIGNED%
 (cfgdir / "addons" / "probe.py").write_text(PROBE)
 
 payload = bytes(range(256)) * 2000

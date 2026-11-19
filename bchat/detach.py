@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QShortcut
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSplitter, QVBoxLayout, QWidget
 
 from . import commands
 from .chatview import ChatView
+from .findbar import FindBar
 from .protocol import strip_format
 from .session import CHANNEL, SERVER, Buffer
 from .userlist import UserList
@@ -31,14 +33,22 @@ class DetachedWindow(FramedDialog):
         row.addWidget(self.attach_btn)
         self.body.addLayout(row)
         split = QSplitter(Qt.Orientation.Horizontal)
-        self.chat = ChatView(win.cfg, split)
+        chat_box = QWidget(split)               # the chat with its find bar under it (0.8.7)
+        chat_lay = QVBoxLayout(chat_box)
+        chat_lay.setContentsMargins(0, 0, 0, 0)
+        chat_lay.setSpacing(0)
+        self.chat = ChatView(win.cfg, chat_box)
         self.chat.menu_provider = self._chat_menu
         self.chat.colour_rule = win.chat_colour_rule
         self.chat.reply_jump = win.reply_jump
         self.chat.channel_double_clicked.connect(win._join_clicked)
         self.chat.central_requested.connect(win.open_channel_central)
         self.chat.show_buffer(b)
-        split.addWidget(self.chat)
+        chat_lay.addWidget(self.chat, 1)
+        self.find_bar = FindBar(win.cfg, chat_box, lambda: self.chat, lambda: self.b, win._filter_from_bar,
+                                lambda: self.input.setFocus())
+        chat_lay.addWidget(self.find_bar)
+        split.addWidget(chat_box)
         side = QWidget(split)
         lay = QVBoxLayout(side)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -57,6 +67,7 @@ class DetachedWindow(FramedDialog):
         self.input.fixed = b
         self.input.returnPressed.connect(self._entered)
         self.body.addWidget(self.input)
+        self.find_shortcut = QShortcut(win.search_action.shortcut(), self, self.find_bar.open)   # Ctrl+F here too
         s.line_added.connect(self.chat.add_line)
         s.users_changed.connect(self._users)
         s.buffer_changed.connect(self._changed)

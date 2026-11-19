@@ -9,6 +9,7 @@ from .protocol import lower, mirc_mask, strip_format
 from .config import NetworkConfig, Server
 from .session import CHANNEL, ERROR, INFO, QUERY, Buffer, Session
 from . import everyday
+from . import extracmds
 
 
 # XChat's default user commands (src/common/xchat.c). &2 = the rest from word 2, %2 = word 2, %c channel, %n own nick
@@ -23,12 +24,12 @@ ALIASES = {
 _BUILTIN: set[str] = set()      # filled below
 _BUILTIN_SELF: dict[str, bool] = {}
 COMMAND_NAMES = sorted(set(ALIASES) | {
-    "allchan", "allserv", "away", "back", "ban", "clear", "close", "ctcp", "cycle", "dehop", "deop", "devoice", "discon",
+    "allchan", "allserv", "away", "back", "ban", "clear", "close", "ctcp", "ctcps", "cycle", "dehop", "deop", "devoice", "discon",
     "chat", "dcc", "load", "reload", "send", "unload", "disconnect", "echo", "exec", "flood", "flushq", "ghost", "help", "hop", "id", "ignore", "invite", "j", "join", "kick", "kickban",
-    "lastlog", "leave", "list", "mdeop", "me", "mkick", "mode", "mop", "msg", "names", "nctcp", "newserver", "nick",
+    "filter", "lastlog", "leave", "list", "mdeop", "me", "mkick", "mode", "mop", "msg", "names", "nctcp", "newserver", "nick",
     "notice", "notify", "np", "op", "part", "ping", "query", "quit", "quote", "raw", "reconnect", "say", "server", "topic", "unban",
     "sysinfo", "unignore", "url", "voice", "wallchan", "wallchop", "whois", "wi",
-    "timer", "timers", "alias", "channel", "partall", "online", "motd", *everyday.NAMES,
+    "timer", "timers", "alias", "channel", "partall", "online", "motd", *everyday.NAMES, *extracmds.NAMES,
 })
 
 
@@ -57,6 +58,7 @@ HELP = {
     "discon": "DISCON: disconnects from the server",
     "echo": "ECHO <text>: prints text here, nothing is sent",
     "exec": "EXEC [-o] <program>: runs a program. Its output prints here, or goes to the channel with -o",
+    "ctcps": "CTCPS [on|off]: answer CTCP requests (VERSION, PING, TIME...) or not. ACTION and DCC always work",
     "flood": "FLOOD [+c|-c] [on|off|clear] [<bytes> <maxlines> <maxmessages> <ignoretime>]: flood protection for automatic CTCP replies",
     "flushq": "FLUSHQ: drops the lines waiting to be sent",
     "ghost": "GHOST <nick> <password>: frees your nick through NickServ",
@@ -70,6 +72,7 @@ HELP = {
     "join": "JOIN [-n] <channel> [<key>]: joins a channel and shows it. -n joins without switching to it",
     "kick": "KICK [<channel>] <nick> [<reason>]: kicks someone",
     "kickban": "KICKBAN [<channel>] <nick> [<type>] [<kick message>]: bans, then kicks (BAN -k; the types are BAN's). KICKBAN -a <nick> bans their account",
+    "filter": "FILTER [-w] [-c] [-r] <text>: copies this tab's lines with the text into a window. -c matches case, -r takes a regular expression, -w opens a new window",
     "lastlog": "LASTLOG <text>: finds text in this tab",
     "list": "LIST [<options>]: opens the Channel List and fetches it",
     "mdeop": "MDEOP: takes ops from everyone else here",
@@ -122,6 +125,7 @@ HELP = {
     "motd": "MOTD: shows the server's welcome message (also when Preferences > General skips it)",
     "channel": "CHANNEL: opens Channel Central for this channel (topic, modes, bans, exceptions, invites)",
     **everyday.HELP,
+    **extracmds.HELP,
 }
 
 
@@ -627,6 +631,26 @@ def _flood_command(ui, s: Session, b: Buffer, args: list[str]) -> None:
                         f"after {c.flood_bytes} bytes, {c.flood_lines} lines, {c.flood_per_user} per user, ignore for {c.flood_ignore} s.")
 
 
+def _ctcps_command(ui, s: Session, b: Buffer, args: list[str]) -> None:
+    """0.8.7 /ctcps [on|off]: the same setting as Settings > Advanced > Reply to CTCP requests."""
+    c = s.cfg
+    word = args[0].lower() if args else ""
+    if not word:
+        s.add(b, INFO, "*", f"CTCP replies: {'on' if c.ctcp_reply_enabled else 'off'}")
+        return
+    if word not in ("on", "off"):
+        s.add(b, ERROR, "*", "Usage: " + HELP["ctcps"])
+        return
+    c.ctcp_reply_enabled = word == "on"
+    save = getattr(ui, "save_config", None)
+    if callable(save):
+        save()
+    if c.ctcp_reply_enabled:
+        s.add(b, INFO, "*", "CTCP replies are on.")
+    else:
+        s.add(b, INFO, "*", "CTCP replies are off: VERSION, PING, TIME, FINGER, CLIENTINFO get no answer.")
+
+
 def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
     # 0.8.5: typed "!seen Bob" is chat, as in any client; "!" runs a program only from user commands and aliases.
     # Nothing, spaces only, or "/ hello" (no command name) is never sent.
@@ -655,7 +679,8 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
     cmd, _, rest = text[1:].partition(" ")
     cmd = cmd.lower()
     rest = rest.strip()
-    if not s.net.servers and cmd not in ("server", "newserver", "clear", "close", "help", "echo", "allserv", *everyday.LOCAL):
+    if not s.net.servers and cmd not in ("server", "newserver", "clear", "close", "help", "echo", "allserv", *everyday.LOCAL,
+                                         *extracmds.LOCAL):
         s.add(b, ERROR, "*", "This tab has no server yet. Type /server <host> [port or +port for SSL].")
         return
     args = rest.split()
@@ -855,6 +880,8 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
                 s.send("NOTICE", "@" + chan, rest)
     elif cmd == "flood":
         _flood_command(ui, s, b, args)
+    elif cmd == "ctcps":
+        _ctcps_command(ui, s, b, args)
     elif cmd == "flushq":
         waiting = len(s._queue)
         s._queue.clear()
@@ -913,6 +940,21 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
     elif cmd == "allserv" and rest:
         for other in list(ui.sessions.values()):
             run(ui, other, other.server_buffer, "/" + rest.lstrip("/"))
+    elif cmd == "filter":                      # 0.8.7: the tab's matching lines in a window of their own
+        words = rest.split()
+        picked, _secs, bad = _switches(words, "wcr")
+        n = len(rest.split()) - len(words)
+        text_ = rest.split(None, n)[n].strip() if n and words else ("" if n else rest)
+        if bad or not text_:
+            s.add(b, ERROR, "*", "Usage: " + HELP["filter"])
+        else:
+            from .findbar import compile_pattern
+            try:
+                pat = compile_pattern(text_, "c" in picked, "r" in picked)
+            except re.error as e:
+                s.add(b, ERROR, "*", f"/filter: bad pattern: {e}")
+            else:
+                ui.open_filter(b, text_, pat, new="w" in picked)
     elif cmd == "lastlog" and rest:
         hits = [l for l in b.lines if rest.lower() in strip_format(l.text).lower()]
         s.add(b, INFO, "*", f"--- Search for {rest}: {len(hits)} found")
@@ -958,15 +1000,18 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
             ui.open_channel_central(b)
     elif cmd in everyday.NAMES:
         everyday.run(ui, s, b, cmd, args, rest)
+    elif cmd in extracmds.NAMES:
+        extracmds.run(ui, s, b, cmd, args, rest)
     elif cmd == "help" and args:
         about = HELP.get(args[0].lstrip("/").lower())
         s.add(b, INFO, "*", about or f"No help for {args[0]}. Help > Contents lists every command.")
     elif cmd == "help":
         s.add(b, INFO, "*", "Commands: /join /part /msg /query /me /nick /whois /topic /notice /op /deop /voice "
                             "/devoice /kick /ban /unban /kickban /mode /invite /away /back /quote /ctcp /ping /clear /close "
-                            "/server /newserver /say /echo /names /list /id /ghost /cycle /allchan /allserv /lastlog /reconnect /discon /quit "
+                            "/server /newserver /say /echo /names /list /id /ghost /cycle /allchan /allserv /lastlog /filter /reconnect /discon /quit "
                             "/ignore /unignore /nctcp /url /flood /flushq /mop /mdeop /mkick /wallchan /wallchop "
                             + " ".join("/" + n for n in everyday.NAMES) + " "
+                            + " ".join("/" + n for n in extracmds.NAMES) + " "
                             + " ".join("/" + a for a in sorted(ALIASES)))
     else:
         s.send_labeled(b, text[1:])

@@ -146,7 +146,7 @@ BChat only acts in channels where you have **@** yourself. It waits 2 to 4 secon
 Tick **Protect** on someone in **Auto-Op & Protect**: if another person takes their @ or + away, or bans them, BChat gives it back or removes the ban. It never kicks anyone, and it leaves changes by you, services and the server alone. If it keeps being taken away, BChat stops after 3 times in a minute and says so, so it can't start an op war.
 
 ### How do I find something someone said earlier?
-**Window → Search Text...** (`Ctrl+F`) searches the tab you're in. `/lastlog word` lists every line with that word.
+**Window → Search Text...** (`Ctrl+F`) opens a find bar under the chat: every match lights up as you type, `Enter` goes to the next one, `Shift+Enter` to the one before, and `Esc` closes the bar. **Aa** matches case and **.\*** takes a regular expression. **Filter...** copies every matching line into a window of its own, where you can copy them all or save them to a file. `/filter word` does the same (`-c` matches case, `-r` regular expression, `-w` a new window each time), and `/lastlog word` lists the lines in the tab itself.
 
 ### Can I hide the server's welcome message?
 Yes: **Settings → Preferences → General**, tick **Skip the server's welcome message (MOTD)** (off at first). Type `/motd` to read it any time.
@@ -182,7 +182,7 @@ Right-click their nick and choose **Slap!** (in a channel, one nick at a time). 
 Right-click a nick and choose **Add to Friends List**, or type `/notify nick`. **Window → Friends List...** shows which friends are online, for how long, and your note about them.
 
 ### Can I keep a note or a sound per friend?
-Yes: in **Window → Friends List...**, pick a friend and click **Edit...**. Write a **Note** (it's the same note as in their Address Book card), and choose what happens when they come online or leave: **Show a pop-up**, **Play a sound** (your pop-up sound, or a .wav you pick), **Ask WHOIS**. When they leave, the server tab says how long they were online.
+Yes: in **Window → Friends List...**, pick a friend and click **Edit...**. Write a **Note** (it's the same note as in their Address Book card), and choose what happens when they come online or leave: **Show a pop-up**, **Play a sound** (your pop-up sound, or a .wav, .mp3 or .ogg you pick), **Ask WHOIS**. When they leave, the server tab says how long they were online.
 
 ### How do I colour nicks or keep notes about people?
 **Settings → Advanced → Nick Colours...** gives nicks colours by rules, and other nicks automatic colours. `/cnick Wira teal` gives one nick a colour, `/cnick Wira -r` takes it off. To keep a note about someone, right-click their nick and choose **Address Book...**; **Window → Address Book...** lists everyone you saved.
@@ -223,6 +223,9 @@ It also shows a card when you're **kicked**, when a network **disconnects** (not
 
 ### Can I change or turn off the notification sound?
 **Settings → Preferences → Alerts → Sound with pop-ups**: **Soft chime** (the default), **Bee buzz** or **None**; the play button lets you hear it. It plays at most once every 10 seconds, never during full-screen games or Do Not Disturb, and a sound you picked yourself on the **Sound** page plays instead of it.
+
+### Can BChat read messages aloud?
+Yes: **Settings → Preferences → Sound → Speech**. Tick **Read highlights aloud**, **Read private messages** or **Read notices**, pick a voice and speed, and click **Test**. By default it only speaks while BChat isn't the active window. `/speak text` reads a line aloud, `/speak off` stops it. Sounds on the same page can be .wav, .mp3 or .ogg, and **Volume** sets how loud they all play.
 
 ### How long do the cards stay?
 **Settings → Preferences → Alerts → Keep pop-ups on screen for**: 4, 6 (the default) or 10 seconds, or **Until I close them**. Hovering a card keeps it open.
@@ -274,6 +277,12 @@ Yes. In **Settings → Preferences → Colors**, click any colour to change it. 
 
 ### How do I change the chat font?
 **Settings → Preferences → Text box**.
+
+### Can one channel use a different font?
+Yes: in that channel type `/font 12 Consolas` (size, then font name). Only that window changes, and BChat remembers it. `/font -d` goes back to the normal font, `/font` alone shows the current one.
+
+### Can I make long chats easier to follow?
+**Settings → Preferences → Text box**: **Shade every other line** gives every second line a faint background, **Line between each message** draws a thin line under each one. `/linesep` puts a separator line in the current window.
 
 ---
 
@@ -343,6 +352,9 @@ BChat asks **File already exists**: **Resume** carries on where an earlier downl
 Yes. Right-click someone → **Trust for Files and Chats**, then set **Settings → Preferences → File transfers → Auto accept file offers:** to **From trusted people only**. Their whole address must match (a nick alone never does), and programs still always ask. The trusted list is on the same page.
 ### My antivirus blocked BChat after I received a program. Why?
 Some antivirus programs (Bitdefender, for example) treat "a new app received a program over the internet" as suspicious, even when the app is BChat. See [antivirus](#my-antivirus-blocked-or-removed-bchat) below. If you only want to see the warning, click **Cancel** at **Accept this file?**: nothing is downloaded then.
+
+### Someone can't receive my files, or a network wants ident. What can I turn on?
+**Settings → Preferences → Network setup**: under **Router (UPnP)**, **Open file-transfer ports on my router automatically** asks your router to open the file-transfer ports (a green dot means they are open), and under **Ident**, **Answer ident requests while connecting** answers a server's ident check until you are connected. Both are off by default. The same page offers Socks4 and Socks4a proxies besides Socks5 and HTTP.
 
 ---
 

@@ -10,14 +10,20 @@ datas += collect_data_files('spellchecker')
 # /np: Windows media controls through Microsoft's winrt packages (a namespace package PyInstaller can't see alone)
 winrt_mods = collect_submodules('winrt') + ['winrt.windows.media.control', 'winrt.windows.media', 'winrt.windows.foundation',
               'winrt.windows.foundation.collections', 'winrt.windows.storage.streams']
+# 0.8.8: .mp3/.ogg sounds through Qt Multimedia's FFmpeg plugin. Its FFmpeg DLLs sit next to PySide6 and are only
+# loaded by the plugin, so they are named here rather than left to the dependency scan.
+import PySide6
+_pyside = os.path.dirname(PySide6.__file__)
+ffmpeg_dlls = [(os.path.join(_pyside, f), "PySide6") for f in os.listdir(_pyside)
+               if f.lower().endswith(".dll") and f.lower().startswith(("avcodec-", "avformat-", "avutil-", "swresample-", "swscale-"))]
 
 
 a = Analysis(
     [os.path.join(ROOT, "packaging", "run_bchat.py")],
     pathex=[ROOT],
-    binaries=[],
+    binaries=ffmpeg_dlls,
     datas=datas,
-    hiddenimports=['json', 'random', 'datetime', 'threading', 'socket', 'subprocess', 'urllib.request', 'urllib.parse', 'http.client', 'sqlite3', 'csv', 'hashlib', 'html', 'xml.etree.ElementTree', 'collections', 'itertools', 'math', 'string', 'textwrap', 'shlex', 'glob', 'tempfile', 'queue', 'cryptography.hazmat.primitives.asymmetric.ed25519', 'PySide6.QtSvg'] + winrt_mods,
+    hiddenimports=['json', 'random', 'datetime', 'threading', 'socket', 'subprocess', 'urllib.request', 'urllib.parse', 'http.client', 'sqlite3', 'csv', 'hashlib', 'html', 'xml.etree.ElementTree', 'collections', 'itertools', 'math', 'string', 'textwrap', 'shlex', 'glob', 'tempfile', 'queue', 'cryptography.hazmat.primitives.asymmetric.ed25519', 'PySide6.QtSvg', 'PySide6.QtMultimedia', 'PySide6.QtTextToSpeech'] + winrt_mods,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

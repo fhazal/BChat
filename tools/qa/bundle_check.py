@@ -64,9 +64,18 @@ NEEDED = {
     "GIF image plugin": q / "plugins" / "imageformats" / "qgif.dll",
     "spell-check word list (English)": inside / "spellchecker" / "resources" / "en.json.gz",
     "Python SSL": inside / "_ssl.pyd",
+    # 0.8.8: .mp3/.ogg sounds (Qt Multimedia + its FFmpeg plugin) and reading messages aloud (Qt Text to Speech)
+    "Qt multimedia": q / "Qt6Multimedia.dll",
+    "FFmpeg media plugin": q / "plugins" / "multimedia" / "ffmpegmediaplugin.dll",
+    "Qt text to speech": q / "Qt6TextToSpeech.dll",
+    "speech plugin (SAPI)": q / "plugins" / "texttospeech" / "qtexttospeech_sapi.dll",
+    "speech plugin (WinRT)": q / "plugins" / "texttospeech" / "qtexttospeech_winrt.dll",
 }
 for what, p in NEEDED.items():
     res[f"on disk: {what}"] = p.exists()
+# the FFmpeg libraries carry their version in the name (avcodec-63.dll ...), so they are found by pattern
+for lib in ("avcodec", "avformat", "avutil", "swresample"):
+    res[f"on disk: FFmpeg {lib}"] = any(q.glob(f"{lib}-*.dll"))
 # python312.dll is tied to the build's Python; a different minor version would be python313.dll etc.
 if not (inside / "python312.dll").exists():
     other = sorted(x.name for x in inside.glob("python3*.dll") if x.name != "python3.dll")

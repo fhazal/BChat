@@ -314,6 +314,8 @@ class Config:
     line_spacing: int = 112        # percent
     max_lines: int = 5000          # scrollback per tab
     marker_line: bool = True       # red "read up to here" line
+    shade_lines: bool = False      # 0.8.8 Settings > Text: faint background on every other line
+    line_rules: bool = False       # 0.8.8 Settings > Text: thin dim line between messages
     rank_lights: str = "off"       # off | lights | slot (lights + empty slot so text lines up)
     color_nicks: bool = False      # each nick a fixed colour, XChat's "Colored nick names"
     nick_colours: list = field(default_factory=list)   # 0.3.0 rules: {"mask", "colour" (a palette name), "net"}
@@ -388,19 +390,29 @@ class Config:
     log_asked: bool = False           # the one-time "BChat will save your chats" question was answered
     log_stamps: bool = True
     log_stamp_format: str = "%b %d %H:%M:%S "
-    # Sound: event -> .wav file
+    # Sound: event -> .wav file (0.8.8: or .mp3 / .ogg)
     sounds: dict = field(default_factory=dict)
+    sound_volume: int = 100        # 0.8.8: one volume for every sound, 0-100 (100 = as before)
+    speak_hilights: bool = False   # 0.8.8 Speech (Settings > Sound): read highlights aloud
+    speak_private: bool = False    # ... private messages
+    speak_notices: bool = False    # ... notices from people
+    speak_voice: str = ""          # a voice name; "" = Windows default
+    speak_rate: int = 0            # -10 (slow) .. 10 (fast)
+    speak_only_away: bool = True   # only when BChat is not the active window
     # Network setup
     bind_host: str = ""
     bind_strict: bool = False      # 0.6.0: bind address missing (VPN off) -> don't connect at all
     ip_mode: str = "auto"          # 0.6.0: auto | ipv4 | ipv6 (Preferences > Network setup > Internet)
     dcc_ipv6: bool = True          # 0.6.0: file transfers and direct chats over IPv6 when the IRC connection is IPv6
-    proxy_type: str = "none"       # none | socks5 | http
+    proxy_type: str = "none"       # none | socks5 | http | socks4 | socks4a (0.8.8)
     proxy_host: str = ""
     proxy_port: int = 0
     proxy_auth: bool = False
     proxy_user: str = ""
     proxy_password: str = ""
+    identd_on: bool = False        # 0.8.8: answer ident (port 113) while connecting, until the welcome
+    identd_user: str = ""          # the user ID it gives; "" = the network's username, else "bchat"
+    upnp_on: bool = False          # 0.8.8: open the DCC port range on the router (UPnP)
     # File transfers
     dcc_auto: int = 0              # 0 ask, 1 auto accept from everyone, 2 only from trusted people (never programs)
     dcc_trusted: list = field(default_factory=list)   # 0.6.0: {"nick", "mask" (*!user@host), "net" ('' = all)}
@@ -448,6 +460,23 @@ class Config:
     tab_trunc: int = 0             # shorten labels to this many letters, 0 = never
     tab_focus: int = 2             # new tabs take the front: 0 never, 1 always, 2 only requested
     notices_tab: bool = False      # server notices in their own tab
+    # 0.8.7 Settings > Windows > Where events show: active | server | messages | query
+    show_whois: str = "active"     # WHOIS replies (the window the /whois was typed in)
+    show_notices: str = "active"   # private notices with no channel context (server notices: notices_tab)
+    show_ctcp: str = "active"      # CTCP requests to me
+    show_away: str = "active"      # 301 away replies outside a /whois
+    show_nicks: str = "shared"     # nick changes: shared (every channel we share) | active | server
+    # 0.8.7 Settings > Windows > Double-click does (nick list: ul_double above)
+    dbl_channel: str = "nothing"   # channel tab / tree item: nothing | modes | list | part | custom
+    dbl_query: str = "nothing"     # query tab / tree item: nothing | whois | close | custom
+    dbl_server: str = "expand"     # server tab / tree item: expand | nothing | list | custom
+    dbl_chat: str = "modes"        # empty chat area: modes (channels only) | nothing | list | custom
+    dbl_nick: str = "nothing"      # a nick in chat text: nothing (= the chat area's) | query | whois | custom
+    dbl_channel_cmd: str = ""
+    dbl_query_cmd: str = ""
+    dbl_server_cmd: str = ""
+    dbl_chat_cmd: str = ""
+    dbl_nick_cmd: str = ""
     auto_dialog: bool = True       # a new tab on a private message
     dialogs_in_windows: bool = False
     # Interface extras
@@ -472,6 +501,7 @@ class Config:
     user_commands: list | None = None
     auto_replace: list | None = None
     ctcp_replies: list | None = None
+    ctcp_reply_enabled: bool = True   # 0.8.7 /ctcps on|off: off = no replies (ACTION and DCC still work)
     url_handlers: list | None = None
     dlg_buttons: list | None = None
     ul_buttons: list | None = None

@@ -14,7 +14,8 @@ from .session import ACTION, CHANNEL, ERROR, HILITE, INFO, MSG, QUERY, SELF, Buf
 
 NAMES = ("describe", "omsg", "qmsg", "qme", "ctcpreply", "tnick", "mnick", "fullname", "autojoin", "perform",
          "clearall", "markasread", "savebuf", "loadbuf", "strip", "timestamp", "log", "titlebar", "dns", "links", "uwho",
-         "aop", "avoice", "abook", "cnick", "beep", "flash", "splay", "donotdisturb", "play", "run")
+         "aop", "avoice", "abook", "cnick", "beep", "flash", "splay", "donotdisturb", "play", "run",
+         "speak")
 
 HELP = {
     "describe": "DESCRIBE <nick or #channel> <action>: an action (/me) to someone else's tab, without switching to it",
@@ -48,7 +49,8 @@ HELP = {
              "lists the colours",
     "beep": "BEEP [<times>]: beeps",
     "flash": "FLASH: flashes BChat's taskbar button",
-    "splay": "SPLAY <file.wav> | STOP: plays a sound, only on this PC",
+    "splay": "SPLAY <file.wav, .mp3 or .ogg> | STOP: plays a sound, only on this PC",
+    "speak": "SPEAK <text> | OFF: reads the text aloud, only on this PC. SPEAK OFF stops reading now",
     "donotdisturb": "DONOTDISTURB [on|off]: no sounds, flashes or pop-up cards until it is off again. Alone: says which",
     "play": "PLAY [-e] [#channel or nick] <file.txt> [<ms between lines>]: sends a text file line by line. "
             "-e shows it only to you. PLAY STOP stops",
@@ -57,7 +59,7 @@ HELP = {
 
 # these work without a server (a tab made with /newserver -noconnect, or before the first connect)
 LOCAL = ("clearall", "markasread", "savebuf", "loadbuf", "strip", "timestamp", "log", "titlebar", "abook", "cnick",
-         "beep", "flash", "splay", "donotdisturb", "run", "aop", "avoice")
+         "beep", "flash", "splay", "donotdisturb", "run", "aop", "avoice", "speak")
 
 ON = ("on", "yes", "1", "true")
 OFF = ("off", "no", "0", "false")
@@ -483,14 +485,10 @@ def _beep(args) -> None:
 
 
 def _splay(ui, s, b, rest) -> None:
+    from . import sound
     word = rest.strip().strip('"')
-    try:
-        import winsound
-    except ImportError:
-        _err(s, b, "Sounds play only on Windows.")
-        return
     if word.lower() == "stop":
-        winsound.PlaySound(None, 0)
+        sound.player().stop()
         return
     if not word:
         _err(s, b, HELP["splay"])
@@ -499,13 +497,28 @@ def _splay(ui, s, b, rest) -> None:
     if not path.is_file():
         _err(s, b, f"No such file: {path}")
         return
-    if path.suffix.lower() != ".wav":
-        _err(s, b, "/splay plays .wav files.")
+    if path.suffix.lower() not in sound.EXTENSIONS:
+        _err(s, b, "/splay plays .wav, .mp3 and .ogg files.")
         return
-    try:
-        winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
-    except RuntimeError:
+    if not sound.play(str(path), ui.cfg.sound_volume):
         _err(s, b, f"Couldn't play {path.name}.")
+
+
+def _speak(ui, s, b, rest) -> None:
+    """0.8.8: /speak <text> reads it aloud (after anything already being read); /speak off stops now."""
+    from . import speech
+    text = rest.strip()
+    if not text:
+        _err(s, b, HELP["speak"])
+        return
+    talker = speech.speaker()
+    if text.lower() in ("off", "stop"):
+        talker.stop()
+        return
+    if not talker.available():
+        _err(s, b, speech.UNAVAILABLE)
+        return
+    talker.say(text, ui.cfg.speak_voice, ui.cfg.speak_rate)
 
 
 def _uwho(ui, s, b, args) -> None:
@@ -716,6 +729,8 @@ def run(ui, s: Session, b: Buffer, cmd: str, args: list[str], rest: str) -> None
         QApplication.alert(ui)
     elif cmd == "splay":
         _splay(ui, s, b, rest)
+    elif cmd == "speak":
+        _speak(ui, s, b, rest)
     elif cmd == "donotdisturb":
         _on_off(ui, s, b, cmd, args, cfg.do_not_disturb, "Do not disturb", lambda on: ui.set_do_not_disturb(on))
     elif cmd == "play":

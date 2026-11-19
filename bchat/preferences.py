@@ -4,24 +4,45 @@ Pages and options follow XChat 2.8.8's src/fe-gtk/setup.c. Every page works. Not
 """
 from __future__ import annotations
 
+import html
 import time
 from dataclasses import fields
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QColorDialog, QComboBox, QFileDialog, QFontDialog, QFrame, QGridLayout,
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QColorDialog, QComboBox, QFileDialog, QFontDialog, QFrame, QGridLayout,
                                QHBoxLayout, QLabel, QLineEdit, QPushButton, QRadioButton, QScrollArea, QSpinBox, QStackedWidget,
-                               QHeaderView, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QHeaderView, QStyle, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .config import DARK_THEMES, LIGHT_THEME_ORDER, PALETTES, THEME_NAMES, Config, Theme, is_custom, make_theme
 from .widgets import FramedDialog, icon
 
-CATEGORIES = {"Interface": ["Text box", "Input box", "User list", "Channel switcher", "Colors"],
+CATEGORIES = {"Interface": ["Text box", "Input box", "User list", "Channel switcher", "Windows", "Colors"],
               "Chatting": ["Alerts", "Highlights", "General", "Logging", "Sound", "Now Playing", "Advanced"],
-              "Network": ["Network setup", "Flood", "Local", "File transfers"],
+              "Network": ["Network setup", "Flood", "Local", "File transfers"],     # "Trusted people" hangs under File transfers
               "BChat": ["Updates", "Lock"]}
-BUILT = ("Flood", "Text box", "Input box", "User list", "Channel switcher", "Colors", "Alerts", "Highlights", "General", "Logging", "Sound", "Now Playing", "Advanced", "Network setup", "Local", "File transfers", "Updates", "Lock")
+BUILT = ("Flood", "Text box", "Input box", "User list", "Channel switcher", "Windows", "Colors", "Alerts", "Highlights", "General", "Logging", "Sound", "Now Playing", "Advanced", "Network setup", "Local", "File transfers", "Trusted people", "Updates", "Lock")
+SUBPAGES = {"File transfers": ["Trusted people"]}       # shown one level deeper in the tree
+PAGE_FIT = 0.85                                         # the dialog never takes more of the screen's height than this
 SWITCHER_POS = ("Left", "Right", "Top", "Bottom", "Hidden")
+PROXY_KINDS = ("none", "socks5", "http", "socks4", "socks4a")     # the Network setup Type menu, in order
+# 0.8.7 Settings > Windows: (label, saved value)
+SHOW_WHERE = (("Active window", "active"), ("Server tab", "server"), ("Messages tab", "messages"), ("Query, if open", "query"))
+SHOW_NICKS = (("Channels shared", "shared"), ("Active window", "active"), ("Server tab", "server"))
+CUSTOM = ("Custom command…", "custom")
+DOUBLE = {"channel": (("Nothing", "nothing"), ("Channel modes", "modes"), ("Channel list", "list"), ("Part", "part"), CUSTOM),
+          "query": (("Nothing", "nothing"), ("WHOIS", "whois"), ("Close", "close"), CUSTOM),
+          "server": (("Expand/collapse", "expand"), ("Nothing", "nothing"), ("Channel list", "list"), CUSTOM),
+          "chat": (("Channel modes", "modes"), ("Nothing", "nothing"), ("Channel list", "list"), CUSTOM),
+          "nick": (("Same as chat area", "nothing"), ("Open query", "query"), ("WHOIS", "whois"), CUSTOM)}
+UL_DOUBLE = (("Open query", "QUERY %s"), ("WHOIS", "WHOIS %s"), CUSTOM)
+
+
+def ul_double_choice(text: str) -> int:
+    """User list > Execute command as a Windows > Nick list choice: 0 Open query, 1 WHOIS, 2 Custom."""
+    pattern = text.strip().lstrip("/")
+    word = pattern.lower().split(" ")
+    return 0 if pattern.lower() == "query %s" else 1 if word[0] == "whois" or " ".join(word[:2]) == "quote whois" else 2
 SORTS = ("A-Z, Ops first", "A-Z", "Z-A, Ops last", "Z-A", "Unsorted")
 # Sound page: session notify event -> the name XChat's Sound page uses
 SOUND_EVENTS = (("chan", "Channel Message"), ("hilight", "Channel Msg Hilight"), ("priv", "Private Message"), ("notice", "Notice"),
@@ -87,7 +108,6 @@ class PreferencesDialog(FramedDialog):
         self.theme = Theme(**{f.name: getattr(self.cfg.theme, f.name) for f in fields(Theme)})   # edited copy
         self.theme.palette = list(self.cfg.theme.palette)
         self.font_family, self.font_size = self.cfg.chat_font, self.cfg.chat_font_size
-        self.resize(720, 580)
         row = QHBoxLayout()
         self.tree = QTreeWidget(self)
         self.tree.setHeaderLabel("Categories")
@@ -106,6 +126,11 @@ class PreferencesDialog(FramedDialog):
                     ki.setToolTip(0, "Not built yet")
                 ti.addChild(ki)
                 self._items[k] = ki
+                for sub in SUBPAGES.get(k, ()):
+                    si = QTreeWidgetItem([sub])
+                    ki.addChild(si)
+                    self._items[sub] = si
+                ki.setExpanded(True)
             ti.setExpanded(True)
         right = QFrame(self)
         right.setFrameShape(QFrame.Shape.StyledPanel)
@@ -117,12 +142,12 @@ class PreferencesDialog(FramedDialog):
                                  f" padding-left: 6px; font-size: 11pt; font-weight: bold;")
         rl.addWidget(self.title)
         rl.addWidget(self.pages, 1)
-        self.page_of["Text box"] = self.pages.addWidget(self._text_page())
-        self.page_of["Colors"] = self.pages.addWidget(self._colors_page())
-        for name, build in (("File transfers", self._files_page), ("Channel switcher", self._switcher_page), ("Input box", self._input_page), ("User list", self._userlist_page), ("Alerts", self._alerts_page), ("Highlights", self._highlights_page),
+        self.page_of["Text box"] = self.pages.addWidget(self._scrolled(self._text_page()))
+        self.page_of["Colors"] = self.pages.addWidget(self._scrolled(self._colors_page()))
+        for name, build in (("File transfers", self._files_page), ("Trusted people", self._trusted_page), ("Channel switcher", self._switcher_page), ("Input box", self._input_page), ("User list", self._userlist_page), ("Windows", self._windows_page), ("Alerts", self._alerts_page), ("Highlights", self._highlights_page),
                             ("General", self._general_page), ("Logging", self._logging_page), ("Sound", self._sound_page), ("Now Playing", self._np_page),
                             ("Advanced", self._advanced_page), ("Network setup", self._network_page), ("Flood", self._flood_page), ("Local", self._local_page), ("Updates", self._updates_page), ("Lock", self._lock_page)):
-            self.page_of[name] = self.pages.addWidget(build())
+            self.page_of[name] = self.pages.addWidget(self._scrolled(build()))
         row.addWidget(self.tree)
         row.addWidget(right, 1)
         self.body.addLayout(row, 1)
@@ -142,6 +167,36 @@ class PreferencesDialog(FramedDialog):
         self.body.addLayout(bl)
         self.tree.currentItemChanged.connect(self._show)
         self.tree.setCurrentItem(self._items[start if start in BUILT else "Text box"])
+        self._fit_screen()
+
+    def _scrolled(self, page: QWidget) -> QScrollArea:
+        """Every page scrolls on its own, so a small or scaled screen gets a scroll bar, never a dialog
+        that runs off the bottom with OK out of reach."""
+        area = QScrollArea(self)
+        area.setWidget(page)
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        return area
+
+    def page_widget(self, name: str) -> QWidget:
+        """The page itself (inside its scroll area)."""
+        return self.pages.widget(self.page_of[name]).widget()
+
+    def _fit_screen(self) -> None:
+        """Tall enough that no page scrolls, but never more than PAGE_FIT of the screen.
+        Each page area stays as wide as its page (and a scroll bar), so nothing scrolls sideways."""
+        self.ensurePolished()
+        bar = self.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent)
+        for i in range(self.pages.count()):
+            area = self.pages.widget(i)
+            area.widget().ensurePolished()
+            area.setMinimumWidth(area.widget().minimumSizeHint().width() + bar)
+        need = max(self.pages.widget(i).widget().sizeHint().height() for i in range(self.pages.count()))
+        chrome = self.sizeHint().height() - self.pages.sizeHint().height()
+        screen = self.screen() or QApplication.primaryScreen()
+        most = int(screen.availableGeometry().height() * PAGE_FIT) if screen else 600
+        self.resize(max(720, self.minimumSizeHint().width()), max(420, min(need + chrome + 2, most)))
 
     def _show(self, item, _prev=None) -> None:
         name = item.text(0) if item else ""
@@ -237,6 +292,8 @@ class PreferencesDialog(FramedDialog):
         lay.addWidget(self.colors_exact)
         self.short_joins = self._check(lay, "Short join and part lines", c.short_joins,
                                        "Leaves out the address. Hover a nick in the nick list to see it.")
+        self.shade_lines = self._check(lay, "Shade every other line", c.shade_lines)
+        self.line_rules = self._check(lay, "Line between each message", c.line_rules)
         lay.addStretch(1)
         return page
 
@@ -337,6 +394,97 @@ class PreferencesDialog(FramedDialog):
         lay.addLayout(g)
         lay.addStretch(1)
         return page
+
+    # --- Windows (0.8.7) -------------------------------------------------------------------
+
+    def _choice(self, grid: QGridLayout, row: int, label: str, items, value: str, tip: str = "") -> QComboBox:
+        """A drop-down whose items carry the saved value; an unknown value shows the first item."""
+        box = self._menu(grid, row, label, [t for t, _ in items], 0)
+        for i, (_, v) in enumerate(items):
+            box.setItemData(i, v)
+        box.setCurrentIndex(max(0, box.findData(value)))
+        if tip:
+            box.setToolTip(tip)
+        return box
+
+    def _custom_edit(self, grid: QGridLayout, row: int, box: QComboBox, text: str) -> QLineEdit:
+        """The Custom command line next to its drop-down, shown only while Custom is picked."""
+        edit = QLineEdit(text)
+        edit.setPlaceholderText("/command  ($nick, $chan, $network)")
+        edit.setToolTip("Runs like typed input. $nick, $chan and $network are filled in")
+        grid.addWidget(edit, row, 2)
+        last = box.count() - 1
+        edit.setVisible(box.currentIndex() == last)
+        box.currentIndexChanged.connect(lambda i: edit.setVisible(i == last))
+        return edit
+
+    def _windows_page(self) -> QWidget:
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Where events show"))
+        g = QGridLayout()
+        self.show_whois = self._choice(g, 0, "WHOIS replies:", SHOW_WHERE, c.show_whois,
+                                       "Active window: the tab the /whois was typed in")
+        self.show_notices = self._choice(g, 1, "Notices:", SHOW_WHERE, c.show_notices,
+                                         "Private notices from people. Notices to a channel stay in that channel; server "
+                                         "notices follow Channel switcher > Open an extra tab for server notices")
+        self.show_ctcp = self._choice(g, 2, "CTCP requests:", SHOW_WHERE, c.show_ctcp)
+        self.show_away = self._choice(g, 3, "Away replies:", SHOW_WHERE, c.show_away,
+                                      "The 'is away' answer when you message someone who is away")
+        self.show_nicks = self._choice(g, 4, "Nick changes:", SHOW_NICKS, c.show_nicks)
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        lay.addWidget(_heading("Double-click does"))
+        g = QGridLayout()
+        ul = ul_double_choice(c.ul_double)
+        self.dbl_ul = self._menu(g, 0, "Nick list:", [t for t, _ in UL_DOUBLE], ul)
+        self.dbl_ul.setToolTip("The same setting as User list > Action Upon Double Click")
+        self.dbl_ul_cmd = self._custom_edit(g, 0, self.dbl_ul, c.ul_double if ul == 2 else "")
+        self.dbl_ul_cmd.setPlaceholderText("/command  (%s or $nick, $chan, $network)")
+        self.dbl_ul.currentIndexChanged.connect(self._ul_choice_changed)
+        self.dbl_ul_cmd.textChanged.connect(self._ul_choice_changed)
+        self.ul_double.textChanged.connect(self._ul_entry_changed)
+        rows = (("channel", "Channel tab / tree item:"), ("query", "Query tab / tree item:"),
+                ("server", "Server tab / tree item:"), ("chat", "Empty chat area:"), ("nick", "Nick in chat text:"))
+        self.dbl, self.dbl_cmd = {}, {}
+        for r, (kind, label) in enumerate(rows, 1):
+            self.dbl[kind] = self._choice(g, r, label, DOUBLE[kind], getattr(c, "dbl_" + kind))
+            self.dbl_cmd[kind] = self._custom_edit(g, r, self.dbl[kind], getattr(c, f"dbl_{kind}_cmd"))
+        self.dbl["chat"].setToolTip("Channel modes only works in a channel. A #channel word always joins it")
+        self.dbl["nick"].setToolTip("A nick from the nick list, double-clicked in the text")
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        lay.addStretch(1)
+        return page
+
+    def _ul_choice_changed(self, *_a) -> None:
+        """Windows > Nick list -> User list > Execute command (the one that is saved)."""
+        if getattr(self, "_ul_sync", False):
+            return
+        i = self.dbl_ul.currentIndex()
+        if i == ul_double_choice(self.ul_double.text()) and i != 2:
+            return                       # already that choice: keep the user's own form (QUOTE WHOIS %s %s)
+        text = self.dbl_ul_cmd.text().strip() if i == 2 else UL_DOUBLE[i][1]
+        if not text:
+            return
+        self._ul_sync = True
+        try:
+            self.ul_double.setText(text)
+        finally:
+            self._ul_sync = False
+
+    def _ul_entry_changed(self, text: str) -> None:
+        """User list > Execute command -> Windows > Nick list."""
+        if getattr(self, "_ul_sync", False):
+            return
+        i = ul_double_choice(text)
+        self._ul_sync = True
+        try:
+            self.dbl_ul.setCurrentIndex(i)
+            if i == 2:
+                self.dbl_ul_cmd.setText(text.strip())
+        finally:
+            self._ul_sync = False
 
     # --- Channel switcher ---------------------------------------------------------------
 
@@ -803,31 +951,97 @@ class PreferencesDialog(FramedDialog):
     # --- Sound --------------------------------------------------------------------------
 
     def _sound_page(self) -> QWidget:
+        from PySide6.QtWidgets import QSlider
+        from . import sound, speech
+        c = self.cfg
         page, lay = self._new_page()
         lay.addWidget(_heading("Sound"))
-        lay.addWidget(QLabel("Pick a .wav file for any event. Leave it empty for no sound."))
+        lay.addWidget(QLabel("Pick a .wav, .mp3 or .ogg file for any event. Leave it empty for no sound."))
         g = QGridLayout()
         self.sound_edits: dict[str, QLineEdit] = {}
         for row, (key, label) in enumerate(SOUND_EVENTS):
-            edit = self._entry(g, row, label + ":", self.cfg.sounds.get(key, ""))
+            edit = self._entry(g, row, label + ":", c.sounds.get(key, ""))
             self.sound_edits[key] = edit
             browse = QPushButton("Browse...")
             browse.setAutoDefault(False)
-            browse.clicked.connect(lambda _=False, e=edit: self._browse(e, "Sound file", "Sound files (*.wav)"))
+            browse.clicked.connect(lambda _=False, e=edit: self._browse(e, "Sound file", sound.FILTER))
             g.addWidget(browse, row, 2)
             play = QPushButton("Play")
             play.setAutoDefault(False)
             play.clicked.connect(lambda _=False, e=edit: self._try_sound(e.text()))
             g.addWidget(play, row, 3)
+        # 0.8.8: one volume for every sound (100 % = as before)
+        row = len(SOUND_EVENTS)
+        g.addWidget(QLabel("Volume:"), row, 0, Qt.AlignmentFlag.AlignRight)
+        self.sound_volume = QSlider(Qt.Orientation.Horizontal)
+        self.sound_volume.setRange(0, 100)
+        self.sound_volume.setPageStep(10)
+        self.sound_volume.setValue(max(0, min(100, int(c.sound_volume))))
+        self.sound_volume.setToolTip("For every sound BChat plays")
+        g.addWidget(self.sound_volume, row, 1)
+        self.sound_volume_text = QLabel()
+        self.sound_volume.valueChanged.connect(lambda v: self.sound_volume_text.setText(f"{v} %"))
+        self.sound_volume_text.setText(f"{self.sound_volume.value()} %")
+        g.addWidget(self.sound_volume_text, row, 2)
         lay.addLayout(g)
+        # 0.8.8 Speech: hidden when this PC has no speech engine (nothing to use)
+        self.speech_box = QWidget()
+        sl = QVBoxLayout(self.speech_box)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.addWidget(_heading("Speech"))
+        ticks = QGridLayout()
+        self.speak_hilights = QCheckBox("Read highlights aloud")
+        self.speak_private = QCheckBox("Read private messages")
+        self.speak_notices = QCheckBox("Read notices")
+        for i, (box, on) in enumerate(((self.speak_hilights, c.speak_hilights), (self.speak_private, c.speak_private),
+                                       (self.speak_notices, c.speak_notices))):
+            box.setChecked(bool(on))
+            ticks.addWidget(box, i // 2, i % 2)
+        ticks.setColumnStretch(2, 1)
+        sl.addLayout(ticks)
+        vrow = QHBoxLayout()
+        vrow.addWidget(QLabel("Voice:"))
+        self.speak_voice = QComboBox()
+        self.speak_voice.addItem("Windows default", "")
+        talker = speech.speaker()
+        available = talker.available()
+        for name in talker.voices() if available else []:
+            self.speak_voice.addItem(name, name)
+        self.speak_voice.setCurrentIndex(max(0, self.speak_voice.findData(c.speak_voice)))
+        vrow.addWidget(self.speak_voice)
+        vrow.addSpacing(12)
+        vrow.addWidget(QLabel("Speed:"))
+        self.speak_rate = QSlider(Qt.Orientation.Horizontal)
+        self.speak_rate.setRange(-10, 10)
+        self.speak_rate.setPageStep(2)
+        self.speak_rate.setValue(max(-10, min(10, int(c.speak_rate))))
+        self.speak_rate.setToolTip("Slower to the left, faster to the right. The middle is normal")
+        self.speak_rate.setMinimumWidth(110)
+        vrow.addWidget(self.speak_rate)
+        self.speak_test = QPushButton("Test")
+        self.speak_test.setAutoDefault(False)
+        self.speak_test.clicked.connect(self._try_speech)
+        vrow.addWidget(self.speak_test)
+        vrow.addStretch(1)
+        sl.addLayout(vrow)
+        self.speak_only_away = QCheckBox("Only when BChat is not the active window")
+        self.speak_only_away.setChecked(bool(c.speak_only_away))
+        sl.addWidget(self.speak_only_away)
+        self.speech_box.setVisible(available)
+        lay.addWidget(self.speech_box)
         lay.addStretch(1)
         return page
 
     def _try_sound(self, path: str) -> None:
         if path:
-            self.win.cfg.sounds["__try"] = path
-            self.win._play_sound("__try")
-            del self.win.cfg.sounds["__try"]
+            from . import sound
+            sound.play(path, self.sound_volume.value())
+
+    def _try_speech(self) -> None:
+        from . import speech
+        talker = speech.speaker()
+        talker.stop()
+        talker.say(speech.TEST_TEXT, self.speak_voice.currentData() or "", self.speak_rate.value())
 
     # --- Advanced -----------------------------------------------------------------------
 
@@ -847,6 +1061,10 @@ class PreferencesDialog(FramedDialog):
                                      c.invisible)
         self.move_top = self._check(lay, "Move a server to the top of its network's list when I connect to it", c.move_to_top,
                                     "Next time, the server that worked is tried first")
+        lay.addWidget(_heading("CTCP"))            # 0.8.7: the same setting as /ctcps on|off
+        self.ctcp_reply = self._check(lay, "Reply to CTCP requests", c.ctcp_reply_enabled,
+                                      "Off: VERSION, PING, TIME, FINGER, CLIENTINFO get no answer. /me actions and file "
+                                      "transfers still work, and requests are still shown. Same as /ctcps on|off")
         lay.addWidget(_heading("Advanced Settings"))
         self.raw_modes = self._check(lay, "Display MODEs in raw form", c.raw_modes)
         self.hide_jp = self._check(lay, "Hide join and part messages", c.hide_joinpart, "Hide channel join/part messages by default")
@@ -1149,6 +1367,34 @@ class PreferencesDialog(FramedDialog):
             del self.trusted[i]
             self._trust_fill(min(i, len(self.trusted) - 1))
 
+    def _trusted_page(self) -> QWidget:
+        c = self.cfg
+        page, lay = self._new_page()
+        lay.addWidget(_heading("Trusted People"))
+        lay.addWidget(QLabel("Files and direct chats from these people are accepted by themselves\n"
+                             "when File transfers is set to \"From trusted people only\"."))
+        self.trusted = [dict(e) for e in c.dcc_trusted]
+        self.trust_list = QTreeWidget()
+        self.trust_list.setHeaderLabels(["Nick", "Address", "Network"])
+        self.trust_list.setRootIsDecorated(False)
+        self.trust_list.setColumnWidth(0, 110)
+        self.trust_list.setColumnWidth(1, 210)
+        self.trust_list.setMinimumHeight(120)
+        self.trust_list.itemDoubleClicked.connect(lambda *_: self._trust_edit())
+        lay.addWidget(self.trust_list, 1)
+        row = QHBoxLayout()
+        for label, ic, slot in (("Add...", "add", self._trust_add), ("Edit...", "edit", self._trust_edit), ("Remove", "remove", self._trust_remove)):
+            btn = QPushButton(icon(ic), label)
+            btn.setAutoDefault(False)
+            btn.clicked.connect(lambda _=False, f=slot: f())
+            row.addWidget(btn)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self._trust_fill()
+        note = QLabel("Programs always ask. A nick alone is never enough: the address must match.")
+        lay.addWidget(note)
+        return page
+
     def _files_page(self) -> QWidget:
         c = self.cfg
         page, lay = self._new_page()
@@ -1161,27 +1407,6 @@ class PreferencesDialog(FramedDialog):
         self.dcc_dir.setPlaceholderText(str(self.win.cfg_dir / "downloads"))   # 0.8.6: empty showed no folder at all
         self.dcc_done.setPlaceholderText("Leave them where they were downloaded")
         lay.addLayout(g)
-        lay.addWidget(QLabel("Trusted people (files and direct chats from them are accepted by themselves):"))
-        self.trusted = [dict(e) for e in c.dcc_trusted]
-        self.trust_list = QTreeWidget()
-        self.trust_list.setHeaderLabels(["Nick", "Address", "Network"])
-        self.trust_list.setRootIsDecorated(False)
-        self.trust_list.setColumnWidth(0, 110)
-        self.trust_list.setColumnWidth(1, 210)
-        self.trust_list.setFixedHeight(60)
-        self.trust_list.itemDoubleClicked.connect(lambda *_: self._trust_edit())
-        lay.addWidget(self.trust_list)
-        row = QHBoxLayout()
-        for label, ic, slot in (("Add...", "add", self._trust_add), ("Edit...", "edit", self._trust_edit), ("Remove", "remove", self._trust_remove)):
-            btn = QPushButton(icon(ic), label)
-            btn.setAutoDefault(False)
-            btn.clicked.connect(lambda _=False, f=slot: f())
-            row.addWidget(btn)
-        row.addStretch(1)
-        lay.addLayout(row)
-        self._trust_fill()
-        note = QLabel("Programs always ask. A nick alone is never enough: the address must match.")
-        lay.addWidget(note)
         self.dcc_nick = self._check(lay, "Save nick name in filenames", c.dcc_with_nick)
         lay.addWidget(_heading("Ports"))
         g = QGridLayout()                      # one row: first and last port side by side
@@ -1332,19 +1557,90 @@ class PreferencesDialog(FramedDialog):
                              "your normal address when the bind address is missing."))
         lay.addWidget(_heading("Proxy Server"))
         g = QGridLayout()
-        self.proxy_host = self._entry(g, 0, "Hostname:", c.proxy_host)
-        self.proxy_port = self._number(g, 1, "Port:", c.proxy_port, 0, 65535)
-        kinds = ("none", "socks5", "http")
-        self.proxy_type = self._menu(g, 2, "Type:", ("(Disabled)", "Socks5", "HTTP"), kinds.index(c.proxy_type) if c.proxy_type in kinds else 0)
+        kinds = PROXY_KINDS               # 0.8.8: Socks4 / Socks4a added at the end, older indexes unchanged
+        self.proxy_type = self._menu(g, 0, "Type:", ("(Disabled)", "Socks5", "HTTP", "Socks4", "Socks4a"),
+                                     kinds.index(c.proxy_type) if c.proxy_type in kinds else 0)
+        self.proxy_host = self._entry(g, 1, "Hostname:", c.proxy_host)
+        self.proxy_port = self._number(g, 2, "Port:", c.proxy_port, 0, 65535)
+        g.setColumnStretch(1, 1)                       # the Type menu stays left when the rows below hide
         lay.addLayout(g)
-        lay.addWidget(_heading("Proxy Authentication"))
-        self.proxy_auth = self._check(lay, "Use Authentication (HTTP or Socks5 only)", c.proxy_auth)
+        self._proxy_grid = g
+        self.proxy_auth = self._check(lay, "Use a login", c.proxy_auth)
         g = QGridLayout()
+        g.setContentsMargins(18, 0, 0, 0)
         self.proxy_user = self._entry(g, 0, "Username:", c.proxy_user)
         self.proxy_pass = self._entry(g, 1, "Password:", c.proxy_password, secret=True)
+        self.proxy_no_pass = QLabel("Socks4 has no password")
+        self.proxy_no_pass.setStyleSheet(f"color: {c.theme.muted};")
+        g.addWidget(self.proxy_no_pass, 0, 2)
         lay.addLayout(g)
+        self._login_grid = g
+        self.proxy_type.currentIndexChanged.connect(self._proxy_rows)
+        self.proxy_auth.toggled.connect(self._proxy_rows)
+        lay.addWidget(_heading("Ident <span style='font-weight: normal'>(identification)</span>"))   # 0.8.8
+        self.identd_on = self._check(lay, "Answer ident requests while connecting", c.identd_on,
+                                     "Port 113, only from the moment BChat connects until the server welcomes you.")
+        g = QGridLayout()
+        g.setContentsMargins(18, 0, 0, 0)
+        self.identd_user = self._entry(g, 0, "User ID:", c.identd_user)
+        self.identd_user.setPlaceholderText(c.username or "bchat")
+        lay.addLayout(g)
+        self._ident_label = g.itemAtPosition(0, 0).widget()
+        self.identd_on.toggled.connect(self._ident_rows)
+        lay.addWidget(_heading("Router <span style='font-weight: normal'>(UPnP)</span>"))           # 0.8.8
+        self.upnp_on = self._check(lay, "Open file-transfer ports on my router automatically", c.upnp_on,
+                                   "Asks your router (UPnP) to forward the file-transfer ports while BChat runs.")
+        self.upnp_status = QLabel()
+        self.upnp_status.setContentsMargins(18, 0, 0, 0)
+        lay.addWidget(self.upnp_status)
+        self._upnp_status_changed(getattr(getattr(self.win, "upnp", None), "status", ""))
+        if getattr(self.win, "upnp", None) is not None:
+            self.win.upnp.changed.connect(self._upnp_status_changed)
+        self.upnp_on.toggled.connect(lambda _=False: self._upnp_status_changed(self._upnp_text))
+        self._proxy_rows()
+        self._ident_rows()
         lay.addStretch(1)
         return page
+
+    def _proxy_rows(self, *_) -> None:
+        """Only the rows that this proxy type uses are shown: none without a proxy, User ID alone for Socks4."""
+        kind = PROXY_KINDS[self.proxy_type.currentIndex()]
+        on, socks4 = kind != "none", kind in ("socks4", "socks4a")
+        for row in (1, 2):
+            for col in (0, 1):
+                self._proxy_grid.itemAtPosition(row, col).widget().setVisible(on)
+        self.proxy_auth.setVisible(on and not socks4)
+        login = on and (socks4 or self.proxy_auth.isChecked())
+        self._login_grid.itemAtPosition(0, 0).widget().setText("User ID:" if socks4 else "Username:")
+        for row, col in ((0, 0), (0, 1)):
+            self._login_grid.itemAtPosition(row, col).widget().setVisible(login)
+        for col in (0, 1):
+            self._login_grid.itemAtPosition(1, col).widget().setVisible(login and not socks4)
+        self.proxy_no_pass.setVisible(login and socks4)
+
+    def _ident_rows(self, *_) -> None:
+        on = self.identd_on.isChecked()
+        self.identd_user.setEnabled(on)
+        self._ident_label.setEnabled(on)
+
+    _upnp_text = ""
+
+    def _upnp_status_changed(self, text: str) -> None:
+        """Router status with a coloured dot: green open, red refused, muted for anything else. Hidden when off."""
+        self._upnp_text = text
+        try:
+            t = self.cfg.theme
+            if text.startswith("Router found ·"):
+                dot, colour = "●", t.status_on
+            elif text.startswith("Router found"):
+                dot, colour = "●", t.status_off
+            else:
+                dot, colour = "○", t.muted
+            self.upnp_status.setText(f"<span style='color: {colour}'>{dot}</span> "
+                                     f"<span style='color: {t.muted}'>{html.escape(text)}</span>" if text else "")
+            self.upnp_status.setVisible(bool(text) and self.upnp_on.isChecked())
+        except RuntimeError:                               # the dialog is gone
+            pass
 
     def _pick_font(self) -> None:
         ok, f = QFontDialog.getFont(QFont(self.font_family, self.font_size), self, "Chat font",
@@ -1487,6 +1783,7 @@ class PreferencesDialog(FramedDialog):
         c.strip_colors = self.strip.isChecked()
         c.colors_exact = self.colors_exact.isChecked()
         c.chat_bg_image = self.bg_image.text().strip()
+        c.shade_lines, c.line_rules = self.shade_lines.isChecked(), self.line_rules.isChecked()
         c.input_chat_font, c.auto_complete = self.input_font.isChecked(), self.auto_complete.isChecked()
         c.spell_check = self.spell.isChecked()
         c.nick_suffix = self.suffix.text()
@@ -1528,6 +1825,10 @@ class PreferencesDialog(FramedDialog):
             c.log_asked = True
         c.log_stamps, c.log_stamp_format = self.log_stamps.isChecked(), self.log_fmt.text()
         c.sounds = {k: e.text().strip() for k, e in self.sound_edits.items() if e.text().strip()}
+        c.sound_volume = self.sound_volume.value()                  # 0.8.8 volume and Speech
+        c.speak_hilights, c.speak_private = self.speak_hilights.isChecked(), self.speak_private.isChecked()
+        c.speak_notices, c.speak_only_away = self.speak_notices.isChecked(), self.speak_only_away.isChecked()
+        c.speak_voice, c.speak_rate = self.speak_voice.currentData() or "", self.speak_rate.value()
         c.reconnect_delay = self.reconnect.value()
         c.server_timeout = self.server_timeout.value()
         c.connect_retries = self.connect_retries.value()
@@ -1592,8 +1893,17 @@ class PreferencesDialog(FramedDialog):
         c.ip_mode = ("auto", "ipv4", "ipv6")[self.ip_mode.currentIndex()]
         c.bind_strict, c.dcc_ipv6 = self.bind_strict.isChecked(), self.dcc_ipv6.isChecked()
         c.proxy_port = self.proxy_port.value()
-        c.proxy_type = ("none", "socks5", "http")[self.proxy_type.currentIndex()]
+        c.proxy_type = PROXY_KINDS[self.proxy_type.currentIndex()]
+        c.identd_on, c.identd_user = self.identd_on.isChecked(), self.identd_user.text().strip()
+        c.upnp_on = self.upnp_on.isChecked()
         c.proxy_auth, c.proxy_user, c.proxy_password = self.proxy_auth.isChecked(), self.proxy_user.text().strip(), self.proxy_pass.text()
+        # 0.8.7: Settings > Windows (the nick list's choice is saved above, as User list > Execute command) + CTCP
+        c.show_whois, c.show_notices = self.show_whois.currentData(), self.show_notices.currentData()
+        c.show_ctcp, c.show_away, c.show_nicks = self.show_ctcp.currentData(), self.show_away.currentData(), self.show_nicks.currentData()
+        for kind, box in self.dbl.items():
+            setattr(c, "dbl_" + kind, box.currentData())
+            setattr(c, f"dbl_{kind}_cmd", self.dbl_cmd[kind].text().strip())
+        c.ctcp_reply_enabled = self.ctcp_reply.isChecked()
         for f in fields(Theme):   # in place: the user list and tabs hold this same Theme object
             setattr(c.theme, f.name, list(self.theme.palette) if f.name == "palette" else getattr(self.theme, f.name))
         self.win.apply_preferences()

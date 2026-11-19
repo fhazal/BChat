@@ -79,7 +79,7 @@ class FriendDialog(FramedDialog):
         self.sound_file.setReadOnly(True)
         row.addWidget(self.sound_file, 1)
         self.sound_browse = QPushButton(icon("open"), "", objectName="compact")
-        self.sound_browse.setToolTip("Pick a .wav file")
+        self.sound_browse.setToolTip("Pick a .wav, .mp3 or .ogg file")
         self.sound_browse.setAutoDefault(False)
         self.sound_browse.clicked.connect(self._browse)
         self.sound_clear = QPushButton(icon("close-light"), "", objectName="compact")
@@ -123,7 +123,8 @@ class FriendDialog(FramedDialog):
             w.setEnabled(on)
 
     def _browse(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Sound file", "", "Sound files (*.wav)")
+        from .sound import FILTER
+        path, _ = QFileDialog.getOpenFileName(self, "Sound file", "", FILTER)
         if path:
             self.sound_file.setText(path)
 

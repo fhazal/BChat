@@ -14,6 +14,9 @@ bchat.updater.UPDATE_URL = ""      # tests never ask the real GitHub for release
 import winsound
 SOUNDS_PLAYED: list = []
 winsound.PlaySound = lambda path, flags: SOUNDS_PLAYED.append(path)   # tests never make a sound on the user's PC
+import bchat.sound, bchat.speech                                      # noqa: E401
+bchat.sound.MUTED = True            # mp3/ogg players really decode, muted
+bchat.speech.ENGINE = "mock"        # Qt's silent speech engine: nothing is read aloud in tests
 from PySide6.QtWidgets import QApplication
 
 

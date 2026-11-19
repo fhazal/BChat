@@ -6,7 +6,7 @@ from __future__ import annotations
 from .protocol import lower
 
 # name -> (label, the Preferences value it overrides)
-NAMES = ("timestamps", "color_nicks", "strip", "joins", "beep", "flash", "popups")
+NAMES = ("timestamps", "color_nicks", "strip", "joins", "beep", "flash", "popups", "font")
 JOINS = ("show", "short", "hide")
 HIDEABLE = ("Join", "Part", "Part with Reason", "Quit")
 
@@ -21,7 +21,8 @@ def default(cfg, name: str, b=None):
     return {"timestamps": cfg.timestamps, "color_nicks": cfg.color_nicks, "strip": cfg.strip_colors,
             "joins": "short" if cfg.short_joins else "show",
             "beep": bool(cfg.alert_beep[which]), "flash": bool(cfg.alert_flash[which]),
-            "popups": bool(cfg.alert_popup[which])}[name]
+            "popups": bool(cfg.alert_popup[which]),
+            "font": ""}[name]          # 0.8.8 /font: "family|size" for this tab only, "" = the chat font
 
 
 def get(cfg, b, name: str):
