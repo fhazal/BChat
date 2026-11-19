@@ -61,30 +61,18 @@ def live(app, tmp_path):
     return srv, win, s
 
 
-def test_znc_losing_the_server_leaves_the_channels(app, tmp_path):
+def test_znc_losing_the_server_keeps_the_channels_and_its_rejoin_refreshes_them(app, tmp_path):
+    # 0.8.5: a bouncer is a normal server. ZNC losing IRC changes nothing here; its own JOIN on the way back
+    # brings the fresh names list
     srv, win, s = live(app, tmp_path)
     b = s.buffers["#skinhead"]
     srv.send(f":{ZNC} PRIVMSG Badaboom :Disconnected from IRC. Reconnecting...")
-    assert wait(app, lambda: not b.joined and not b.users)
-    assert any("bouncer lost the IRC server" in ln.text for ln in b.lines)
-    assert s.state == "connected"                                   # still talking to ZNC itself
-    srv.send(f":{ZNC} PRIVMSG Badaboom :Connection refused. Reconnecting...")
+    wait(app, lambda: False, 400)                                  # time for BChat to read it
+    assert b.joined and len(b.users) > 3
     srv.send(":Badaboom!b@h JOIN #skinhead")                       # ZNC is back on IRC and rejoins
     srv.send(":irc.test 353 Badaboom = #skinhead :@Badaboom Belon Fhazal")
     srv.send(":irc.test 366 Badaboom #skinhead :End of /NAMES list.")
     assert wait(app, lambda: b.joined and len(b.users) == 3)
-    win.close()
-
-
-def test_only_znc_itself_and_only_news_count(app, tmp_path):
-    srv, win, s = live(app, tmp_path)
-    b = s.buffers["#skinhead"]
-    srv.send(":*status!evil@h PRIVMSG Badaboom :Disconnected from IRC. Reconnecting...")   # not ZNC
-    srv.send(":Belon!b@h PRIVMSG Badaboom :Disconnected from IRC. Reconnecting...")
-    srv.send(f"@time=2020-01-01T00:00:00.000Z :{ZNC} PRIVMSG Badaboom :Disconnected from IRC.")  # old
-    srv.send(":Belon!b@h PRIVMSG #skinhead :marker")
-    assert wait(app, lambda: any(ln.text == "marker" for ln in b.lines))
-    assert b.joined and len(b.users) > 3
     win.close()
 
 

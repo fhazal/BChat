@@ -264,7 +264,8 @@ def test_sasl_plain_over_ssl(app, tmp_path):
 def test_sasl_failure_still_finishes_login(app, tmp_path):
     crt, key = _cert(tmp_path)
     srv = FakeIrcd(crt, key, caps="sasl", sasl_ok=False)
-    win, net = make_win(tmp_path, srv.port, ssl=True, sasl_user="acct", sasl_password="bad", allow_invalid_cert=True)
+    win, net = make_win(tmp_path, srv.port, ssl=True, sasl_user="acct", sasl_password="bad", allow_invalid_cert=True,
+                        login_fail="stay")   # 0.8.5: the default now disconnects
     s = win.connect_network(net)
     assert wait(app, lambda: any("SASL login failed" in l.text for l in s.server_buffer.lines), 8000)
     assert wait(app, lambda: "CAP END" in srv.received)
@@ -357,12 +358,13 @@ def test_user_command_goes_before_background_lines(live):
 
 def test_ctcp_flood_stops_replies(live):
     app, srv, win, s = live
-    for _ in range(9):                     # 0.6.0: one person gets 2 answers a minute, then one 'flood' line
+    for _ in range(30):                    # 0.8.5 /flood: past 400 waiting bytes, 2 held per person, then 30 s ignored
         srv.send(":x!y@z PRIVMSG Badaboom :\x01TIME\x01")
     assert wait(app, lambda: any("CTCP flood from x" in l.text for b in s.all_buffers() for l in b.lines))
     time.sleep(0.5); app.processEvents()
-    assert len([x for x in srv.received if x.startswith("NOTICE x")]) <= 2
-    assert sum("CTCP flood" in l.text for b in s.all_buffers() for l in b.lines) == 1
+    assert len([x for x in srv.received if x.startswith("NOTICE x")]) + len(s._queue) < 20
+    assert sum("CTCP flood from x" in l.text for b in s.all_buffers() for l in b.lines) == 1
+    s._queue.clear(); s.flood_clear()
 
 
 def test_markup_from_network_is_not_rendered(live):
@@ -1009,7 +1011,7 @@ def test_highlight_flash_ping_reply_and_dcc_message(live):
     srv.send(":Belon!b@h PRIVMSG #skinhead :Badaboom look")
     assert wait(app, lambda: seen and seen[0] is b)
     srv.send(f":Belon!b@h NOTICE Badaboom :\x01PING {int(time.time()) - 3}\x01")
-    assert wait(app, lambda: any("Ping reply from Belon" in l.text for l in b.lines))
+    assert wait(app, lambda: any("PING reply from Belon: " in l.text for l in b.lines))
     srv.send(":Belon!b@h PRIVMSG Badaboom :\x01DCC SEND a.zip 1 2 3\x01")
     assert wait(app, lambda: any("offered" in l.text for l in b.lines))
 
@@ -1887,7 +1889,6 @@ def test_ctcp_replies_list(live):
     win.cfg.flood_ctcp_person = 99         # this test is about the reply list, not the per-person limit
     srv.send(":Belon!b@h PRIVMSG Badaboom :\x01PING 123 abc\x01")
     assert wait(app, lambda: any("NOTICE Belon" in x and "PING 123 abc" in x for x in srv.received))
-    s._ctcp_times.clear()
     _save_editor(win, "ctcp", [["FINGER", "nctcp %s FINGER none of your business"], ["EVIL", "!calc.exe"], ["PING", "nctcp %s PING %d"]])
     srv.send(":Belon!b@h PRIVMSG Badaboom :\x01FINGER\x01")
     assert wait(app, lambda: any("FINGER none of your business" in x for x in srv.received))
@@ -2365,9 +2366,12 @@ def test_dcc_names_from_the_network_cannot_escape_or_overwrite(live, tmp_path):
     assert wait(app, lambda: win.dcc.items)
     t = win.dcc.items[0]
     assert Path(t.path).parent == tmp_path
-    win.dcc.accept(t)
+    win.dcc.accept(t)                    # the file is there: the window asks first (0.8.5), Rename keeps both
+    assert wait(app, lambda: getattr(win, "exists_dialog", None) is not None and win.exists_dialog.isVisible())
+    assert win.exists_dialog.name_edit.text() == "evil (1).txt"
+    win.exists_dialog.rename_btn.click()
     assert wait(app, lambda: t.state == "done", 8000)
-    assert (tmp_path / "evil.txt").read_text() == "keep me" and (tmp_path / "evil.txt.1").read_bytes() == payload
+    assert (tmp_path / "evil.txt").read_text() == "keep me" and (tmp_path / "evil (1).txt").read_bytes() == payload
     # a sender can't write more than it offered
     port, _ = _sender(b"x" * 500)
     srv.send(f":Belon!b@h PRIVMSG Badaboom :\x01DCC SEND short.bin 2130706433 {port} 100\x01")
@@ -2394,6 +2398,14 @@ def test_dcc_auto_accept_never_takes_programs(live, tmp_path):
     assert wait(app, lambda: win.dcc.items and win.dcc.items[0].state == "done", 8000)
     assert (tmp_path / "Belon.song.mp3").read_bytes() == payload
     assert "transfers" not in win.tools
+    # 0.8.5: programs on the DCC ignore list (the default) never even show up, only a status line
+    srv.send(f":Belon!b@h PRIVMSG Badaboom :\x01DCC SEND setup.exe 2130706433 1234 10\x01")
+    srv.send(f":Belon!b@h PRIVMSG Badaboom :\x01DCC SEND TRICK.BAT 2130706433 1234 10\x01")
+    assert wait(app, lambda: sum("ignored (file type is on the DCC ignore list)" in l.text
+                                 for x in s.all_buffers() for l in x.lines) == 2)
+    assert len(win.dcc.items) == 1
+    # with the list emptied, a program offer arrives but is still never auto-accepted
+    win.cfg.dcc_ignore_exts = []
     srv.send(f":Belon!b@h PRIVMSG Badaboom :\x01DCC SEND setup.exe 2130706433 1234 10\x01")
     srv.send(f":Belon!b@h PRIVMSG Badaboom :\x01DCC SEND TRICK.BAT 2130706433 1234 10\x01")
     assert wait(app, lambda: len(win.dcc.items) == 3)

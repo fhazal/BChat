@@ -156,6 +156,9 @@ def irc_palette(p: dict) -> list[str]:
 
 
 DEFAULT_PALETTE = irc_palette(MOCHA)
+# 0.8.5 DCC ignore list: an offer of one of these is ignored, with one line in the server tab
+DCC_IGNORE_EXTS = ("*.exe", "*.com", "*.bat", "*.dll", "*.ini", "*.mrc", "*.vbs", "*.js", "*.pif", "*.scr", "*.lnk",
+                   "*.pl", "*.shs", "*.htm", "*.html")
 
 
 @dataclass
@@ -203,6 +206,7 @@ class NetworkConfig:
     cert_file: str = ""      # the certificate (+ key) shown to the server when login is "cert"
     caps_off: list = field(default_factory=list)   # 0.6.0 Server Features: IRCv3 capabilities never asked for here
     join_after_login: bool = True   # 0.8.2: joins wait for NickServ (up to 10 s) after IDENTIFY
+    login_fail: str = "disconnect"  # 0.8.5: SASL login fails -> "disconnect" (no retry) or "stay" (connected, not logged in)
 
 
 @dataclass
@@ -370,6 +374,9 @@ class Config:
     auto_unaway: bool = False
     rejoin_on_kick: bool = False       # once, after 3 seconds
     whois_on_query: bool = True        # who someone is, at the top of a private chat they open
+    single_msg_window: bool = False    # 0.8.6: private messages go to one (messages) tab per network; /query opens a real one
+    single_msg_friends: bool = False   # 0.8.6: ... but nicks on the Friends list still get their own private chat
+    single_msg_copy: bool = False      # 0.8.6: a private chat that opens gets that nick's lines from (messages)
     skip_motd: bool = False            # 0.4.0: don't print the server's welcome message; /motd still shows it
     short_joins: bool = False          # 0.4.0: join/part lines without the address (only the default wording)
     # Logging
@@ -400,6 +407,15 @@ class Config:
     flood_pace: str = "normal"     # 0.6.0: careful / normal / fast (how quickly lines go out)
     flood_ctcp: int = 5            # CTCP answers in 30 s, then quiet for 2 min (0 = never answer)
     flood_ctcp_person: int = 2     # CTCP answers to one person a minute
+    # 0.8.5 flood protection for automatic CTCP replies, as /flood [+c|-c] [on|off|clear] <bytes> <maxlines> <maxmessages> <ignoretime>.
+    # The 400-byte trigger is the help's default. The help gives no defaults for the other three, so these come from its
+    # own example, /flood 200 10 2 30.
+    flood_on: bool = True          # /flood on|off
+    flood_ctcp_on: bool = True     # /flood +c|-c: CTCP replies go through the flood buffer
+    flood_bytes: int = 400         # "Trigger check after": replies are buffered once more than this many bytes wait
+    flood_lines: int = 10          # "Buffer size": lines held at most; the rest are dropped
+    flood_per_user: int = 2        # "Lines per user": one person's lines in the buffer at most
+    flood_ignore: int = 30         # "Ignore user for": seconds a person past their share is ignored (0 = no ignore)
     flood_queries: int = 5         # new private chats a minute; more show in the server tab
     flood_whois: int = 3           # automatic WhoIs on new private chats a minute
     tab_opts: dict = field(default_factory=dict)   # 0.6.0 per-tab settings: "net/#chan" -> {name: value}
@@ -418,6 +434,12 @@ class Config:
     dcc_open_send: bool = True
     dcc_open_recv: bool = True
     dcc_open_chat: bool = True
+    dcc_offer_timeout: int = 120   # 0.8.5: seconds an offer waits for Accept (or a passive offer for its answer); 0 = for ever
+    dcc_idle_timeout: int = 300    # 0.8.5: seconds a transfer may get nothing from the other side; 0 = for ever
+    dcc_exists: str = "ask"        # 0.8.5: auto accept onto a file already there: ask / resume / overwrite
+    dcc_ignore_exts: list[str] = field(default_factory=lambda: list(DCC_IGNORE_EXTS))   # 0.8.5: offers never shown
+    dcc_ignore_on: bool = True     # 0.8.5 /dcc ignore on|off: the list above is used at all
+    dcc_ignore_mode: str = "ignore"   # 0.8.5 /dcc ignore accept|ignore: only these types come in, or these never do
     # Channel switcher
     tab_layout: str = "tree"       # tree | tabs
     tab_pos: str = "left"          # left | right | top | bottom | hidden
@@ -465,6 +487,9 @@ class Config:
     show_mode_buttons: bool = False
     # Tool windows
     ignore_kinds: dict = field(default_factory=dict)   # mask -> letters of C P N T D I U; missing means C P N T D I
+    # 0.8.5: also K (colours and bold taken out) and H (never a highlight or alert)
+    ignore_nets: dict = field(default_factory=dict)    # 0.8.5 mask -> "net1,net2" (/ignore without -w), missing for any network
+    ignore_on: bool = True                              # 0.8.5 /ignore on|off: the whole list on or off
     friends: list[str] = field(default_factory=list)
     friend_nets: dict = field(default_factory=dict)    # nick -> "net1,net2", empty for all
     friend_opts: dict = field(default_factory=dict)    # 0.5.0 lower nick -> {"popup", "sound", "whois"} (missing = defaults)
@@ -485,6 +510,10 @@ class Config:
     url_emails: bool = False       # 0.6.0: catch email addresses too
     # Advanced
     reconnect_delay: int = 5
+    connect_retries: int = 0       # 0.8.5: give up after N reconnect tries; 0 = keep trying
+    connect_timeout: int = 30      # 0.8.5: seconds to wait for a server to answer the connect; 0 = no limit
+    invisible: bool = True         # 0.8.5: MODE nick +i after connecting
+    move_to_top: bool = False      # 0.8.6: the server that connected goes first in its network's list
     reconnect_fast: bool = True    # 0.8.2: the one-time 10 -> 5 s switch below has been done
     server_timeout: int = 180      # 0.8.2: seconds without a word from the server before BChat drops the link
     raw_modes: bool = False

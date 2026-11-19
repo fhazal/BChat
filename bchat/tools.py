@@ -394,9 +394,12 @@ class IgnoreWindow(ToolWindow):
                 return
             cfg.ignores[cfg.ignores.index(old)] = new
             cfg.ignore_kinds[new] = cfg.ignore_kinds.pop(old, IGNORE_KINDS)
+            if old in cfg.ignore_nets:                     # 0.8.5: the network it is for goes with it
+                cfg.ignore_nets[new] = cfg.ignore_nets.pop(old)
             it.setData(0, Qt.ItemDataRole.UserRole, new)
         else:
-            cfg.ignore_kinds[new] = "".join(k for i, k in enumerate("CPNTDIU", 1) if it.checkState(i) == Qt.CheckState.Checked)
+            keep = "".join(k for k in cfg.ignore_kinds.get(new, IGNORE_KINDS) if k not in "CPNTDIU")   # 0.8.5: K, H stay
+            cfg.ignore_kinds[new] = "".join(k for i, k in enumerate("CPNTDIU", 1) if it.checkState(i) == Qt.CheckState.Checked) + keep
         self.win.save_config()
 
     def ask_add(self) -> None:
@@ -425,12 +428,14 @@ class IgnoreWindow(ToolWindow):
         mask = it.data(0, Qt.ItemDataRole.UserRole)
         self.win.cfg.ignores.remove(mask)
         self.win.cfg.ignore_kinds.pop(mask, None)
+        self.win.cfg.ignore_nets.pop(mask, None)
         self.fill()
         self.win.save_config()
 
     def clear(self) -> None:
         self.win.cfg.ignores.clear()
         self.win.cfg.ignore_kinds.clear()
+        self.win.cfg.ignore_nets.clear()
         self.fill()
         self.win.save_config()
 

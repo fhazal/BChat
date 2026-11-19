@@ -87,7 +87,8 @@ class DetachedWindow(FramedDialog):
         self.input.clear()
         if text:
             self.input.remember(text)
-            commands.run(self.win, self.b.session, self.b, self.win.expand_input(text, self.b))
+            with self.b.session.typed():
+                commands.run(self.win, self.b.session, self.b, self.win.expand_input(text, self.b))
 
     def unhook(self) -> None:
         s = self.b.session

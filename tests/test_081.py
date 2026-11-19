@@ -25,35 +25,15 @@ def inside(app):
     return s, b
 
 
-def test_every_znc_lost_server_wording_empties_the_channels(app):
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    for line in (f":{ZNC} PRIVMSG Fhazal :Disconnected from IRC. Reconnecting...",
-                 f":{ZNC} PRIVMSG Fhazal :Disconnected from IRC (Server updating). Reconnecting...",
-                 f":{ZNC} NOTICE Fhazal :Disconnected from IRC. Reconnecting...",
-                 f":{ZNC} PRIVMSG Fhazal :IRC connection timed out.  Reconnecting...",
-                 f":{ZNC} PRIVMSG Fhazal :Connection Refused.  Reconnecting...",
-                 f"@time={now} :{ZNC} PRIVMSG Fhazal :Disconnected from IRC. Reconnecting..."):
+def test_znc_lost_server_lines_change_nothing_live_or_mid_playback(app):
+    # 0.8.5: a bouncer is a normal server; ZNC losing IRC is ZNC's business, the tab stays as it is
+    for collect in (False, True):
         s, b = inside(app)
-        feed(s, line)
-        assert not b.joined and not b.users, line
-
-
-def test_mid_playback_a_dated_live_line_counts_an_undated_one_does_not(app):
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    s, b = inside(app)
-    s._znc_collect = ("#opers", [], time.time())
-    feed(s, f":{ZNC} PRIVMSG Fhazal :Disconnected from IRC. Reconnecting...")
-    assert b.joined and len(b.users) == 4
-    feed(s, f"@time={now} :{ZNC} PRIVMSG Fhazal :Disconnected from IRC. Reconnecting...")
-    assert not b.joined and not b.users
-
-
-def test_other_status_lines_and_old_ones_change_nothing(app):
-    s, b = inside(app)
-    feed(s, f":{ZNC} PRIVMSG Fhazal :Error from server: Closing Link",
-         ":*status!evil@h NOTICE Fhazal :Disconnected from IRC.",
-         f"@time=2020-01-01T00:00:00.000Z :{ZNC} NOTICE Fhazal :Disconnected from IRC.")
-    assert b.joined and len(b.users) == 4
+        if collect:
+            s._znc_collect = ("#opers", [], time.time())
+        feed(s, f":{ZNC} PRIVMSG Fhazal :Disconnected from IRC. Reconnecting...",
+             f":{ZNC} PRIVMSG Fhazal :IRC connection timed out.  Reconnecting...")
+        assert b.joined and len(b.users) == 4
 
 
 def test_oper_only_refusal_empties_a_stale_tab(app):

@@ -61,7 +61,8 @@ def test_certificate_login_failure_says_what_to_do(app, tmp_path):
     crt, key = _cert(tmp_path)
     mine = certs.make(tmp_path / "mine.pem", "Badaboom")
     srv = FakeIrcd(crt, key, caps="sasl", sasl_ok=False, client_ca=str(mine))
-    win, net = make_win(tmp_path, srv.port, ssl=True, allow_invalid_cert=True, login="cert", cert_file=str(mine))
+    win, net = make_win(tmp_path, srv.port, ssl=True, allow_invalid_cert=True, login="cert", cert_file=str(mine),
+                        login_fail="stay")   # 0.8.5: the default now disconnects
     s = win.connect_network(net)
     assert wait(app, lambda: any("Certificate login failed" in t and "Add to NickServ" in t for t in texts(s.server_buffer)), 8000)
     assert wait(app, lambda: s.state == "connected")

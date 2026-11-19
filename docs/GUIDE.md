@@ -119,6 +119,12 @@ Many channels only let operators (people with **@**) change the topic. When you 
 ### How do I open a private chat with someone?
 Double-click their name in the nick list (like mIRC), right-click it and choose **Open Dialog Window**, or type `/query nick`. To change what a double-click does, go to Settings > Preferences > User list > Action Upon Double Click. The right-click menu also has **Send a File**, **User Info (WhoIs)** and **Add to Friends List**.
 
+### Can all private messages go into one tab?
+Yes. Go to Settings > Preferences > General > Channels and Private Chats and tick **Put all private messages in one Messages tab**. Each network then gets one **(messages)** tab instead of a tab per person. To reply, type `/msg nick message`; in an empty box, Tab cycles the nicks who wrote to you last. `/query nick` still opens a real private chat. Two extra boxes: **Still open a private chat for nicks on my Friends list**, and **Copy the conversation into the private chat when I open one**.
+
+### Can BChat remember which server worked?
+Yes. Settings > Preferences > Advanced > Connecting > **Move a server to the top of its network's list when I connect to it**. Next time, that server is tried first. It is off by default.
+
 ### How do I mark favourite channels?
 Right-click a channel tab and choose **Favourite Channels...** (also in the **Server** menu). Tick **Join on Connect** in the tab's right-click menu to join that channel every time you connect.
 
@@ -311,7 +317,7 @@ No. BChat has no ads, no accounts and no tracking. It connects only to the IRC n
 A safer way to log in with SASL. When a network offers it, BChat uses it by itself: your password is never sent, not even on a plain port, and the server has to prove it knows your password too. The server tab says **Logged in as ... with SCRAM-SHA-256**.
 
 ### How do I stop BChat flooding or being flooded?
-**Settings → Preferences → Flood**. **Pace** sets how fast BChat sends (Careful for slow servers, Fast for your own server or bouncer); your own messages always go before automatic ones. Below that are limits on how often BChat answers CTCP requests (in total and from one person), how many new private chats open a tab, and how many get a WhoIs (0 = never). When a limit is hit, BChat says so once in the server tab. **Back to Normal** resets it.
+**Settings → Preferences → Flood**. **Pace** sets how fast BChat sends automatic lines (Careful for slow servers, Fast for your own server or bouncer); what you type always goes out at once. **Flood Protection** works as `/flood` does: when more than 400 bytes wait to go out, BChat keeps at most 10 lines in the buffer, 2 from any one person, and can ignore that person for 30 seconds. **Also for CTCP replies** covers version, ping and time answers. **Private Chats** limits how many new private chats open a tab, and how many get a WhoIs (0 = never). When a limit is hit, BChat says so once in the server tab. **Back to Normal** resets it.
 
 ### Can I lock BChat on a shared or family PC?
 Yes: **Settings → Preferences → Lock → Set Password...**. Then BChat asks for the password when it starts, and you can limit it: **No file transfers or direct chats**, **No new private chats** (they show in the server tab), and **Only these channels**. Changing the lock needs the password. Forgot it? Delete `lock.json` in BChat's settings folder: the lock is a house rule, not a safe.
@@ -329,6 +335,9 @@ When someone offers a file, it appears in **Window → File Transfers...**. Sele
 ### Why does BChat warn me about some files?
 Programs (`.exe`, `.msi`, scripts and similar) can harm your PC, so BChat asks **Accept this file?** first, and never accepts them by itself. Hidden tricks that disguise a program as a picture are removed from the file name. Received files are marked as coming from the internet, so Windows checks them before they run.
 
+
+### What if the file is already there?
+BChat asks **File already exists**: **Resume** carries on where an earlier download stopped, **Overwrite** replaces it, **Rename** saves it as `name (1).txt`, **Cancel** refuses it. For files accepted by themselves, choose what happens in **Settings → Preferences → File transfers → If the File Already Exists**. The same page has time-outs for offers and idle transfers, and a list of file types to never accept (or to accept only). `/dcc ignore on|off` turns that list on or off.
 
 ### Can BChat accept files from people I trust?
 Yes. Right-click someone → **Trust for Files and Chats**, then set **Settings → Preferences → File transfers → Auto accept file offers:** to **From trusted people only**. Their whole address must match (a nick alone never does), and programs still always ask. The trusted list is on the same page.
@@ -378,6 +387,11 @@ Yes, most of them. In **Settings → Advanced → Popups...** press **Paste mIRC
 - Check that your internet works in a browser.
 - **Antivirus or firewall:** if BChat ever triggered an alert, your antivirus may now block its internet access. In Bitdefender: **Protection → Firewall → Rules**, find **BChat.exe**, and set it to allow.
 - Look at the server tab (the network's name in the tree): its last lines say what went wrong.
+
+### BChat stopped trying to connect
+- **"BChat disconnected and will not retry"**: the server refused your SASL or certificate login. Check it in **Network List → Edit...**, then **Server → Reconnect**. To stay connected without logging in, set **If the login fails:** to **Stay connected without logging in**.
+- **"Gave up after N retries"**: you set a retry limit in **Settings → Advanced → Connecting**. 0 keeps trying.
+- **"No answer from ... after N seconds"**: the server never answered. BChat tries again as for any failed try; change the wait with **Connect time-out** on the same page.
 
 ### It says my nickname is already in use
 Someone else has it. BChat tries your **Second choice** and **Third choice** nicknames from the Network List. You can also type `/nick AnotherName`.

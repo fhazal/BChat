@@ -1,10 +1,12 @@
 """One IRC network connection and its buffers. Qt networking, but no widgets, so tests can drive it."""
 from __future__ import annotations
 
+import contextlib
 import fnmatch
 from collections import deque
 import random
 import re
+import sys
 import time
 import base64
 from dataclasses import dataclass, field
@@ -81,6 +83,7 @@ class Buffer:
         self.topic_by = ""            # 333 / TOPIC: who set it and when (Channel Central)
         self.topic_at = 0.0
         self.typing: dict[str, tuple[str, float]] = {}   # lower nick -> (nick, when): +typing=active
+        self.key = ""                 # 0.8.5: the channel key (our JOIN, +k, 324), kept for the rejoin
 
     def mode_text(self) -> str:
         """As XChat's title shows them: letters in the server's order, then their values."""
@@ -124,6 +127,7 @@ class Session(QObject):
     state_changed = Signal()
     raw_line = Signal(str, bool)  # text, outgoing
     user_info = Signal(str)  # nick whose silent whois just finished
+    address_found = Signal(str, str)  # 0.8.5: USERHOST answer for /ban, /ignore: nick, user@host ('' = not on IRC)
     alert = Signal(object)   # a highlight or private message that should flash the taskbar
     friends_changed = Signal()
     cert_question = Signal(object)    # a certificate BChat can't verify: the window asks the user
@@ -134,6 +138,7 @@ class Session(QObject):
     lines_inserted = Signal(object)  # history went in above existing lines: the tab is drawn again
     invited = Signal(object, str, str)   # session, channel, who: the window offers Join / Ignore (never joins by itself)
     typing_changed = Signal(object)      # buffer: someone started or stopped typing (+typing)
+    servers_moved = Signal()             # 0.8.6: 'move to top on connect' changed the network's server order
 
     MAX_LINES = 5000
     LAG_WARN_MS = 5000
@@ -151,7 +156,6 @@ class Session(QObject):
                        ("Server time on lines", ("server-time", "znc.in/server-time-iso")),
                        ("Friends' away status", ("extended-monitor",)))
     PACE = {"careful": 1.5, "normal": 1.0, "fast": 0.5}   # Preferences > Network > Flood: how quickly lines go out
-    ZNC_LOST = ("disconnected from irc", "irc connection timed out", "connection refused", "cannot connect to irc")
     # 477 registered only, 489 TLS only, 520 opers only (+O). 0.8.3: not 405 (too many channels): that is about us,
     # not the channel, and a server at its limit says it even for a channel we are already in.
     JOIN_REFUSED = {471, 473, 474, 475, 477, 489, 520}
@@ -206,6 +210,7 @@ class Session(QObject):
         self.focus_next = ""
         self.stay_back = ""                # /join -n: this channel's tab opens without taking the front
         self.dns_waiting: dict = {}        # /dns <nick>: folded nick -> the tab that asked (USERHOST answer)
+        self._addr_waiting: list[str] = []  # 0.8.5: nicks asked with USERHOST for /ban, /ignore, oldest first
         self.player = None                 # /play: the file being sent
         self.typed_by_hand = False
         self.statusmsg = ""
@@ -237,9 +242,16 @@ class Session(QObject):
         self._cap_offered: dict[str, str] = {}
         self._cap_pending = 0
         self._sts_enforced = False
-        self._ctcp_times: list[float] = []
+        self._ctcp_ignored: dict[str, float] = {}   # 0.8.5: nick -> until when their CTCPs are ignored (mIRC /flood)
+        self._ctcp_held = False                     # 0.8.5: the flood buffer is in use (its status line was shown)
+        self._flood_lines: dict[str, deque] = {}    # 0.8.5 flood buffer: nick -> their held replies
+        self._flood_order: deque = deque()          # whose held reply goes out next, one person at a time
+        self._flood_feeding = False
+        self._ctcp_answer: tuple | None = None      # (folded nick, own) while a CTCP reply-list command answers them
         self._queue: list[str] = []
         self._next_send = 0.0
+        self._typed = 0              # 0.8.5: >0 while the user's own input is handled: sent at once, never queued
+        self._oper_wait: tuple | None = None    # 0.8.5: (tab, time) where /oper was typed: the 381 answer goes there
         self._queue_timer = QTimer(self, interval=500)
         self._queue_timer.timeout.connect(self._drain_queue)
 
@@ -257,7 +269,9 @@ class Session(QObject):
         self.list_sink = None        # Channel List window while it wants 322/323
         self.ban_sinks: dict = {}    # channel -> Ban List window
         self.friend_state: dict[str, dict] = {}
-        self._ison_waiting = 0
+        self._ison_asked: deque = deque()   # 0.8.5: per ISON sent, the friends it asked about (None = typed by the user)
+        self._replaying = False      # 0.8.5: lines a bouncer plays back: shown and counted, no sound/flash/tray/pop-up
+        self._pings_out: dict = {}   # 0.8.5: (nick, CTCP PING argument) -> when it went out, for replies in ms
         self._monitor = False
         self._watch = False          # 0.6.0: no MONITOR but WATCH (UnrealIRCd and others): Friends List uses it
         self.extban = ("", "")       # 0.6.0: ISUPPORT EXTBAN=~,a... -> ("~", "a..."): /ban -a account bans
@@ -269,6 +283,8 @@ class Session(QObject):
 
         self._reconnect = QTimer(self, singleShot=True)
         self._reconnect.timeout.connect(self._connect_next)
+        self._dial = QTimer(self, singleShot=True)       # 0.8.5: Connect time-out (Preferences > Advanced)
+        self._dial.timeout.connect(self._dial_timed_out)
         # 0.8.2 connect/disconnect: one number per connection attempt, so a timer from an old link does nothing
         self._conn_gen = 0
         self._performed = self._joins_sent = False   # NickServ/commands/joins done for this link
@@ -278,6 +294,14 @@ class Session(QObject):
         self._tries = 0                   # reconnect tries since the link was last up
         self._down_since = 0.0            # when the link dropped by itself (for "Back after X")
         self._drop_why = ""
+        # 0.8.5 reconnect: away message to send again, channels we left (never rejoined), keys of our JOINs,
+        # a /nick typed while offline, tabs told "Disconnected" this outage, a bouncer rejoin waiting on its timer
+        self._away_msg = ""
+        self._left: set[str] = set()
+        self._join_keys: dict[str, str] = {}
+        self._next_nick = ""
+        self._told_down: list[Buffer] = []
+        self._nick_cut = 0
         self._keepalive = QTimer(self, interval=15000)
         self._keepalive.timeout.connect(self._tick)
         self._who = QTimer(self, interval=120000)
@@ -311,12 +335,71 @@ class Session(QObject):
         if b is None and create:
             b = Buffer(self, name, CHANNEL if self.is_channel(name) else QUERY)
             self.buffers[key] = b
+            if b.kind == QUERY and self.cfg.single_msg_copy and not name.startswith(("(", "=")):
+                self._copy_from_messages(b)
             self.buffer_added.emit(b)
         return b
+
+    # --- 0.8.6: one (messages) tab for private messages ------------------------------------
+
+    MESSAGES = "(messages)"     # brackets: never a nick, like (notices)
+
+    def to_messages(self, nick: str) -> bool:
+        """A private message from nick goes to (messages): the option is on and no private chat with them is open."""
+        c = self.cfg
+        if not c.single_msg_window or not nick or self.fold(nick) in self.buffers:
+            return False
+        if c.single_msg_friends and any(self.fold(n) == self.fold(nick) for n in self._friends_here()):
+            return False
+        return True
+
+    def _into_messages(self, m: Message, dest: str, text: str, ts: float, from_me: bool, quiet: bool) -> None:
+        """A private line (or /me) for a nick without a private chat, while the (messages) tab option is on."""
+        if from_me and "echo-message" in self._cap_active and not self._replaying:
+            return                       # our own /msg: msg() already showed '>nick< text' where we typed it
+        b = self.buffer(self.MESSAGES)
+        msgid = m.tags.get("msgid", "")
+        action = text.startswith("\x01ACTION")
+        body = text.strip("\x01").removeprefix("ACTION").removeprefix(" ") if action else text
+        if from_me:                      # from another client on the bouncer, or played back
+            if action:
+                self.add(b, ACTION, "*", f"{self.nick} → {dest}: {body}", ts, msgid=msgid)
+            else:
+                self.add(b, SELF, f">{dest}<", body, ts, msgid=msgid)
+            return
+        hit = not quiet and self._is_hilite(body, m.nick, b.name)
+        if self.print_hook is not None and not action and self.print_hook("Private Message to Dialog", (m.nick, body)):
+            return
+        if action:
+            self.add(b, ACTION if quiet else HILITE, "*", f"{m.nick} {body}", ts,
+                     colour=self._hilite_colour() if hit else "", msgid=msgid)
+        else:
+            self.add(b, MSG if quiet else HILITE, m.nick, body, ts, colour=self._hilite_colour() if hit else "", msgid=msgid)
+        self._bump(b, 2 if quiet else 3)
+        if not quiet:
+            self._notify(b, "priv")
+
+    def _copy_from_messages(self, b: Buffer) -> None:
+        """'Copy messages to query': what that nick and I said in (messages) goes to the top of their new tab."""
+        src = self.buffers.get(self.fold(self.MESSAGES))
+        if src is None:
+            return
+        who = self.fold(b.name)
+        for ln in src.lines:
+            left = self.fold(strip_format(ln.left))
+            words = strip_format(ln.text).split(" ", 3)
+            if ln.kind in (MSG, HILITE) and left == who \
+                    or ln.kind == SELF and left == self.fold(f">{b.name}<") \
+                    or ln.kind in (ACTION, HILITE) and left == "*" and (
+                        self.fold(words[0]) == who
+                        or len(words) > 2 and words[1] == "→" and self.fold(words[2].rstrip(":")) == who):
+                b.lines.append(Line(ln.kind, ln.left, ln.text, ln.ts, colour=ln.colour, msgid=ln.msgid))
 
     def close_buffer(self, b: Buffer) -> None:
         if b.kind == CHANNEL and b.joined and self.state == "connected":
             self.send("PART", b.name, self.cfg.part_reason)
+        if b.kind == CHANNEL:
+            self._left.add(self.fold(b.name))     # 0.8.5: a closed channel isn't joined again on reconnect
         self.buffers.pop(self.fold(b.name), None)
         self.buffer_removed.emit(b)
 
@@ -351,8 +434,12 @@ class Session(QObject):
             now = time.time()
             self._labels = {k: v for k, v in self._labels.items() if now - v[1] < 120}
             self._labels[label] = (b, now)
+            if line[:5].upper() == "OPER ":
+                self._oper_wait = (b, now)
             self.send_raw(f"@label={label} {line}")
             return
+        if line[:5].upper() == "OPER ":
+            self._oper_wait = (b, time.time())      # 0.8.5: the 381 answer shows in the tab where /oper was typed
         self.send_raw(line)
 
     def clear_buffer(self, b: Buffer) -> None:
@@ -459,11 +546,13 @@ class Session(QObject):
         self._friends_wait = 0
         self._cap_active = set()
         self.nick_attempt = 0
-        self.nick = self._identity("nick") or random_nick()
+        self.nick = self._next_nick or self._identity("nick") or random_nick()   # 0.8.5: a /nick typed while offline
+        self._nick_cut = 0                        # 0.8.5: the nick length this server cuts to, once a 433 shows it
         self._new_socket()                        # a WebSocket server and a normal one need different sockets
         if not self._apply_network_settings():
             return self._stop_bind()
         self._queue.clear()
+        self.flood_clear()                        # 0.8.5: replies held for the last link are not sent on this one
         self._next_send = 0.0
         self.lag_ms = None
         self._ping_sent = 0.0
@@ -530,10 +619,20 @@ class Session(QObject):
             self.cfg.ip_mode, QAbstractSocket.NetworkLayerProtocol.AnyIPProtocol)
         mode = QAbstractSocket.OpenModeFlag.ReadWrite
         self._dial_host = host
+        if self.cfg.connect_timeout > 0:
+            self._dial.start(self.cfg.connect_timeout * 1000)
         if tls:
             self.sock.connectToHostEncrypted(host, port, mode, proto)
         else:
             self.sock.connectToHost(host, port, mode, proto)
+
+    def _dial_timed_out(self) -> None:
+        """No answer to the connect in time: give up on this server and go on as for any failed try."""
+        if self.state != "connecting" or self.sock.state() == QAbstractSocket.SocketState.ConnectedState:
+            return
+        self.add(self.server_buffer, ERROR, "*", f"No answer from {self._dial_host} after {self.cfg.connect_timeout} seconds.")
+        self.sock.abort()
+        self._on_disconnected()
 
     def _stop_bind(self) -> None:
         self.want_connected = False
@@ -553,6 +652,7 @@ class Session(QObject):
         for b in list(self.buffers.values()):  # those channels belong to the old server
             self.buffers.pop(self.fold(b.name), None)
             self.buffer_removed.emit(b)
+        self._left.clear()
         self.net = NetworkConfig(host, [Server(host, port, ssl)], password=password, cycle=False)
         self.typed_by_hand = True
         self.server_buffer.name = host
@@ -614,6 +714,7 @@ class Session(QObject):
         self._cert_loaded = True
 
     def _on_tcp(self) -> None:
+        self._dial.stop()
         if self._starttls == "waiting" and not self._tls_now:
             self.add(self.server_buffer, CONNECT, "*", "Connected. Asking the server to switch to SSL (STARTTLS)...")
             self.send_raw("STARTTLS")
@@ -744,18 +845,33 @@ class Session(QObject):
                     QTimer.singleShot(1, self, self._drain)      # 1 ms, not 0: Windows starves other timers on 0; self as context: no call once the session is gone
                 return
             raw = rx.popleft()
-            try:
-                text = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                text = raw.decode("latin-1")
-            text = text.rstrip("\r")
+            text = self._decode(raw).rstrip("\r")
             if text:
                 self._last_rx = time.time()
-                self.raw_line.emit(text, False)
                 m = parse_line(text)
-                if self.server_hook is not None and self.server_hook(self, text, m.command):
-                    continue
-                self._handle(m)
+                # echo-message: our own 'identify pw' comes back from the server; the Raw Log must not show it
+                echo = "echo-message" in self._cap_active and m.command in ("PRIVMSG", "NOTICE") and self.fold(m.nick) == self.fold(self.nick) and self.is_secret(text)
+                self.raw_line.emit(self._hide_secret(text) if echo else text, False)
+                try:
+                    if self.server_hook is not None and self.server_hook(self, text, m.command):
+                        continue
+                    self._handle(m)
+                except Exception:
+                    # 0.8.5: a line BChat can't handle is reported (console / problem report) and skipped;
+                    # the rest of the batch still goes through
+                    sys.excepthook(*sys.exc_info())
+
+    @staticmethod
+    def _decode(raw: bytes) -> str:
+        """UTF-8, else the Windows default cp1252 (it’s €), else latin-1 for the few bytes cp1252 leaves out."""
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        try:
+            return raw.decode("cp1252")
+        except UnicodeDecodeError:
+            return raw.decode("latin-1")
 
     def _on_socket_error(self, err) -> None:
         if err == QAbstractSocket.SocketError.RemoteHostClosedError:
@@ -813,6 +929,7 @@ class Session(QObject):
             self._reconnect.stop()
 
     def _on_disconnected(self) -> None:
+        self._dial.stop()
         if self._rx:
             self._drain(everything=True)       # the server's last words (ERROR :Closing link) before 'Disconnected.'
         if self.state == "disconnected":
@@ -824,9 +941,17 @@ class Session(QObject):
         self.online_since = 0.0
         self._ns_wait = 0
         self._set_state("disconnected")
+        while self._addr_waiting:              # the answer can't come any more: the waiting commands are told so
+            self.address_found.emit(self._addr_waiting.pop(0), "")
         gone = f"Disconnected ({self._drop_why})." if self._drop_why else "Disconnected."
+        first = self._tries == 0        # 0.8.5: every tab hears it once per outage; a failed retry says only "Reconnect try N"
+        if first:
+            self._told_down = []
         for b in self.all_buffers():
-            self.add(b, INFO, "*", gone)
+            if first:
+                self.add(b, INFO, "*", gone)
+            if first and b is not self.server_buffer:
+                self._told_down.append(b)
             if b.kind == CHANNEL:
                 b.joined = False
                 b.users.clear()
@@ -835,6 +960,11 @@ class Session(QObject):
         self.notify.emit(self.server_buffer, "disconnect")
         if self._killed:
             self.add(self.server_buffer, INFO, "*", "BChat won't reconnect after a kill. Use Server > Reconnect when you're ready.")
+        if self.want_connected and self.cfg.connect_retries > 0 and self._tries >= self.cfg.connect_retries:
+            self.want_connected = False           # 0.8.5: Retry N times (Preferences > Advanced) used up
+            n = self.cfg.connect_retries
+            self.add(self.server_buffer, ERROR, "*", f"Gave up after {n} {'retry' if n == 1 else 'retries'}. "
+                                                      "Use Server > Reconnect to try again.")
         if self.want_connected:
             self._tries += 1
             delay, note = self.reconnect_wait(self._tries)
@@ -875,35 +1005,72 @@ class Session(QObject):
     # --- sending ------------------------------------------------------------
 
     # passwords typed to services must not reach the raw log or the chat
-    _SECRET_LINE = re.compile(r"(?i)^(PRIVMSG\s+\S*serv\S*\s+:?\s*(?:IDENTIFY|ID|GHOST|RECOVER|REGISTER|LOGIN|AUTH)\s+).*")
+    # 0.8.5: also GROUP nick pw, SET PASSWORD pw (and SET #chan PASSWORD), RELEASE; any leading IRCv3 tags
+    # ('@label=bc1 ...' with labeled-response) and an echoed ':nick!user@host ' prefix no longer hide the password from the match
+    _SECRET_VERBS = r"(?:IDENTIFY|ID|GHOST|RECOVER|RELEASE|REGISTER|LOGIN|AUTH|GROUP|SET\s+(?:\S+\s+)?PASSWORD)"
+    _SECRET_HEAD = r"(?:@\S+\s+)?(?::\S+\s+)?"
+    # a services nick: NickServ, ChanServ, Q@CServe.quakenet.org; not Observer or Server
+    _SERV_NICK = r"(?:[^\s@]*@)?[^\s@.]*serve?(?:\.\S*)?"
+    _SECRET_LINE = re.compile(r"(?i)^(" + _SECRET_HEAD + r"(?:PRIVMSG|NOTICE)\s+(?![#&+!])" + _SERV_NICK + r"\s+:?\s*" + _SECRET_VERBS + r"\s+).*")
     # 0.6.1: '/ns identify pw' goes out as the server's own alias 'NS IDENTIFY pw', '/oper name pw' as OPER: hide those too
-    _SECRET_ALIAS = re.compile(r"(?i)^((?:NS|CS|MS|OS|HS|BS|\S*SERV)\s+:?\s*(?:IDENTIFY|ID|GHOST|RECOVER|REGISTER|LOGIN|AUTH)\s+).*"
-                               r"|^(OPER\s+\S+\s+).*")
+    _SECRET_ALIAS = re.compile(r"(?i)^(" + _SECRET_HEAD + r"(?:NS|CS|MS|OS|HS|BS|\S*SERV)\s+:?\s*" + _SECRET_VERBS + r"\s+).*"
+                               r"|^(" + _SECRET_HEAD + r"OPER\s+\S+\s+).*")
+    # text typed to a services nick as a plain chat line ('identify pw' in the NickServ tab)
+    _SECRET_TEXT = re.compile(r"(?is)^(\s*" + _SECRET_VERBS + r"\s+).*")
+
+    @staticmethod
+    def _untag(line: str) -> tuple[str, str]:
+        """('@tags ', 'rest') for a line with IRCv3 message tags, ('', line) without."""
+        if line.startswith("@"):
+            tags, _, rest = line.partition(" ")
+            return tags + " ", rest.lstrip(" ")
+        return "", line
 
     @classmethod
     def _hide_secret(cls, line: str) -> str:
-        if line.upper().startswith(("PASS ", "AUTHENTICATE ")):
-            return line.split(" ", 1)[0] + " ****"
+        head, body = cls._untag(line)
+        if body.upper().startswith(("PASS ", "AUTHENTICATE ")):
+            return head + body.split(" ", 1)[0] + " ****"
         line = cls._SECRET_LINE.sub(lambda m: m.group(1) + "****", line)
         return cls._SECRET_ALIAS.sub(lambda m: (m.group(1) or m.group(2)) + "****", line)
 
     @classmethod
     def is_secret(cls, line: str) -> bool:
-        return bool(cls._SECRET_LINE.match(line) or cls._SECRET_ALIAS.match(line)) or             line.upper().startswith(("PASS ", "AUTHENTICATE "))
+        return bool(cls._SECRET_LINE.match(line) or cls._SECRET_ALIAS.match(line)) or \
+            cls._untag(line)[1].upper().startswith(("PASS ", "AUTHENTICATE "))
+
+    def hide_typed(self, target: str, text: str) -> str:
+        """What the chat, the log and the scrollback may show of a line typed to target: a password to a
+        services nick ('identify pw' in the NickServ tab) becomes ****."""
+        if not target or self.is_channel(target) or not re.fullmatch(self._SERV_NICK, target, re.I):
+            return text
+        return self._SECRET_TEXT.sub(lambda m: m.group(1) + "****", text)
 
     def ignored(self, prefix: str, kind: str = "") -> bool:
         """XChat's ignore_check: a mask only counts for the kinds ticked on it, and Unignore overrides the rest."""
+        if not getattr(self.cfg, "ignore_on", True):     # 0.8.5 /ignore off
+            return False
         low = self.fold(prefix)
+        here = self.fold(self.net.name)
+        if kind == "P":       # 0.8.5: a private message from someone whose query tab is open is never hidden
+            q = self.buffers.get(self.fold(prefix.partition("!")[0]))
+            if q is not None and q.kind == QUERY:
+                return False
         hit = False
         for mask in self.cfg.ignores:
-            if not fnmatch.fnmatchcase(low, self.fold(mask)):
+            # 0.8.5: only * and ? are wildcards; [ ] \ ^ are nick letters, folded per CASEMAPPING (never a set)
+            glob = "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in self.fold(mask))
+            if not re.fullmatch(glob, low, re.S):
+                continue
+            nets = self.cfg.ignore_nets.get(mask, "")      # 0.8.5: /ignore without -w is for that network only
+            if nets and here not in [self.fold(x.strip()) for x in nets.split(",")]:
                 continue
             kinds = self.cfg.ignore_kinds.get(mask, IGNORE_KINDS)
             if "U" in kinds:
                 return False
             if not kind or kind in kinds:
                 hit = True
-        if hit and kind:
+        if hit and kind and kind not in "KH":            # K and H change a line, they don't hide it
             IGNORE_STATS[kind] = IGNORE_STATS.get(kind, 0) + 1
         return hit
 
@@ -924,8 +1091,8 @@ class Session(QObject):
             return
         if self._monitor:
             self.send_raw("MONITOR C", quiet=True)
-            if nicks:
-                self.send_raw("MONITOR + " + ",".join(nicks), quiet=True)
+            for line in self._monitor_lines(nicks):    # 0.8.5: a long list goes out as several lines of <= 512 bytes
+                self.send_raw(line, quiet=True)
             self.send_raw("MONITOR S", quiet=True)
         elif self._watch:
             self.send_raw("WATCH C", quiet=True)            # 0.6.0: instant online/offline/away where WATCH exists
@@ -934,6 +1101,20 @@ class Session(QObject):
         else:
             self._friends_timer.start(max(10, self.cfg.notify_timeout) * 1000)
             self.poll_friends()
+
+    @staticmethod
+    def _monitor_lines(nicks: list[str], limit: int = 510) -> list[str]:
+        """'MONITOR + a,b,c' lines that each fit an IRC line (512 bytes with the CR LF)."""
+        out, cur = [], ""
+        for n in nicks:
+            add = ("," if cur else "") + n
+            if cur and len(("MONITOR + " + cur + add).encode("utf-8")) > limit:
+                out.append("MONITOR + " + cur)
+                cur, add = "", n
+            cur += add
+        if cur:
+            out.append("MONITOR + " + cur)
+        return out
 
     def _friends_after_005(self, ticket: int = 0) -> None:
         """0.6.0: start Friends tracking once the server's feature list (005) is in: end of MOTD, or 5 s after 001."""
@@ -944,7 +1125,7 @@ class Session(QObject):
     def poll_friends(self) -> None:
         nicks = self._friends_here()
         if self.state == "connected" and nicks and not self._monitor and not self._watch:
-            self._ison_waiting += 1
+            self._ison_asked.append([self.fold(n) for n in nicks])
             self.send_raw("ISON " + " ".join(nicks), quiet=True)
 
     def _friend_away(self, nick: str, reason: str | None) -> None:
@@ -1005,6 +1186,8 @@ class Session(QObject):
                 return
         secret = secret or self.is_secret(line)
         self.sock.write(line.encode("utf-8", "replace") + b"\r\n")
+        if not quiet and (line.split(" ", 1)[1] if line.startswith("@") and " " in line else line)[:5].upper() == "ISON ":
+            self._ison_asked.append(None)      # 0.8.5: a typed /ison: its answer is shown, not read as friends' status
         if not quiet:
             self.raw_line.emit(self._hide_secret(line) if secret else line, True)
 
@@ -1029,13 +1212,52 @@ class Session(QObject):
         return out
 
     def send(self, command: str, *params: str) -> None:
+        answer = self._ctcp_answer
+        if answer is not None and command.upper() == "NOTICE" and len(params) == 2 and params[1].startswith("\x01") \
+                and self.fold(params[0]) == answer[0]:
+            self._ctcp_answer = None             # 0.8.5: a reply-list command's CTCP reply goes through the flood buffer too
+            try:
+                self._ctcp_reply(params[0], answer[1], params[1])
+            finally:
+                self._ctcp_answer = answer
+            return
+        if command.upper() == "PRIVMSG" and len(params) == 2 and params[1].upper().startswith("\x01PING"):
+            params = self._ctcp_ping_out(*params)
         line = build_line(command, *params)
         self.sent_count += 1
+        if command.upper() == "JOIN" and len(params) > 1:
+            self._note_join_keys(params[0], params[1])
+        if command.upper() == "NICK" and params and self.state != "connected" \
+                and self.sock.state() != QAbstractSocket.SocketState.ConnectedState:
+            # 0.8.5: /nick while offline or waiting to reconnect: the next connect uses it
+            self._next_nick = self.nick = params[0]
+            self.state_changed.emit()
+            self.add(self._front(), INFO, "*", f"The next connect uses the nick {params[0]}.")
+            return
         if self.state != "connected":
             self.send_raw(line)
             return
+        if self._typed:
+            self.send_raw(line)       # 0.8.5: what the user types is never queued or capped, only automatic lines are paced
+            return
         self._queue.append(line)
         self._drain_queue()
+
+    @contextlib.contextmanager
+    def typed(self):
+        """Everything sent while the user's own input is handled (chat, /msg, /notice, /me, /mode, /kick, aliases...)
+        goes straight to the socket; only automatic lines (JOIN/WHO/MODE bursts, CTCP replies, scripts, timers) are paced."""
+        self._typed += 1
+        try:
+            yield
+        finally:
+            self._typed -= 1
+
+    def _note_join_keys(self, chans: str, keys: str) -> None:
+        """0.8.5: the keys of our own JOIN, kept until the server says we're in (then on the tab, for rejoins)."""
+        for c, k in zip(chans.split(","), keys.split(",")):
+            if k and k != "x":
+                self._join_keys[self.fold(c)] = k
 
     @staticmethod
     def _is_background(line: str) -> bool:
@@ -1044,7 +1266,7 @@ class Session(QObject):
         return word[0] == "WHO" or (word[0] == "MODE" and len(word) == 2)
 
     def _drain_queue(self) -> None:
-        """XChat's tcp_send_queue pacing, improved: background lines leave room, so user commands never wait behind them."""
+        """XChat's tcp_send_queue pacing, improved: background lines leave room, so automatic lines never fill the budget."""
         now = time.time()
         while self._queue:
             if self._next_send < now:
@@ -1062,11 +1284,22 @@ class Session(QObject):
             self._next_send += (2 + len(rest) / 120) * self.PACE.get(self.cfg.flood_pace, 1.0)
             self.send_raw(line)
         self._queue_timer.stop()
+        self._ctcp_queue_empty()
+
+    def _not_a_target(self, target: str) -> bool:
+        """QA BUG-2 (0.8.6): "(messages)" and "(notices)" are BChat's own tabs, never a nick to send to."""
+        if not target.startswith("("):
+            return False
+        hint = "Reply with /msg nick message (Tab picks the nick)" if target == self.MESSAGES else "No channel joined. Try /join #channel"
+        self.add(self.buffer(target), ERROR, "*", hint)
+        return True
 
     def say(self, target: str, text: str) -> None:
         if target.startswith("=") and self.dcc_say is not None:
             if not self.dcc_say(self, target, text):
                 self.add(self.buffer(target), ERROR, "*", f"No active DCC chat with {target[1:]}.")
+            return
+        if self._not_a_target(target):
             return
         if self.state != "connected":
             self.add(self._front(), ERROR, "*", "Not connected. Use Server > Reconnect.")
@@ -1084,15 +1317,14 @@ class Session(QObject):
                 text = text[len(piece):]
             self.send("PRIVMSG", target, piece)
             if "echo-message" not in self._cap_active:
-                self.add(self.buffer(target), SELF, self.nick, piece)
+                self.add(self.buffer(target), SELF, self.nick, self.hide_typed(target, piece))
 
     def msg(self, target: str, text: str) -> None:
         """/msg: sends without opening a tab, and shows >target< in the current one, like XChat."""
         if self.state != "connected":
             self.add(self._front(), ERROR, "*", "Not connected. Use Server > Reconnect.")
             return
-        line = build_line("PRIVMSG", target, text)
-        shown = self._hide_secret(line).partition(" :")[2] or text if self._SECRET_LINE.match(line) else text
+        shown = self.hide_typed(target, text)
         self.send("PRIVMSG", target, text)
         self.add(self._front(), SELF, f">{target}<", shown)
         open_tab = self.buffers.get(self.fold(target))
@@ -1100,6 +1332,8 @@ class Session(QObject):
             self.add(open_tab, SELF, self.nick, shown)
 
     def action(self, target: str, text: str) -> None:
+        if self._not_a_target(target):
+            return
         if self.state != "connected":
             self.add(self._front(), ERROR, "*", "Not connected. Use Server > Reconnect.")
             return
@@ -1147,14 +1381,15 @@ class Session(QObject):
         if kick:
             self.send("KICK", b.name, nick, self.cfg.part_reason)
 
-    def ban(self, b: Buffer, nick: str, kind: int, kick: bool = False) -> None:
+    def ban(self, b: Buffer, nick: str, kind: int, kick: bool = False, reason: str = "") -> None:
         u = b.users.get(self.fold(nick))
         self.send("MODE", b.name, "+b", mask_ban(nick, u.host if u else "", kind))
         if kick:
-            self.send("KICK", b.name, nick, self.cfg.part_reason)
+            self.send("KICK", b.name, nick, reason.strip() or self.cfg.part_reason)   # 0.8.5: /kickban's own reason
 
     def set_away(self, away: bool, reason: str = "") -> None:
         reason = reason or self.cfg.away_reason
+        self._away_msg = reason if away else ""   # 0.8.5: sent again after a reconnect
         if away:
             self.send("AWAY", reason)
         else:
@@ -1208,9 +1443,8 @@ class Session(QObject):
                 self._playback[bid][1].append(m)     # ZNC playback: shown under one header when the batch ends
             return
         if self._znc_collect is not None and m.command in ("PRIVMSG", "NOTICE") and m.nick != "***":
-            if not self._znc_lost_irc(m):        # ZNC losing the server mid-playback is news: it goes through live
-                self._znc_collect[1].append(m)
-                return
+            self._znc_collect[1].append(m)
+            return
         handler = getattr(self, "_irc_" + m.command.lower(), None) if m.command.isalpha() else None
         if handler:
             handler(m)
@@ -1372,8 +1606,22 @@ class Session(QObject):
                 text = f"Logged in as {self.net.sasl_user} with SCRAM-SHA-256: your password itself was never sent."
         self._sasl_state = ""
         self.add(self.server_buffer, INFO if ok else ERROR, "*", text)
+        if not ok and not self._welcomed and self.net.login_fail != "stay":
+            self._sasl_give_up()                  # 0.8.5: If the login fails: Disconnect, don't retry
+            return
         if not self._welcomed:
             self.send_raw("CAP END")
+
+    def _sasl_give_up(self) -> None:
+        self.want_connected = False
+        self._reconnect.stop()
+        self.add(self.server_buffer, ERROR, "*", "BChat disconnected and will not retry. Check the SASL login in "
+                                                  "Network List > Edit, then use Server > Reconnect.")
+        self.send_raw("QUIT")
+        self.sock.flush()
+        self.sock.abort()
+        self._dial.stop()
+        self._set_state("disconnected")
 
     def _irc_batch(self, m: Message) -> None:
         """Other batches: their lines carry their own tags and show normally. Chathistory batches are collected."""
@@ -1416,6 +1664,8 @@ class Session(QObject):
             if ts <= since or self.ignored(m.prefix, "C" if m.command == "PRIVMSG" else "N"):
                 continue
             text, nick = m.param(-1), m.nick
+            if self.ignored(m.prefix, "K"):               # 0.8.5 /ignore -k (strip_format keeps the CTCP marks)
+                text = strip_format(text)
             me = self.fold(nick) == self.fold(self.nick)
             if m.command == "NOTICE":
                 if text.startswith(""):
@@ -1428,7 +1678,7 @@ class Session(QObject):
             elif me:
                 lines.append(Line(SELF, nick, text, ts))
             else:
-                hit = self._is_hilite(text, nick, b.name)
+                hit = not self.ignored(m.prefix, "H") and self._is_hilite(text, nick, b.name)
                 lines.append(Line(HILITE if hit else MSG, nick, text, ts, colour=self._hilite_colour() if hit else ""))
         if not lines:
             return
@@ -1501,27 +1751,6 @@ class Session(QObject):
             return
         self.add(self.server_buffer, ERROR, "*", m.param(-1))
 
-    def _znc_lost_irc(self, m: Message) -> bool:
-        """ZNC lost the IRC server but stays connected to us: no 'Disconnected' ever reaches BChat, so the
-        channels would still show everyone online, ourselves as op. Leave them the way a real disconnect does;
-        ZNC's own JOIN on its way back fills them again."""
-        user, _, host = m.prefix.partition("!")[2].partition("@")
-        if not (user == "znc" and host == "znc.in" and m.nick.lower().endswith("status")):
-            return False
-        # every way ZNC words it (IRCSock.cpp): plain disconnect, with the server's reason, timeout, refused
-        if not strip_format(m.param(-1)).strip().lower().startswith(self.ZNC_LOST):
-            return False
-        if time.time() - self._ts(m) > 60 or (self._znc_collect is not None and "time" not in m.tags):
-            return False                            # an old line played back, not news; mid-playback only a dated line counts
-        for b in self.all_buffers():
-            if b.kind == CHANNEL and b.joined:
-                b.joined = False
-                b.users.clear()
-                self.add(b, INFO, "*", "Disconnected: the bouncer lost the IRC server. It rejoins when the server is back.")
-                self.users_changed.emit(b)
-                self.buffer_changed.emit(b)
-        return True
-
     def _join_refused(self, n: int, m: Message) -> bool:
         """The server says no to a channel whose tab still shows us inside: that list is old (a bouncer's memory
         from before the server restarted, say). Empty it so no one shows as there, ourselves included.
@@ -1537,7 +1766,6 @@ class Session(QObject):
 
     def _irc_privmsg(self, m: Message) -> None:
         target, text = m.param(0), m.param(-1)
-        self._znc_lost_irc(m)
         if m.nick == "***" and m.prefix.endswith("@znc.in"):
             if text.strip() == "Buffer Playback...":
                 if self._znc_collect is not None:
@@ -1567,16 +1795,25 @@ class Session(QObject):
         kind = "D" if dcc else "T" if ctcp else "C" if self.is_channel(target) else "P"
         if self.ignored(m.prefix, kind):
             return
+        if not ctcp and self.ignored(m.prefix, "K"):      # 0.8.5 /ignore -k: their colours, bold and codes taken out
+            text = strip_format(text)
+        quiet = self.ignored(m.prefix, "H")               # 0.8.5 /ignore -h: never a highlight or an alert
         ts = self._ts(m)
         from_me = self.fold(m.nick) == self.fold(self.nick)
         target = target.lstrip(self.statusmsg) if self.statusmsg else target
         dest = target if self.is_channel(target) else (target if from_me else m.nick)
+        if from_me:
+            text = self.hide_typed(dest, text)       # echo-message: the server sends our own 'identify pw' back
+        if not self.is_channel(target) and (not ctcp) and self.to_messages(dest):
+            self._into_messages(m, dest, text, ts, from_me, quiet)
+            return
         if not from_me and not self.cfg.auto_dialog and not self.is_channel(target) and self.fold(dest) not in self.buffers \
                 and not (text.startswith("\x01") and not text.startswith("\x01ACTION")):
             # "Open a new tab when you receive a private message" is off: it shows where you are
             front = self._front()
-            self.add(front, HILITE, f"*{m.nick}*", text.strip("\x01").removeprefix("ACTION "), ts)
-            self.notify.emit(front, "priv")
+            self.add(front, MSG if quiet else HILITE, f"*{m.nick}*", text.strip("\x01").removeprefix("ACTION "), ts)
+            if not quiet:
+                self._notify(front, "priv")
             return
         if not from_me and not self.is_channel(target) and self.fold(dest) not in self.buffers \
                 and not (text.startswith("\x01") and not text.startswith("\x01ACTION")) and self._query_flood(m.nick, time.time()):
@@ -1590,14 +1827,19 @@ class Session(QObject):
                 b = self.buffer(dest)
                 if new and not from_me:
                     self._whois_new_query(b, m.nick)
-                hit = self._is_hilite(rest, m.nick, b.name)
+                # 0.8.5: our own /me (typed in another client of the bouncer) is never unread or a highlight
+                hit = not from_me and not quiet and self._is_hilite(rest, m.nick, b.name)
                 self.add(b, ACTION if not hit else HILITE, "*", f"{m.nick} {rest}", ts, colour=self._hilite_colour() if hit else "")
-                self._bump(b, 3 if hit else 2)
                 if not from_me:
-                    self.notify.emit(b, "priv" if b.kind == QUERY else "hilight" if hit else "chan")
+                    self._bump(b, 3 if hit else 2)
+                if not from_me and not quiet:
+                    self._notify(b, "priv" if b.kind == QUERY else "hilight" if hit else "chan")
             else:
+                # 0.8.5: an old request played back, or our own CTCP to someone else that the bouncer echoes, is not answered
+                if self._replaying or (from_me and self.fold(target) != self.fold(self.nick)):
+                    return
                 self.last_ctcp_prefix = m.prefix          # DCC trust list checks the whole address
-                self._ctcp_request(m.nick, verb.upper(), rest)
+                self._ctcp_request(m.nick, verb.upper(), rest, own=from_me)
             return
         new = self.fold(dest) not in self.buffers
         b = self.buffer(dest)
@@ -1613,15 +1855,16 @@ class Session(QObject):
         if from_me:
             self.add(b, SELF, m.nick, text, ts, msgid=msgid)
             return
-        hit = self._is_hilite(text, m.nick, b.name)
-        hl = hit or b.kind == QUERY
+        hit = not quiet and self._is_hilite(text, m.nick, b.name)
+        hl = hit or (b.kind == QUERY and not quiet)
         if self.print_hook is not None:
             event = "Private Message to Dialog" if b.kind == QUERY else "Channel Msg Hilight" if hit else "Channel Message"
             if self.print_hook(event, (m.nick, text)):
                 return
         self.add(b, HILITE if hl else MSG, m.nick, text, ts, colour=self._hilite_colour() if hit else "", msgid=msgid)
         self._bump(b, 3 if hl else 2)
-        self.notify.emit(b, "priv" if b.kind == QUERY else "hilight" if hit else "chan")
+        if not quiet:
+            self._notify(b, "priv" if b.kind == QUERY else "hilight" if hit else "chan")
 
     # --- IRCv3 client tags: +typing and +draft/reply ------------------------------------
 
@@ -1694,7 +1937,7 @@ class Session(QObject):
         self.sent_count += 1
         self.send_raw(f"@+draft/reply={msgid} " + build_line("PRIVMSG", target, text))
         if "echo-message" not in self._cap_active:
-            self.add(self.buffer(target), SELF, self.nick, text)
+            self.add(self.buffer(target), SELF, self.nick, self.hide_typed(target, text))
 
     def te(self, event: str, b: Buffer, kind: str, args, ts: float | None = None) -> None:
         """Prints a Text Event with the user's format."""
@@ -1713,15 +1956,17 @@ class Session(QObject):
             return self.cfg.ctcp_replies
         return [["TIME", "nctcp %s TIME %t"], ["PING", "nctcp %s PING %d"]]
 
-    def _ctcp_request(self, nick: str, verb: str, rest: str) -> None:
+    def _ctcp_request(self, nick: str, verb: str, rest: str, own: bool = False) -> None:
         now = time.time()
         if verb == "DCC":
+            if own:
+                return                          # 0.8.5: our own offer echoed back is not an offer to us
             if self.on_dcc is not None:
                 self.on_dcc(self, nick, rest)
             else:
                 self.add(self._front(), INFO, "*", f"{nick} offered a file or direct chat. BChat can't accept these here.")
             return
-        if not self._ctcp_allowed(nick, now):
+        if not own and not self._ctcp_allowed(nick, now):     # 0.8.5: someone past their share of the flood buffer
             return
         self.te("CTCP Generic", self._front(), INFO, (verb, nick))
         mine = [c for n, c in self._ctcp_reply_list() if n.upper() == verb.upper()]
@@ -1729,19 +1974,27 @@ class Session(QObject):
             from . import full_version
             values = {"d": rest, "e": self.net.name, "m": "Windows", "n": self.nick, "s": nick, "t": time.ctime(),
                       "v": f"BChat {full_version()}"}
-            for cmd in mine:
-                if not cmd.startswith("!"):     # others can trigger these, so never a program
-                    self.on_command(self, "/" + re.sub(r"%([demnstv])", lambda m: values[m.group(1)], cmd).lstrip("/"))
+            self._ctcp_answer = (self.fold(nick), own)
+            try:
+                for cmd in mine:
+                    if not cmd.startswith("!"):     # others can trigger these, so never a program
+                        self.on_command(self, "/" + re.sub(r"%([demnstv])", lambda m: values[m.group(1)], cmd).lstrip("/"))
+            finally:
+                self._ctcp_answer = None
             return
         if verb == "VERSION":
             from . import full_version
-            self.send("NOTICE", nick, f"\x01VERSION BChat {full_version()} by BajuBesi Labs\x01")
+            self._ctcp_reply(nick, own, f"\x01VERSION BChat {full_version()} by BajuBesi Labs\x01")
         elif verb == "PING":
-            self.send("NOTICE", nick, f"\x01PING {rest}\x01")
+            self._ctcp_reply(nick, own, f"\x01PING {rest}\x01")
         elif verb == "TIME":
-            self.send("NOTICE", nick, f"\x01TIME {time.ctime()}\x01")
+            self._ctcp_reply(nick, own, f"\x01TIME {time.ctime()}\x01")
+        elif verb in ("FINGER", "USERINFO"):
+            self._ctcp_reply(nick, own, f"\x01{verb} {self._identity('real')}\x01")
+        elif verb == "SOURCE":
+            self._ctcp_reply(nick, own, "\x01SOURCE BChat by BajuBesi Labs\x01")
         elif verb == "CLIENTINFO":
-            self.send("NOTICE", nick, "\x01CLIENTINFO ACTION CLIENTINFO PING TIME VERSION\x01")
+            self._ctcp_reply(nick, own, "\x01CLIENTINFO ACTION CLIENTINFO FINGER PING SOURCE TIME USERINFO VERSION\x01")
 
     @staticmethod
     def _matches(nick: str, patterns: str) -> bool:
@@ -1762,8 +2015,47 @@ class Session(QObject):
         from .highlightdialog import colour_of
         return colour_of(self.cfg.theme, r["colour"])
 
+    def _ctcp_ping_out(self, nick: str, text: str) -> tuple:
+        """0.8.5: '/ctcp X PING' with nothing after it sends the time, and every PING we send is remembered, so the
+        reply shows in milliseconds."""
+        now = time.time()
+        arg = text.strip("\x01")[4:].strip()
+        if not arg:
+            arg = str(int(now))
+            text = f"\x01PING {arg}\x01"
+        self._pings_out = {k: t for k, t in self._pings_out.items() if now - t < 120}
+        self._pings_out[(self.fold(nick), arg)] = now
+        return nick, text
+
+    def _ping_delay(self, nick: str, rest: str) -> float | None:
+        """Seconds a PING took: from when we sent it, else from the time inside the reply; None if it isn't a time."""
+        now = time.time()
+        rest = rest.strip()
+        sent = self._pings_out.pop((self.fold(nick), rest), None)
+        if sent is None:
+            parts = rest.split()
+            try:
+                if len(parts) == 2 and all(p.isdigit() for p in parts):      # 'seconds microseconds'
+                    sent = int(parts[0]) + int(parts[1]) / 1e6
+                elif len(parts) == 1:
+                    sent = float(parts[0])
+                    if sent > 1e11:                                      # milliseconds
+                        sent /= 1000
+                else:
+                    return None
+            except ValueError:
+                return None
+            if not 0 < sent < 4e9:                                       # not a time (nan, inf, 0)
+                return None
+        return max(0.0, now - sent)
+
+    def _notify(self, b: Buffer, kind: str) -> None:
+        """0.8.5: bouncer playback is shown and counted, but old lines make no sound, flash, tray or pop-up."""
+        if not self._replaying:
+            self.notify.emit(b, kind)
+
     def _bump(self, b: Buffer, level: int) -> None:
-        if level == 3:
+        if level == 3 and not self._replaying:
             self.alert.emit(b)
         if b is not self.current and level >= 2:
             b.unread += 1
@@ -1786,7 +2078,6 @@ class Session(QObject):
 
     def _irc_notice(self, m: Message) -> None:
         target, text = m.param(0), m.param(-1)
-        self._znc_lost_irc(m)
         if self.fold(m.nick) == "operserv" and "session limit" in text.lower():
             # services count kills, then auto-ban the whole IP (Anope maxsessionkill), so retrying can lock out every client on it
             self.want_connected = False
@@ -1802,13 +2093,16 @@ class Session(QObject):
                 return
             if self.ignored(m.prefix, "T"):
                 return
-            if verb.upper() == "PING" and rest.isdigit():
-                self.add(self._front(), INFO, "*", f"Ping reply from {m.nick}: {max(0, int(time.time()) - int(rest))} second(s)")
+            secs = self._ping_delay(m.nick, rest) if verb.upper() == "PING" else None
+            if secs is not None:
+                self.add(self._front(), INFO, "*", f"PING reply from {m.nick}: {secs:.3f} s")
                 return
             self.add(self._front(), INFO, "*", f"CTCP {verb} reply from {m.nick}: {rest}")
             return
         if self.ignored(m.prefix, "N"):
             return
+        if self.ignored(m.prefix, "K"):                   # 0.8.5 /ignore -k: their colours, bold and codes taken out
+            text = strip_format(text)
         if not self._welcomed and "invalid password" in text.lower():
             self._login_refused(text)
             return
@@ -1823,7 +2117,8 @@ class Session(QObject):
             return
         b = self.buffers.get(self.fold(target)) if self.is_channel(target) else (self._notice_channel(m, text) or self._front())
         self.add(b or self._front(), NOTICE, f"-{m.nick}-", text, self._ts(m))
-        self.notify.emit(b or self._front(), "notice")
+        if self.fold(m.nick) != self.fold(self.nick) and not self.ignored(m.prefix, "H"):     # 0.8.5: our own, echoed by the bouncer: no alert; /ignore -h: none
+            self._notify(b or self._front(), "notice")
 
     def _irc_join(self, m: Message) -> None:
         chan = m.param(0)
@@ -1833,6 +2128,8 @@ class Session(QObject):
             b.joined = True
             b.users.clear()
             b.modes, b.mode_args = "", {}
+            self._left.discard(self.fold(chan))          # 0.8.5: joined again, so rejoined after an outage too
+            b.key = self._join_keys.pop(self.fold(chan), "") or b.key
             self._names_fresh.discard(self.fold(chan))
             self.add(b, NOW_TALKING, "➤", f"Now talking on {b.name}")
             self.send("MODE", b.name)
@@ -1842,7 +2139,7 @@ class Session(QObject):
             self.buffer_changed.emit(b)
         elif not self.cfg.hide_joinpart:
             self.te("Join", b, JOIN, (m.nick, b.name, m.userhost), self._ts(m))
-            self.notify.emit(b, "join")
+            self._notify(b, "join")
         joined = User(m.nick, "", m.userhost)
         if "extended-join" in self._cap_active and len(m.params) >= 3:
             joined.account = "" if m.param(1) == "*" else m.param(1)
@@ -1861,6 +2158,7 @@ class Session(QObject):
         if self.fold(m.nick) == self.fold(self.nick):
             b.joined = False
             b.users.clear()
+            self._left.add(self.fold(b.name))            # 0.8.5: left on purpose: a reconnect doesn't join it again
             self.te("You Part", b, PART, (b.name,))
             self.users_changed.emit(b)
             self.buffer_changed.emit(b)
@@ -1872,7 +2170,7 @@ class Session(QObject):
             else:
                 self.te("Part", b, PART, (m.nick, m.userhost, b.name), self._ts(m))
             self._bump(b, 1)
-            self.notify.emit(b, "part")
+            self._notify(b, "part")
         self.users_changed.emit(b)
 
     def _irc_quit(self, m: Message) -> None:
@@ -1890,15 +2188,15 @@ class Session(QObject):
 
     def _irc_kick(self, m: Message) -> None:
         b = self.buffer(m.param(0), False)
-        if b is None:
-            return
         victim, reason = m.param(1), m.param(2)
+        if b is None or not victim:                 # 0.8.5: a KICK naming nobody kicks nobody (not us)
+            return
         b.users.pop(self.fold(victim), None)
         if self.fold(victim) == self.fold(self.nick):
             b.joined = False
             b.users.clear()
             self.te("You Kicked", b, PART, (b.name, m.nick, reason))
-            self.notify.emit(b, "kicked")
+            self._notify(b, "kicked")
             self.buffer_changed.emit(b)
             now = time.time()
             if self.cfg.rejoin_on_kick and now - b.rejoined_at > 30:       # once: a kick loop can't flood the channel
@@ -1907,7 +2205,7 @@ class Session(QObject):
                 QTimer.singleShot(3000, lambda name=b.name, key=key: self._rejoin_after_kick(name, key))
         else:
             self.te("Kick", b, PART, (m.nick, victim, b.name, reason))
-        self.notify.emit(b, "kick")
+        self._notify(b, "kick")
         self.users_changed.emit(b)
 
     def _rejoin_after_kick(self, name: str, key: str) -> None:
@@ -1915,34 +2213,85 @@ class Session(QObject):
         if self.state == "connected" and b is not None and not b.joined:
             self.send("JOIN", name, *([key] if key else []))
 
-    # --- Preferences > Network > Flood: answering others ----------------------------------
+    # --- Flood protection for automatic CTCP replies (0.8.5: mIRC's Options > Flood and /flood) ----------------
+    # Once more than cfg.flood_bytes wait in the paced send queue, replies go into a flood buffer instead: at most
+    # flood_lines lines (the rest are dropped), at most flood_per_user per person, and a person past their share has
+    # their CTCPs ignored for flood_ignore seconds. The buffer goes out one person at a time, through _drain_queue.
+    # The help gives the 400-byte default; it gives none for the other three, so config uses its example, /flood 200 10 2 30.
+    # What the user types is never queued (see typed()), so it is never held or dropped here.
+
+    def _pending_bytes(self) -> int:
+        """Bytes of automatic lines still waiting in the paced send queue."""
+        return sum(len(l.encode("utf-8", "replace")) + 2 for l in self._queue)
 
     def _ctcp_allowed(self, nick: str, now: float) -> bool:
-        """At most flood_ctcp answers in 30 s (then quiet 2 min) and flood_ctcp_person a minute per person."""
-        c = self.cfg
-        if c.flood_ctcp <= 0:
-            return False
-        if now < getattr(self, "_ctcp_quiet_until", 0.0):
-            return False
-        self._ctcp_times = [t for t in self._ctcp_times if now - t < 30]
-        if len(self._ctcp_times) >= c.flood_ctcp:
-            self._ctcp_quiet_until = now + 120
-            self.add(self.server_buffer, ERROR, "*", f"CTCP flood from {nick}: not answering CTCP for 2 minutes.")
-            return False
-        per = getattr(self, "_ctcp_by", {})
-        self._ctcp_by = per
+        """False while this person's CTCPs are ignored for going past their share of the flood buffer."""
         key = self.fold(nick)
-        mine = [t for t in per.get(key, []) if now - t < 60]
-        if len(mine) >= c.flood_ctcp_person:                 # 0 = never answer anyone
-            if len(mine) == c.flood_ctcp_person:
-                self.add(self.server_buffer, ERROR, "*", f"CTCP flood from {nick}: not answering them for a minute.")
-                mine.append(now)                    # said once
-            per[key] = mine
+        until = self._ctcp_ignored.get(key)
+        if until is None:
+            return True
+        if now < until:
             return False
-        mine.append(now)
-        per[key] = mine
-        self._ctcp_times.append(now)
+        del self._ctcp_ignored[key]
         return True
+
+    def _ctcp_reply(self, nick: str, own: bool, text: str) -> None:
+        """An automatic CTCP reply: into the paced queue, or into the flood buffer while the queue is busy."""
+        c = self.cfg
+        if own or not (c.flood_on and c.flood_ctcp_on) or self.state != "connected" \
+                or (not self._flood_lines and self._pending_bytes() <= c.flood_bytes):
+            self.send("NOTICE", nick, text)
+            return
+        key = self.fold(nick)
+        mine = self._flood_lines.get(key)
+        if len(mine or ()) >= c.flood_per_user:              # past their share: dropped, and ignored for a while
+            if c.flood_ignore > 0 and key not in self._ctcp_ignored:
+                self._ctcp_ignored[key] = time.time() + c.flood_ignore
+                self.add(self.server_buffer, ERROR, "*", f"CTCP flood from {nick}: ignoring their CTCP for {c.flood_ignore} seconds.")
+            return
+        if sum(len(q) for q in self._flood_lines.values()) >= c.flood_lines:
+            return                                            # the buffer is full: the rest are dropped
+        if mine is None:
+            mine = self._flood_lines[key] = deque()
+            self._flood_order.append(key)
+        mine.append(build_line("NOTICE", nick, text))
+        if not self._ctcp_held:
+            self._ctcp_held = True
+            self.add(self._front(), INFO, "*", "CTCP flood: holding back CTCP replies until the send queue empties.")
+
+    def _ctcp_queue_empty(self) -> None:
+        """_drain_queue emptied the queue: hand it held replies, one person at a time, up to flood_bytes."""
+        if self._flood_feeding:
+            return
+        moved = False
+        self._flood_feeding = True
+        try:
+            while self._flood_order and self._pending_bytes() <= self.cfg.flood_bytes:
+                key = self._flood_order.popleft()
+                mine = self._flood_lines.get(key)
+                if mine:
+                    self._queue.append(mine.popleft())
+                    moved = True
+                if mine:
+                    self._flood_order.append(key)
+                else:
+                    self._flood_lines.pop(key, None)
+        finally:
+            self._flood_feeding = False
+        if moved:
+            self._drain_queue()
+        elif self._ctcp_held and not self._flood_lines:
+            self._ctcp_held = False
+            self.add(self._front(), INFO, "*", "CTCP flood: the send queue is empty, answering CTCP again.")
+
+    def flood_clear(self) -> int:
+        """/flood clear: drops the held replies and ends every flood ignore. Returns how many replies were dropped."""
+        dropped = sum(len(q) for q in self._flood_lines.values())
+        self._flood_lines.clear()
+        self._flood_order.clear()
+        self._ctcp_ignored.clear()
+        self._ctcp_held = False
+        return dropped
 
     def _query_flood(self, nick: str, now: float) -> bool:
         """True = too many new private chats this minute: show it in the server tab instead of a new tab."""
@@ -2021,6 +2370,14 @@ class Session(QObject):
         else:
             self._apply_modes(b, m.params[1:], m.nick)
 
+    @staticmethod
+    def _keep_key(b: Buffer, key: str) -> None:
+        """0.8.5: a channel key from +k or 324; '-k' clears it. Servers hide it from non-members as '*'."""
+        if not key:
+            b.key = ""
+        elif key not in ("*", "<key>"):
+            b.key = key
+
     def _apply_modes(self, b: Buffer, params: list[str], who: str = "", actor: str = "") -> None:
         if not params:
             return
@@ -2068,6 +2425,8 @@ class Session(QObject):
                     else:
                         b.modes = b.modes.replace(c, "")
                         b.mode_args.pop(c, None)
+                    if c == "k":
+                        self._keep_key(b, arg if sign == "+" else "")   # 0.8.5: for the rejoin
                 if who:
                     if c == "b":
                         left, text = render(self.cfg.text_events.get("Channel Ban" if sign == "+" else "Channel UnBan") or EVENTS["Channel Ban" if sign == "+" else "Channel UnBan"][0], (who, arg))
@@ -2109,12 +2468,36 @@ class Session(QObject):
             return
         self.te("Invited", self._front(), INFO, (m.param(1), m.nick, m.userhost))
         self.last_invite = (m.param(1), m.nick)
-        self.notify.emit(self._front(), "invite")
+        self._notify(self._front(), "invite")
         b = self.buffers.get(self.fold(m.param(1)))
         if self.is_channel(m.param(1)) and not (b is not None and b.joined):
             self.invited.emit(self, m.param(1), m.nick)
 
     # numerics --------------------------------------------------------------------
+
+    def userhost_lookup(self, nick: str) -> None:
+        """0.8.5: /ban, /ignore for someone whose address BChat doesn't know: a /userhost lookup, as mIRC does.
+        The server always answers it (empty when the nick isn't on IRC), so nothing is left waiting."""
+        key = self.fold(nick)
+        if key not in self._addr_waiting:
+            self._addr_waiting.append(key)
+            self.send("USERHOST", nick)
+
+    def _addr_answer(self, m: Message) -> bool:
+        """302 nick*=+user@host (one nick per ask). True when it was ours. Empty: the oldest ask isn't on IRC."""
+        items = m.param(-1).split()
+        if not items:
+            self.address_found.emit(self._addr_waiting.pop(0), "")
+            return True
+        mine = False
+        for item in items:
+            nick, _, host = item.partition("=")
+            key = self.fold(nick.rstrip("*"))
+            if key in self._addr_waiting:
+                self._addr_waiting.remove(key)
+                self.address_found.emit(nick.rstrip("*"), host.lstrip("+-"))
+                mine = True
+        return mine
 
     def _dns_answer(self, m: Message) -> bool:
         from . import everyday
@@ -2143,7 +2526,10 @@ class Session(QObject):
         p = m.params
         rest = " ".join(p[1:])
         if n == 1:
-            self.nick = m.param(0)
+            self.nick = m.param(0) or self.nick     # 0.8.5: a 001 without a nick doesn't empty ours
+            self._ison_asked.clear()                # 0.8.5: answers to the last link's ISONs never come
+            for st in self.friend_state.values():
+                st["known"] = False                 # 0.8.5: after a reconnect, friends online are announced again
             self.server_name = m.prefix
             self._welcomed = True
             self.online_since = time.time()
@@ -2154,6 +2540,15 @@ class Session(QObject):
             if self._down_since:
                 self.add(self.server_buffer, INFO, "*", f"Connected. Back after {duration(time.time() - self._down_since)}.")
             self._tries, self._down_since, self._banned = 0, 0.0, False
+            for b in self._told_down:               # 0.8.5: one line in each tab that was told "Disconnected"
+                if self.buffers.get(self.fold(b.name)) is b:
+                    self.add(b, INFO, "*", "Reconnected.")
+            self._told_down, self._next_nick = [], ""
+            if self._away_msg:
+                self.send("AWAY", self._away_msg)   # 0.8.5: the new link isn't away until we say so again
+            if self.cfg.invisible:
+                self.send_raw(f"MODE {self.nick} +i")  # 0.8.5: Invisible mode (Preferences > Advanced)
+            self._move_to_top()
             self._after_welcome()
         elif n in (321, 322, 323) and self.list_sink is not None:
             if n == 322:
@@ -2164,6 +2559,10 @@ class Session(QObject):
             self.ban_sinks[self.fold(m.param(1))].ban_item({367: "b", 348: "e", 346: "I"}[n], m.param(2), m.param(3), m.param(4))
         elif n in (368, 349, 347) and self.fold(m.param(1)) in self.ban_sinks:
             self.ban_sinks[self.fold(m.param(1))].ban_end({368: "b", 349: "e", 347: "I"}[n])
+        elif n in (367, 348, 346, 368, 349, 347):
+            self._list_line(n, m)                   # 0.8.5: no Ban List window open: a readable line, not raw text
+        elif n == 302 and self._addr_waiting and self._addr_answer(m):
+            pass
         elif n == 302 and self.dns_waiting and self._dns_answer(m):
             pass
         elif n in (302, 340) and self._local_waiting:          # USERHOST / USERIP for ourselves
@@ -2180,15 +2579,24 @@ class Session(QObject):
         elif n == 365:
             count, self._links_seen = getattr(self, "_links_seen", 0), 0
             self.add(self.server_buffer, INFO, "*", f"{count} server{'' if count == 1 else 's'} on {self.net.name}.")
-        elif n == 303 and self._ison_waiting:
-            self._ison_waiting -= 1
+        elif n == 303 and self._ison_asked and self._ison_asked[0] is not None:
+            asked = self._ison_asked.popleft()      # 0.8.5: only the friends this ISON asked about
             on = {self.fold(x) for x in m.param(-1).split()}
             for nick in self._friends_here():
-                self._friend_online(nick, self.fold(nick) in on)
+                if self.fold(nick) in asked:
+                    self._friend_online(nick, self.fold(nick) in on)
+        elif n == 303:
+            if self._ison_asked:
+                self._ison_asked.popleft()          # a typed /ison: shown as it is, friends' status untouched
+            self.add(self.server_buffer, INFO, "*", rest)
         elif n in (730, 731):
             for item in m.param(-1).split(","):
                 self._friend_online(item.split("!")[0], n == 730)
-        elif n in (732, 733, 734):
+        elif n == 734:
+            # 0.8.5: ERR_MONLISTFULL :srv 734 me <limit> <nicks> :Monitor list is full.
+            self.add(self.server_buffer, ERROR, "*", f"Friends List: the server watches at most {m.param(1)} nicks, "
+                                                     f"so {m.param(2).replace(',', ', ')} can't be watched.")
+        elif n in (732, 733):
             pass
         elif n in (600, 601, 604, 605, 602, 603, 606, 607, 598, 599, 609):
             # WATCH: :srv 604 me nick user host ts :is online / 600 logged on / 601 off / 605 offline / 598 away / 599 back
@@ -2214,6 +2622,7 @@ class Session(QObject):
                 b.modes = m.param(2).lstrip("+")
                 values = list(p[3:])
                 b.mode_args = {c: values.pop(0) for c in b.modes if c in self.modes_key + self.modes_on_set and values}
+                self._keep_key(b, b.mode_args.get("k", "*") if "k" in b.modes else "")   # 0.8.5: for the rejoin
                 self.buffer_changed.emit(b)
                 self.add(b, INFO, "*", f"Channel {b.name} modes: {' '.join(p[2:])}")
         elif n == 329:
@@ -2235,7 +2644,10 @@ class Session(QObject):
         elif n == 903:
             self._sasl_ok = True
             self._sasl_done(True, "SASL login successful.")
-        elif n in (902, 904, 905, 906, 907, 908):
+        elif n == 907:
+            self._sasl_state = ""                 # 0.8.5: already logged in is not a failure
+            self._sasl_done(True, "SASL: already logged in.")
+        elif n in (902, 904, 905, 906, 908):
             if n != 908 and self._sasl_state == "external":
                 self._sasl_done(False, "Certificate login failed: NickServ doesn't know this certificate yet. Log in once with "
                                        "your password, then Edit Network > Add to NickServ.")
@@ -2243,8 +2655,10 @@ class Session(QObject):
                 self._sasl_done(False, f"SASL login failed: {m.param(-1)}")
         elif n == 465:
             self._ban_seen(m.param(-1))
-        elif n == 464:
-            self._login_refused(m.param(-1))
+        elif n == 464 and not self._welcomed:
+            self._login_refused(m.param(-1))       # 0.8.5: only before 001; a wrong /oper password later is just an error line
+        elif n == 381:
+            self.add(self._oper_tab(), INFO, "*", rest)
         elif n in self.JOIN_REFUSED and self._join_refused(n, m):
             pass
         elif n == 471:
@@ -2257,14 +2671,15 @@ class Session(QObject):
             self.add(self._front(), ERROR, "*", f"Cannot join {m.param(1)} (Requires keyword).")
         elif n == 315:
             pass
-        elif n in (311, 312, 317, 318, 319, 301, 313, 320, 330, 335, 338, 344, 378, 379, 671, 276, 307, 275, 569):
+        elif n in (311, 312, 317, 318, 319, 301, 313, 320, 330, 335, 338, 344, 378, 379, 671, 276, 307, 275, 569, 314, 369):
             # 569 = UnrealIRCd's RPL_WHOISASN ("is connecting from AS9930 [provider]"), above 400 so named here
+            # 314/369 = /whowas (0.8.5: with its 312, all in the tab it was typed in)
             self._whois_line(n, m)
         elif len(p) >= 3 and n < 400 and self.fold(m.param(1)) in (self._whois_nick, *self._silent_whois):
             # servers add their own whois lines; XChat calls these "WhoIs Special"
             self._whois_line(n, m)
-        elif n == 433 or n == 436:
-            self._nick_taken()
+        elif n == 433 or n == 436 or (n == 437 and not self.is_channel(m.param(1))):
+            self._nick_taken(m.param(1))           # 0.8.5: 437 'nick temporarily unavailable' is the same
         elif n == 432:
             self.add(self.server_buffer, ERROR, "*", f"Nick not accepted: {m.param(1)}")
             if not self._welcomed:
@@ -2281,6 +2696,15 @@ class Session(QObject):
             self.add(self.server_buffer, INFO, "*", rest)
         else:
             self.add(self._front() if n in (221, 221) else self.server_buffer, INFO, "*", rest)
+
+    def _oper_tab(self) -> Buffer:
+        """0.8.5: the 381 answer ('You are now an IRC operator') shows in the tab where /oper was typed."""
+        wait, self._oper_wait = self._oper_wait, None
+        if self._route is not None:
+            return self._route
+        if wait is not None and time.time() - wait[1] < 120 and wait[0] in self.all_buffers():
+            return wait[0]
+        return self.server_buffer
 
     def _topic_numeric(self, n: int, m: Message) -> None:
         # /topic #other, for a channel with no tab, shows here and must not open a tab
@@ -2437,6 +2861,15 @@ class Session(QObject):
         if self.cfg.local_show:
             self.te("Local Host", self.server_buffer, INFO, (name or "unknown", ip or "unknown"))
 
+    def _move_to_top(self) -> None:
+        """0.8.6 'Move to top on connect': the server that just let us in goes first in its network's list."""
+        servers = self.net.servers
+        if not self.cfg.move_to_top or not 0 < self.server_index < len(servers):
+            return
+        servers.insert(0, servers.pop(self.server_index))
+        self.server_index = 0
+        self.servers_moved.emit()
+
     def _after_welcome(self) -> None:
         self._tick()            # first lag reading now, not after the 15 s keepalive
         if self.bouncer == "ZNC":
@@ -2463,14 +2896,26 @@ class Session(QObject):
         if ns_login:
             self.send_raw(f"PRIVMSG NickServ :IDENTIFY {self.net.nickserv}", secret=True)
         for cmd in self.net.commands:
-            self.send_raw(cmd.lstrip("/"))
-        has_joins = bool(self.net.autojoin or self.join_once or any(b.kind == CHANNEL for b in self.buffers.values()))
+            if self.on_command is not None and cmd.strip():
+                # 0.8.5: run as if typed: /msg NickServ, /join, aliases and $me work, and passwords stay hidden
+                # the usual way. Before, the line went to the server raw ('msg NickServ ...' isn't a server command)
+                line = re.sub(r"\$(me|network)\b", lambda v: self.nick if v.group(1) == "me" else self.net.name,
+                              cmd.strip().lstrip("/"))
+                self.on_command(self, "/" + line)
+            elif cmd.strip():
+                self.send_raw(cmd.lstrip("/"))
+        has_joins =bool(self.net.autojoin or self.join_once or any(b.kind == CHANNEL for b in self.buffers.values()))
         if ns_login and has_joins and self.net.join_after_login and not self._sasl_ok:
             self._ns_wait = gen                # joined before the login, a +r channel would refuse us
             self.add(self.server_buffer, INFO, "*", "Waiting for NickServ before joining...")
             QTimer.singleShot(10000, lambda: self._join_all(gen))
         else:
             self._join_all(gen)
+
+    def _key_of(self, name: str) -> str:
+        """0.8.5: the key we know for this channel (our JOIN, +k or 324), for the rejoin."""
+        b = self.buffers.get(self.fold(name))
+        return b.key if b is not None and b.kind == CHANNEL else ""
 
     def _join_all(self, gen: int) -> None:
         if gen != self._conn_gen or self._joins_sent or self.state != "connected":
@@ -2488,14 +2933,16 @@ class Session(QObject):
             keys = [k.strip() for k in parts[1].split(",")] if len(parts) > 1 else []
             auto = {self.fold(n) for n in names if n}
             pairs = [(n, keys[i] if i < len(keys) else "") for i, n in enumerate(names)
-                     if n and self.fold(n) not in inside]
+                     if n and self.fold(n) not in inside and self.fold(n) not in self._left]   # 0.8.5: not ones we left
+            pairs = [(n, k or self._key_of(n)) for n, k in pairs]                               # 0.8.5: a key we learnt
             if pairs:
                 keyed = [p for p in pairs if p[1]] + [p for p in pairs if not p[1]]   # keys line up from the front
                 self.send("JOIN", ",".join(n for n, _ in keyed),
                           *([",".join(k for _, k in keyed if k)] if any(k for _, k in keyed) else []))
         for name in rejoin:
-            if self.fold(name) not in auto and self.fold(name) not in inside:
-                self.send("JOIN", name)
+            if self.fold(name) not in auto and self.fold(name) not in inside and self.fold(name) not in self._left:
+                key = self._key_of(name)
+                self.send("JOIN", name, key) if key else self.send("JOIN", name)
         for name, key in self.join_once:
             if self.fold(name) not in {self.fold(n) for n in rejoin}:
                 self.focus_next = self.fold(name)
@@ -2536,6 +2983,15 @@ class Session(QObject):
         self._znc_collect = None
         self._show_playback(target, msgs)
 
+    def _played_before(self, m: Message, seen: set) -> bool:
+        """0.8.5: a played-back line already in the tab: its server time and text match a line there."""
+        if "time" not in m.tags:
+            return False
+        ts, text = round(self._ts(m), 3), m.param(-1)
+        if text.startswith("\x01ACTION"):
+            text = f"{m.nick} {text.strip(chr(1)).partition(' ')[2]}"
+        return (ts, text) in seen
+
     def _show_playback(self, target: str, msgs: list) -> None:
         """The bouncer's saved lines under one grey header, then 'Now live'. Times are the ones the lines carry."""
         if not msgs:
@@ -2546,13 +3002,24 @@ class Session(QObject):
         else:
             other = first.param(0) if self.fold(first.nick) == self.fold(self.nick) else first.nick
             b = self.buffer(other or target)
+        # 0.8.5: a bouncer that keeps its buffer (ZNC AutoClearChanBuffer off) plays the same lines on every
+        # connect: the ones this tab already shows (same server time, same text) aren't shown twice
+        seen = {(round(ln.ts, 3), ln.text) for ln in b.lines}
+        msgs = [m for m in msgs if not self._played_before(m, seen)]
+        if not msgs:
+            return
+        first = msgs[0]
         n = len(msgs)
         who = self.bouncer or "the bouncer"
         self.add(b, INFO, "", f"\x0314──── Played back by {who}: {n} line{'' if n == 1 else 's'} from while BChat was closed ────",
                  self._ts(first))
-        for m in msgs:
-            m.tags.pop("batch", None)
-            self._handle(m)
+        was, self._replaying = self._replaying, True
+        try:
+            for m in msgs:
+                m.tags.pop("batch", None)
+                self._handle(m)
+        finally:
+            self._replaying = was
         self.add(b, INFO, "", "\x0314──── Now live ────", self._ts(msgs[-1]))
 
     def online_text(self) -> str:
@@ -2644,15 +3111,42 @@ class Session(QObject):
         if changed:
             self.users_changed.emit(b)
 
-    def _nick_taken(self) -> None:
+    def _list_line(self, n: int, m: Message) -> None:
+        """0.8.5: ban / except / invite list lines with no Ban List window open:
+        '#chan ban: *!*@host set by Belon on 18 Nov 2026 21:05'."""
+        chan = m.param(1)
+        what = {367: "ban", 368: "ban", 348: "except", 349: "except", 346: "invite", 347: "invite"}[n]
+        if n in (368, 349, 347):
+            self.add(self.server_buffer, INFO, "*", f"End of {chan} {what} list.")
+            return
+        text = f"{chan} {what}: {m.param(2)}"
+        if m.param(3):
+            text += f" set by {m.param(3)}"
+        if m.param(4).isdigit():
+            text += " on " + time.strftime("%d %b %Y %H:%M", time.localtime(int(m.param(4))))
+        self.add(self.server_buffer, INFO, "*", text)
+
+    def _nick_taken(self, nick: str = "") -> None:
         if self._welcomed:
-            self.add(self._front(), ERROR, "*", f"That nick is already in use.")
+            self.add(self._front(), ERROR, "*", f"Nick {nick} is already in use." if nick and nick != "*"
+                     else "That nick is already in use.")
             return
         self.nick_attempt += 1
         options = [self._identity("nick2"), self.cfg.nick3]
         pick = options[self.nick_attempt - 1] if self.nick_attempt <= len(options) else ""
+        if pick and self.fold(pick) == self.fold(self.nick):
+            pick = ""                                # the same nick again would only be refused again
         if not pick:
-            pick = f"{self._identity('nick')}_{self.nick_attempt}"
+            # 0.8.5: then Belon_, Belon__, ... A server that cuts long nicks short names the cut one in its 433:
+            # the underscores then replace the last letters, so no try is ever the same refused nick again
+            base = self._next_nick or self._identity("nick") or self.nick
+            extra = max(1, self.nick_attempt - len([o for o in options if o]))
+            if nick and nick != "*" and len(nick) < len(self.nick) and self.fold(self.nick).startswith(self.fold(nick)):
+                self._nick_cut = len(nick)
+            cut = self._nick_cut
+            pick = base + "_" * extra
+            if cut and len(pick) > cut:
+                pick = base[:cut - extra] + "_" * extra if cut - extra >= 1 else random_nick()
         self.nick = pick
         self.add(self.server_buffer, INFO, "*", f"Nick in use, trying {pick}")
         self.send("NICK", pick)
@@ -2664,7 +3158,9 @@ class Session(QObject):
 
     def _whois_line(self, n: int, m: Message) -> None:
         key = self.fold(m.param(1))
-        if key in self._silent_whois and self._whois_target is None:
+        # 0.8.5: a background whois stays silent (and finishes) even while a /whois for someone else is showing;
+        # one for the same nick as the /whois: the first answer is shown, the second fills the panel quietly
+        if key in self._silent_whois and key != self._whois_nick and n not in (314, 369):
             info = self._silent_whois[key]
             if n == 311:
                 info.update(user=f"{m.param(2)}@{m.param(3)}", real=m.param(-1))
@@ -2704,16 +3200,20 @@ class Session(QObject):
             text = f"{tag} {m.param(-1)}"
         elif n == 312:
             text = f"{tag} {m.param(2)} :{m.param(-1)}"
-        elif n == 317:
-            secs = int(m.param(2) or 0)
+        elif n == 317 and m.param(2).isdigit():     # 0.8.5: a server sending words here no longer breaks the line
+            secs = int(m.param(2))
             idle = f"{secs // 3600:02d}:{secs % 3600 // 60:02d}:{secs % 60:02d}"
             text = f"{tag} idle \x0310{idle}\x0f"
             if len(p) > 4 and p[3].isdigit():
                 text += ", signon: \x0310" + time.strftime("%a %b %d %H:%M:%S", time.localtime(int(p[3]))) + "\x0f"
         elif n == 318:
             text = f"{tag} End of WHOIS list."
-            self._whois_target = None
-            self._whois_nick = ""
+            if key == self._whois_nick or not self._whois_nick:     # another nick's end doesn't end this /whois
+                self._whois_target = None
+                self._whois_nick = ""
+        elif n in (314, 369):
+            b = self._front()                       # 0.8.5: /whowas stays in the tab it was typed in
+            text = f"{tag} was ({m.param(2)}@{m.param(3)}): {m.param(-1)}" if n == 314 else f"{tag} End of WHOWAS list."
         elif n == 301:
             text = f"{tag} is away ({m.param(-1)})"
         elif n == 330:

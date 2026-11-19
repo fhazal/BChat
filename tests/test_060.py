@@ -120,19 +120,22 @@ def test_labeled_answer_lands_in_the_tab_it_was_typed_in(app, tmp_path):
 # --- 1 flood ---------------------------------------------------------------------------------------
 
 def test_ctcp_limits_global_and_per_person(app, tmp_path):
+    """0.8.5 /flood: past the byte trigger replies wait in a flood buffer, 2 per person; one more and that person's
+    CTCPs are ignored for 30 s. The buffer goes out through the paced queue."""
     srv, win, net, s = live_with(app, tmp_path)
     joined(app, srv, s)
-    win.cfg.flood_ctcp, win.cfg.flood_ctcp_person = 4, 2
+    win.cfg.flood_bytes = 100                                              # /flood 100 10 2 30
+    for i in range(6):
+        srv.send(f":p{i}!x@h PRIVMSG Badaboom :VERSION")         # 4 go out at once, the rest wait in the queue
     for i in range(3):
-        srv.send(":Troll!t@h PRIVMSG Badaboom :\x01VERSION\x01")
-    assert wait(app, lambda: any("CTCP flood from Troll: not answering them for a minute" in l.text for l in s.server_buffer.lines))
-    for i in range(4):
-        srv.send(f":p{i}!x@h PRIVMSG Badaboom :\x01VERSION\x01")
-    assert wait(app, lambda: any("not answering CTCP for 2 minutes" in l.text for l in s.server_buffer.lines))
+        srv.send(":Troll!t@h PRIVMSG Badaboom :VERSION")
+    assert wait(app, lambda: any("CTCP flood from Troll: ignoring their CTCP for 30 seconds" in l.text for l in s.server_buffer.lines))
+    assert any("holding back CTCP replies" in l.text for b in s.all_buffers() for l in b.lines)
     answered = lambda: [x for x in srv.received if x.startswith("NOTICE") and "VERSION" in x]   # noqa: E731
-    assert wait(app, lambda: len(answered()) == 4, 15000)                 # 2 for Troll, then 2 others (the queue paces them)
+    assert wait(app, lambda: len(answered()) == 8, 20000)                 # 6 for p0-p5, 2 for Troll (the queue paces them)
     time.sleep(1); app.processEvents()
-    assert len(answered()) == 4                                            # then quiet
+    assert len(answered()) == 8 and sum(x.startswith("NOTICE Troll ") for x in answered()) == 2
+    assert wait(app, lambda: any("send queue is empty, answering CTCP again" in l.text for b in s.all_buffers() for l in b.lines))
     from bchat import full_version
     assert f"VERSION BChat {full_version()} by BajuBesi Labs" in answered()[0]
     win.close(); srv.stop()
@@ -154,12 +157,12 @@ def test_private_chat_flood_goes_to_server_tab_and_whois_limit(app, tmp_path):
 
 def test_pace_and_flood_page(app, tmp_path):
     win, _net = make_win(tmp_path, 9)
-    prefs(win, lambda d: (d.flood_pace.setCurrentIndex(2), d.flood_ctcp.setValue(9), d.flood_queries.setValue(0)))
-    assert win.cfg.flood_pace == "fast" and win.cfg.flood_ctcp == 9 and win.cfg.flood_queries == 0
+    prefs(win, lambda d: (d.flood_pace.setCurrentIndex(2), d.flood_bytes.setValue(900), d.flood_queries.setValue(0)))
+    assert win.cfg.flood_pace == "fast" and win.cfg.flood_bytes == 900 and win.cfg.flood_queries == 0
     from bchat.preferences import PreferencesDialog
     d = PreferencesDialog(win, "Flood")
     d._flood_defaults()
-    assert (d.flood_pace.currentIndex(), d.flood_ctcp.value(), d.flood_queries.value()) == (1, 5, 5)
+    assert (d.flood_pace.currentIndex(), d.flood_bytes.value(), d.flood_queries.value()) == (1, 400, 5)
     d.reject(); d.deleteLater()
     from bchat.session import Session
     assert Session.PACE["fast"] < Session.PACE["normal"] < Session.PACE["careful"]

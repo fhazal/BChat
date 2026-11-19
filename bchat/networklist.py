@@ -71,6 +71,9 @@ class NetworkEditDialog(FramedDialog):
         self.login = QComboBox(self)               # 0.4.0: how BChat logs in to services
         self.login.addItems(["Nothing", "Password (SASL)", "Certificate (SASL EXTERNAL)"])
         self.login.setCurrentIndex(2 if net.login == "cert" else 0 if net.login == "none" or not net.sasl_user else 1)
+        self.login_fail = QComboBox(self)          # 0.8.5: what happens when the SASL login is refused
+        self.login_fail.addItems(["Disconnect, don't retry", "Stay connected without logging in"])
+        self.login_fail.setCurrentIndex(1 if net.login_fail == "stay" else 0)
         self.cert_path = net.cert_file
         self.cert_box = self._cert_row()
         self.nickserv_row = self._nickserv_row()
@@ -90,7 +93,8 @@ class NetworkEditDialog(FramedDialog):
                          ("Nick name:", self.nick), ("Second choice:", self.nick2), ("User name:", self.username),
                          ("Real name:", self.realname), ("Server password:", self.password), ("NickServ password:", self.nickserv),
                          ("Log in with:", self.login), ("SASL account:", self.sasl_user), ("SASL password:", self.sasl_password),
-                         ("Certificate:", self.cert_box), ("", self.nickserv_row), ("Server features:", feat_row)):
+                         ("Certificate:", self.cert_box), ("", self.nickserv_row), ("If the login fails:", self.login_fail),
+                         ("Server features:", feat_row)):
             form.addRow(label, w)
         self.form = form
         self.body.addLayout(form)
@@ -189,6 +193,7 @@ class NetworkEditDialog(FramedDialog):
             self.form.setRowVisible(w, i == 1)
         for w in (self.cert_box, self.nickserv_row):
             self.form.setRowVisible(w, i == 2)
+        self.form.setRowVisible(self.login_fail, i != 0)
         self.form.setRowVisible(self.join_wait, i == 0)     # a SASL login is done before any join anyway
         self._show_cert()
 
@@ -263,7 +268,8 @@ class NetworkEditDialog(FramedDialog):
         return (self.login.currentIndex(), self.cert_path, self.name.text(), self.servers.toPlainText(), self.autojoin.text(), self.commands.text(), self.nick.text(),
                 self.nick2.text(), self.username.text(), self.realname.text(), self.password.text(), self.nickserv.text(),
                 self.sasl_user.text(), self.sasl_password.text(), self.use_global.isChecked(), self.auto.isChecked(),
-                self.cycle.isChecked(), self.invalid.isChecked(), tuple(self.caps_off), self.join_wait.isChecked())
+                self.cycle.isChecked(), self.invalid.isChecked(), tuple(self.caps_off), self.join_wait.isChecked(),
+                self.login_fail.currentIndex())
 
     def reject(self) -> None:
         """Red button or Esc: ask before losing changes (it used to drop them silently)."""
@@ -299,6 +305,7 @@ class NetworkEditDialog(FramedDialog):
         n.allow_invalid_cert = self.invalid.isChecked()
         n.caps_off = list(self.caps_off)
         n.join_after_login = self.join_wait.isChecked()
+        n.login_fail = "stay" if self.login_fail.currentIndex() == 1 else "disconnect"
         super().accept()
 
 

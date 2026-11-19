@@ -233,12 +233,29 @@ def strip_format(text: str) -> str:
 URL_RE = re.compile(r"\b(?:https?://|ftp://|ircs?://|www\.)[^\s<>\"'\x00-\x1f]+", re.I)
 
 
+_URL_PAIRS = {")": "(", "]": "[", "}": "{"}
+
+
+def trim_url(url: str) -> str:
+    """0.8.5: the link without the punctuation that closes the sentence around it. A closing bracket stays when
+    the link opened it (a wiki link ending in "_(film)"), and goes when it closes text around the link."""
+    while url:
+        last = url[-1]
+        if last in ".,;:!?'\"":
+            url = url[:-1]
+        elif last in _URL_PAIRS and url.count(last) > url.count(_URL_PAIRS[last]):
+            url = url[:-1]
+        else:
+            break
+    return url
+
+
 def split_urls(text: str) -> list[tuple[str, bool]]:
     """Split plain text into (piece, is_url), leaving closing punctuation out of the link."""
     out: list[tuple[str, bool]] = []
     pos = 0
     for m in URL_RE.finditer(text):
-        url = m.group(0).rstrip(".,;:!?)]}")
+        url = trim_url(m.group(0))
         if m.start() > pos:
             out.append((text[pos:m.start()], False))
         out.append((url, True))
@@ -246,6 +263,39 @@ def split_urls(text: str) -> list[tuple[str, bool]]:
     if pos < len(text):
         out.append((text[pos:], False))
     return out
+
+
+def mirc_mask(nick: str, userhost: str, kind: int) -> str:
+    """0.8.5 the typed /ban, /kickban and /ignore mask types:
+    0 *!user@host  1 *!*user@host  2 *!*@host  3 *!*user@*.host  4 *!*@*.host
+    5 nick!user@host  6 nick!*user@host  7 nick!*@host  8 nick!*user@*.host  9 nick!*@*.host
+    10-19: the same as 0-9, but the digits in the host become ? instead of * for parts of the host.
+    Types 0 and 5 keep the user part exactly (a leading ~ too); the *user types drop the ~."""
+    user, _, host = userhost.partition("@")
+    if not host:
+        return f"{nick}!*@*"
+    kind = kind if 0 <= kind <= 19 else 6
+    base = kind % 10
+    if kind >= 10:
+        wild = re.sub(r"\d", "?", host)
+        host = wild
+    else:
+        pieces = host.split(".")
+        if re.fullmatch(r"[\d.]+", host) and len(pieces) == 4:
+            wild = ".".join(pieces[:3]) + ".*"
+        elif len(pieces) > 2:
+            wild = "*." + ".".join(pieces[1:])
+        else:
+            wild = host
+    bare = user.lstrip("~")
+    who = "*" if base < 5 else nick
+    return {
+        0: f"{who}!{user}@{host}",
+        1: f"{who}!*{bare}@{host}",
+        2: f"{who}!*@{host}",
+        3: f"{who}!*{bare}@{wild}",
+        4: f"{who}!*@{wild}",
+    }[base % 5]
 
 
 def mask_ban(nick: str, userhost: str, kind: int) -> str:

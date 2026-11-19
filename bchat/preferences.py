@@ -568,6 +568,14 @@ class PreferencesDialog(FramedDialog):
                                        "Waits 3 seconds and tries once, so a kick loop can't flood the channel")
         self.whois_query = self._check(lay, "Show who someone is when they start a private chat with me", c.whois_on_query,
                                        "A short WHOIS at the top of the new tab: their host, channels and idle time")
+        self.single_msg = self._check(lay, "Put all private messages in one Messages tab", c.single_msg_window,
+                                      "One (messages) tab per network. Reply with /msg nick; /query still opens a private chat")
+        self.single_friends = self._check(lay, "Still open a private chat for nicks on my Friends list", c.single_msg_friends)
+        self.single_copy = self._check(lay, "Copy the conversation into the private chat when I open one", c.single_msg_copy)
+        for w in (self.single_friends, self.single_copy):
+            w.setStyleSheet("margin-left: 20px;")
+            self.single_msg.toggled.connect(w.setEnabled)
+            w.setEnabled(c.single_msg_window)
         lay.addWidget(_heading("Connecting"))
         self.skip_motd = self._check(lay, "Skip the server's welcome message (MOTD)", c.skip_motd,
                                      "Type /motd to read it any time")
@@ -826,12 +834,20 @@ class PreferencesDialog(FramedDialog):
     def _advanced_page(self) -> QWidget:
         c = self.cfg
         page, lay = self._new_page()
-        lay.addWidget(_heading("Advanced Settings"))
+        lay.addWidget(_heading("Connecting"))      # 0.8.5 mockup E
         g = QGridLayout()
         self.reconnect = self._number(g, 0, "Auto reconnect delay:", c.reconnect_delay, 1, 9999, " seconds")
-        self.server_timeout = self._number(g, 1, "Server time-out:", c.server_timeout, 60, 600, " seconds")
-        g.setColumnStretch(2, 1)
+        self.connect_retries = self._number(g, 1, "Retry:", c.connect_retries, 0, 999, " times")
+        g.addWidget(QLabel("0 = keep trying"), 1, 2)
+        self.connect_timeout = self._number(g, 2, "Connect time-out:", max(5, c.connect_timeout), 5, 300, " seconds")
+        self.server_timeout = self._number(g, 3, "Server time-out:", c.server_timeout, 60, 600, " seconds")
+        g.setColumnStretch(3, 1)
         lay.addLayout(g)
+        self.invisible = self._check(lay, "Invisible mode (+i): only people who share a channel or know your nick can find you",
+                                     c.invisible)
+        self.move_top = self._check(lay, "Move a server to the top of its network's list when I connect to it", c.move_to_top,
+                                    "Next time, the server that worked is tried first")
+        lay.addWidget(_heading("Advanced Settings"))
         self.raw_modes = self._check(lay, "Display MODEs in raw form", c.raw_modes)
         self.hide_jp = self._check(lay, "Hide join and part messages", c.hide_joinpart, "Hide channel join/part messages by default")
         self.notify_whois = self._check(lay, "Whois on notify", c.whois_on_notify, "Sends a /WHOIS when a friend comes online")
@@ -1011,7 +1027,7 @@ class PreferencesDialog(FramedDialog):
         pick.setAutoDefault(False)
 
         def choose():
-            path = QFileDialog.getExistingDirectory(self, label.rstrip(":"), edit.text())
+            path = QFileDialog.getExistingDirectory(self, label.rstrip(":"), edit.text() or edit.placeholderText())
             if path:
                 edit.setText(path)
         pick.clicked.connect(lambda _=False: choose())
@@ -1020,7 +1036,8 @@ class PreferencesDialog(FramedDialog):
 
     # --- Flood (0.6.0) ------------------------------------------------------------------------
 
-    FLOOD_DEFAULTS = {"pace": 1, "ctcp": 5, "person": 2, "queries": 5, "whois": 3}
+    FLOOD_DEFAULTS = {"pace": 1, "on": True, "ctcp_on": True, "bytes": 400, "lines": 10, "per_user": 2, "ignore": 30,
+                      "queries": 5, "whois": 3}
 
     def _flood_page(self) -> QWidget:
         c = self.cfg
@@ -1036,16 +1053,33 @@ class PreferencesDialog(FramedDialog):
                      "Your own messages always go before automatic ones.")
         tip.setWordWrap(True)
         lay.addWidget(tip)
-        lay.addWidget(_heading("Answering others"))
+        lay.addWidget(_heading("Flood Protection"))
+        self.flood_on = self._check(lay, "Turn on flood protection", c.flood_on)
+        self.flood_ctcp_on = self._check(lay, "Also for CTCP replies (version, ping, time)", c.flood_ctcp_on)
         g = QGridLayout()
-        rows = (("flood_ctcp", "CTCP requests (version, ping, time):", c.flood_ctcp, "in 30 s, then stay quiet for 2 min"),
-                ("flood_person", "From one person:", c.flood_ctcp_person, "a minute"),
-                ("flood_queries", "New private chats:", c.flood_queries, "a minute, more go to the server tab"),
-                ("flood_whois", "WhoIs on new private chats:", c.flood_whois, "a minute"))
-        for r, (attr, label, value, rest) in enumerate(rows):
-            box = self._number(g, r, label, value, 0, 99)
+        rows = (("flood_bytes", "Check after:", c.flood_bytes, 0, 99999, "bytes waiting to go out"),
+                ("flood_lines", "Buffer size:", c.flood_lines, 1, 999, "lines, the rest are dropped"),
+                ("flood_per_user", "Lines per person:", c.flood_per_user, 1, 99, "in the buffer"),
+                ("flood_ignore", "Ignore that person for:", c.flood_ignore, 0, 9999, "seconds (0 = don't ignore)"))
+        for r, (attr, label, value, low, high, rest) in enumerate(rows):
+            box = self._number(g, r, label, value, low, high)
             g.addWidget(QLabel(rest), r, 2)
             setattr(self, attr, box)
+        g.setColumnStretch(3, 1)
+        lay.addLayout(g)
+        guard = [self.flood_ctcp_on] + [getattr(self, a) for a, *_ in rows]
+
+        def flood_toggle(on: bool) -> None:
+            for w in guard:
+                w.setEnabled(on)
+        self.flood_on.toggled.connect(flood_toggle)
+        flood_toggle(c.flood_on)
+        lay.addWidget(_heading("Private Chats"))
+        g = QGridLayout()
+        self.flood_queries = self._number(g, 0, "New private chats:", c.flood_queries, 0, 99)
+        g.addWidget(QLabel("a minute, more go to the server tab"), 0, 2)
+        self.flood_whois = self._number(g, 1, "WhoIs on new private chats:", c.flood_whois, 0, 99)
+        g.addWidget(QLabel("a minute"), 1, 2)
         g.setColumnStretch(3, 1)
         lay.addLayout(g)
         lay.addWidget(QLabel("0 = never. When a limit is hit, BChat says so once in the server tab."))
@@ -1062,8 +1096,10 @@ class PreferencesDialog(FramedDialog):
     def _flood_defaults(self) -> None:
         d = self.FLOOD_DEFAULTS
         self.flood_pace.setCurrentIndex(d["pace"])
-        for attr, key in (("flood_ctcp", "ctcp"), ("flood_person", "person"), ("flood_queries", "queries"), ("flood_whois", "whois")):
-            getattr(self, attr).setValue(d[key])
+        self.flood_on.setChecked(d["on"])
+        self.flood_ctcp_on.setChecked(d["ctcp_on"])
+        for key in ("bytes", "lines", "per_user", "ignore", "queries", "whois"):
+            getattr(self, "flood_" + key).setValue(d[key])
 
     # --- File transfers: trusted people (0.6.0) -------------------------------------------------
 
@@ -1122,6 +1158,8 @@ class PreferencesDialog(FramedDialog):
                                    {0: 0, 2: 1, 1: 2}.get(c.dcc_auto, 0))
         self.dcc_dir = self._folder_row(g, 1, "Download files to:", c.dcc_dir)
         self.dcc_done = self._folder_row(g, 2, "Move completed files to:", c.dcc_done_dir)
+        self.dcc_dir.setPlaceholderText(str(self.win.cfg_dir / "downloads"))   # 0.8.6: empty showed no folder at all
+        self.dcc_done.setPlaceholderText("Leave them where they were downloaded")
         lay.addLayout(g)
         lay.addWidget(QLabel("Trusted people (files and direct chats from them are accepted by themselves):"))
         self.trusted = [dict(e) for e in c.dcc_trusted]
@@ -1168,6 +1206,40 @@ class PreferencesDialog(FramedDialog):
         g.setColumnMinimumWidth(1, 120)
         g.setColumnStretch(3, 1)
         lay.addLayout(g)
+        lay.addWidget(_heading("Time-outs (seconds, 0 = wait for ever)"))
+        g = QGridLayout()
+        self.dcc_offer_wait = self._number(g, 0, "An offer waits for an answer:", c.dcc_offer_timeout, 0, 99999)
+        self.dcc_idle_wait = self._number(g, 1, "A transfer gets nothing for:", c.dcc_idle_timeout, 0, 99999)
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        lay.addWidget(_heading("If the File Already Exists"))
+        g = QGridLayout()
+        exists = ("ask", "resume", "overwrite")
+        self.dcc_exists = self._menu(g, 0, "When a file is accepted on its own:", ("Ask me", "Resume", "Overwrite"),
+                                     exists.index(c.dcc_exists) if c.dcc_exists in exists else 0)
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        lay.addWidget(_heading("File Types"))
+        self.dcc_ignore_on = self._check(lay, "Use the file type list", c.dcc_ignore_on)
+        row = QHBoxLayout()
+        self.dcc_ignore_group = QButtonGroup(page)
+        self.dcc_never = QRadioButton("Never accept these")
+        self.dcc_only = QRadioButton("Only accept these")
+        for b in (self.dcc_never, self.dcc_only):
+            self.dcc_ignore_group.addButton(b)
+            row.addWidget(b)
+        (self.dcc_only if c.dcc_ignore_mode == "accept" else self.dcc_never).setChecked(True)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self.dcc_exts = QLineEdit(" ".join(c.dcc_ignore_exts))
+        self.dcc_exts.setToolTip("Masks with spaces between, like *.exe *.scr")
+        lay.addWidget(self.dcc_exts)
+
+        def types_on(on: bool) -> None:
+            for w in (self.dcc_never, self.dcc_only, self.dcc_exts):
+                w.setEnabled(on)
+        self.dcc_ignore_on.toggled.connect(types_on)
+        types_on(c.dcc_ignore_on)
         lay.addWidget(_heading("Auto Open DCC Windows"))
         row = QHBoxLayout()
         self.dcc_open_send = self._check(row, "Send window", c.dcc_open_send)
@@ -1444,6 +1516,8 @@ class PreferencesDialog(FramedDialog):
         c.away_reason = self.away_msg.text() or "I'm busy"
         c.announce_away, c.away_once, c.auto_unaway = self.announce.isChecked(), self.away_once.isChecked(), self.auto_unaway.isChecked()
         c.rejoin_on_kick, c.whois_on_query = self.rejoin_kick.isChecked(), self.whois_query.isChecked()
+        c.single_msg_window = self.single_msg.isChecked()
+        c.single_msg_friends, c.single_msg_copy = self.single_friends.isChecked(), self.single_copy.isChecked()
         c.skip_motd, c.short_joins = self.skip_motd.isChecked(), self.short_joins.isChecked()
         c.text_replay, c.log_all = self.replay.isChecked(), self.log_all.isChecked()
         c.log_mask = self.log_mask.text().strip() or "%n-%c.log"
@@ -1456,13 +1530,24 @@ class PreferencesDialog(FramedDialog):
         c.sounds = {k: e.text().strip() for k, e in self.sound_edits.items() if e.text().strip()}
         c.reconnect_delay = self.reconnect.value()
         c.server_timeout = self.server_timeout.value()
+        c.connect_retries = self.connect_retries.value()
+        c.connect_timeout = self.connect_timeout.value()
+        c.invisible = self.invisible.isChecked()
+        c.move_to_top = self.move_top.isChecked()
         c.dcc_auto = {0: 0, 1: 2, 2: 1}[self.dcc_auto.currentIndex()]
         c.dcc_trusted = [dict(e) for e in self.trusted]
         c.flood_pace = ("careful", "normal", "fast")[self.flood_pace.currentIndex()]
-        c.flood_ctcp, c.flood_ctcp_person = self.flood_ctcp.value(), self.flood_person.value()
+        c.flood_on, c.flood_ctcp_on = self.flood_on.isChecked(), self.flood_ctcp_on.isChecked()
+        c.flood_bytes, c.flood_lines = self.flood_bytes.value(), self.flood_lines.value()
+        c.flood_per_user, c.flood_ignore = self.flood_per_user.value(), self.flood_ignore.value()
         c.flood_queries, c.flood_whois = self.flood_queries.value(), self.flood_whois.value()
         c.dcc_dir, c.dcc_done_dir = self.dcc_dir.text().strip(), self.dcc_done.text().strip()
         c.dcc_with_nick = self.dcc_nick.isChecked()
+        c.dcc_offer_timeout, c.dcc_idle_timeout = self.dcc_offer_wait.value(), self.dcc_idle_wait.value()
+        c.dcc_exists = ("ask", "resume", "overwrite")[self.dcc_exists.currentIndex()]
+        c.dcc_ignore_on = self.dcc_ignore_on.isChecked()
+        c.dcc_ignore_mode = "accept" if self.dcc_only.isChecked() else "ignore"
+        c.dcc_ignore_exts = [m for m in self.dcc_exts.text().replace(",", " ").split() if m]
         c.dcc_first_port, c.dcc_last_port = self.dcc_first.value(), self.dcc_last.value()
         c.local_find, c.local_show = self.local_find.isChecked(), self.local_show.isChecked()
         c.local_lookup = next(k for k, r in self.local_ways.items() if r.isChecked())

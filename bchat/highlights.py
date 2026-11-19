@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import fnmatch
 
-from .protocol import lower
+from .protocol import lower, strip_format
 
 ON = ("message", "nick", "both")
 ON_TEXT = {"message": "Message", "nick": "Nick", "both": "Both"}
@@ -27,19 +27,31 @@ def matches_nick(nick: str, patterns: str) -> bool:
     return any(fnmatch.fnmatchcase(low, lower(p)) for p in words(patterns))
 
 
+def _trim(tok: str) -> str:
+    """'(restarting),' -> 'restarting': the punctuation around a word."""
+    a, b = 0, len(tok)
+    while a < b and not tok[a].isalnum():
+        a += 1
+    while b > a and not tok[b - 1].isalnum():
+        b -= 1
+    return tok[a:b]
+
+
 def word_hit(text: str, word: str) -> bool:
-    """mIRC/XChat: a whole word, or wildcards against each word (restart* matches restarting)."""
-    low, lw = lower(text), lower(word)
+    """mIRC/XChat: a whole word, or wildcards against each word (restart* matches restarting). 0.8.5: colour and
+    format codes are taken out first (\\x0304Badaboom), and any character that isn't a letter or digit ends a word
+    (Badaboom-san, Badaboom:, (Badaboom) all count; Badaboomx doesn't)."""
+    low, lw = lower(strip_format(text)), lower(word)
     if not lw:
         return False
     if "*" in lw or "?" in lw:
-        return any(fnmatch.fnmatchcase(tok, lw) for tok in low.split())
+        return any(fnmatch.fnmatchcase(tok, lw) or fnmatch.fnmatchcase(_trim(tok), lw) for tok in low.split())
     at = low.find(lw)
     while at != -1:
         before = low[at - 1] if at else " "
         end = at + len(lw)
         after = low[end] if end < len(low) else " "
-        if not (before.isalnum() or before in "_-{}|^") and not (after.isalnum() or after in "_-{}|^"):
+        if not before.isalnum() and not after.isalnum():
             return True
         at = low.find(lw, at + 1)
     return False

@@ -14,11 +14,59 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtNetwork import QAbstractSocket, QHostAddress, QTcpServer, QTcpSocket
 
 CHUNK = 64 * 1024
-OFFER_TIMEOUT = 300
+OFFER_TIMEOUT = 120        # cfg.dcc_offer_timeout: an offer waiting for Accept, or for the answer to a passive offer
+IDLE_TIMEOUT = 300         # cfg.dcc_idle_timeout: a transfer the other side sends nothing to (also our unanswered send)
+CHAT_LINE_MAX = 16 * 1024  # a direct chat line longer than this is cut (no endless buffer)
+from .config import DCC_IGNORE_EXTS
 from .filetypes import PROGRAM_TYPES, is_program, mark_from_internet, strip_bidi
 
 # never saved without being asked: these run when opened (one list with the link check, filetypes.py)
 RISKY = {"." + e for e in PROGRAM_TYPES}
+EXISTS_CHOICES = ("ask", "resume", "overwrite")   # cfg.dcc_exists: auto accept onto a file that is already there
+
+
+def auto_risky(name: str) -> bool:
+    """True when a file must wait for the user's own Accept: programs are never auto accepted."""
+    return is_program(name)
+
+
+def on_ignore_list(name: str, masks) -> bool:
+    """cfg.dcc_ignore_exts (0.8.5): an offer whose name fits one of these masks (*.exe; a bare 'exe' = *.exe) is ignored.
+    Only * and ? are wildcards; no case, and Windows' own trailing dots and spaces can't hide the ending."""
+    plain = strip_bidi(name).strip().rstrip(". ").lower()
+    for mask in masks or ():
+        mask = str(mask).strip().lower()
+        if not mask:
+            continue
+        if "*" not in mask and "?" not in mask:
+            mask = "*." + mask.lstrip(".")
+        glob = "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in mask)
+        if re.fullmatch(glob, plain, re.S):
+            return True
+    return False
+
+
+def _unique_name(path: Path) -> Path:
+    """A name that isn't taken yet: 'a.txt', then 'a (1).txt', 'a (2).txt' (the ending stays last)."""
+    path = Path(path)
+    out, n = path, 1
+    while out.exists():
+        out = path.with_name(f"{path.stem} ({n}){path.suffix}")
+        n += 1
+    return out
+
+
+def decode_line(raw: bytes, cut: bool = False) -> str:
+    """A direct chat line: UTF-8, or Windows-1252 (older clients) when it isn't valid UTF-8."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        if cut and e.reason == "unexpected end of data" and e.start >= len(raw) - 3:   # cut mid-letter
+            try:
+                return raw[:e.start].decode("utf-8")
+            except UnicodeDecodeError:
+                pass
+        return raw.decode("cp1252", "replace")
 RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
@@ -77,7 +125,7 @@ def parse_offer(rest: str) -> tuple[str, list[str]] | None:
         if not words:
             return None
         # an unquoted name with spaces: the numbers at the end tell where it stops. The last one may be a passive token
-        most = {"SEND": 4, "RESUME": 3, "ACCEPT": 3, "CHAT": 2}.get(verb.upper(), len(words) - 1)
+        most = {"SEND": 4, "RESUME": 4, "ACCEPT": 4, "CHAT": 2}.get(verb.upper(), len(words) - 1)   # RESUME/ACCEPT: + passive token
         numbers = 0
         def numeric(w: str) -> bool:      # a number, or an IPv6 address in the address place (0.6.0)
             return w.isdigit() or (":" in w and all(c in "0123456789abcdefABCDEF:." for c in w))
@@ -113,6 +161,10 @@ class Transfer(QObject):
         self.cps = 0
         self.buffer = None
         self._rx = b""
+        self._rx_skip = False       # a too-long chat line was cut: drop the rest of it
+        self._ackbuf = b""          # an ack can arrive in pieces
+        self.incoming = False       # their offer, waiting for Accept (it expires after the offer timeout)
+        self.last_data = self.listening_since = self.created
         self.error = ""
         self.tick_used = 0
 
@@ -132,6 +184,7 @@ class Transfer(QObject):
             if self.server.listen(QHostAddress(QHostAddress.SpecialAddress.Any if cfg.dcc_ipv6
                                                else QHostAddress.SpecialAddress.AnyIPv4), p):
                 self.port = self.server.serverPort()
+                self.listening_since = time.time()
                 return True
         self.fail(f"No free port between {first} and {last}")
         return False
@@ -162,10 +215,13 @@ class Transfer(QObject):
 
     def _connected(self) -> None:
         self.state = "active"
-        self.started = time.time()
+        self.started = self.last_data = time.time()
         self._tick_base = (self.started, self.pos)
         if self.kind == "recv":
             self._open_for_receive()
+            if self.state == "active" and self.pos >= self.size:     # an empty file: nothing to wait for
+                self._finish()
+                return
         elif self.kind == "send":
             self._send_more()
         else:
@@ -190,9 +246,7 @@ class Transfer(QObject):
         if self.kind == "recv":
             self._receive()
         elif self.kind == "send":
-            data = bytes(self.sock.readAll())       # acks, four bytes each, the last one counts
-            if len(data) >= 4:
-                self.acked = struct.unpack(">I", data[-4:])[0]
+            self._take_acks(bytes(self.sock.readAll()))
             self._maybe_done()
         else:
             self._chat_read()
@@ -213,6 +267,7 @@ class Transfer(QObject):
             self.fail(f"Couldn't write: {e}")
             return
         self.pos += len(data)
+        self.last_data = time.time()
         self.mgr.used(self, len(data))
         self.sock.write(struct.pack(">I", self.pos & 0xFFFFFFFF))
         if self.size and self.pos >= self.size:
@@ -244,11 +299,34 @@ class Transfer(QObject):
             return
         self.sock.write(data)
         self.pos += len(data)
+        self.last_data = time.time()
         self.mgr.used(self, len(data))
 
+    def _take_acks(self, data: bytes) -> None:
+        """Acks: four bytes each, the last one counts. They are the received total cut to 32 bits, so past 4 GB
+        they wrap to 0: count the wraps. The true total is the one value at or below what we sent that fits."""
+        data = self._ackbuf + data
+        whole = len(data) - len(data) % 4
+        self._ackbuf = data[whole:]
+        if not whole:
+            return
+        low = struct.unpack(">I", data[whole - 4:whole])[0]
+        total = self.pos - ((self.pos - low) & 0xFFFFFFFF)     # wraps counted: same low 32 bits, never past pos
+        if total > self.acked:
+            self.acked = total
+            self.last_data = time.time()
+
     def _maybe_done(self) -> None:
-        if self.kind == "send" and self.state == "active" and self.pos >= self.size and self.acked >= (self.size & 0xFFFFFFFF):
+        if self.kind == "send" and self.state == "active" and self.pos >= self.size and self.acked >= self.size:
             self._finish()
+
+    def _all_acked_on_close(self) -> bool:
+        """They closed after we sent everything. Done when the acks cover the file, or (some clients drop the
+        last ack) when only the last chunk is missing and the close was clean: nothing of ours left unsent."""
+        if self.acked >= self.size:
+            return True
+        clean = self.sock is None or self.sock.bytesToWrite() == 0
+        return clean and self.size - self.acked <= CHUNK
 
     def _finish(self) -> None:
         self.state = "done"
@@ -260,11 +338,12 @@ class Transfer(QObject):
         self.changed.emit(self)
 
     def _closed(self) -> None:
+        if self.kind == "send" and self.state == "active" and self.sock is not None and self.sock.bytesAvailable():
+            self._take_acks(bytes(self.sock.readAll()))      # acks that came in with the close count too
         if self.kind == "chat" and self.state == "active":
             self.state = "done"
             self.mgr.chat_closed(self)
-        elif self.kind == "send" and self.state == "active" and self.pos >= self.size:
-            # some clients close without the last ack
+        elif self.kind == "send" and self.state == "active" and self.pos >= self.size and self._all_acked_on_close():
             self._finish()
         elif self.state == "active":
             self.fail("Connection closed before the end")
@@ -315,8 +394,19 @@ class Transfer(QObject):
         self._rx += bytes(self.sock.readAll())
         self.recv_bytes = self.pos = self.pos + 0
         *rows, self._rx = self._rx.split(b"\n")
+        out = []
         for raw in rows:
-            self.mgr.chat_line(self, raw.rstrip(b"\r").decode("utf-8", "replace"))
+            if self._rx_skip:            # the end of a line already cut and shown
+                self._rx_skip = False
+                continue
+            out.append(raw[:CHAT_LINE_MAX])
+        if len(self._rx) > CHAT_LINE_MAX:
+            if not self._rx_skip:        # no newline in 16 KB: show what came, drop the rest of that line
+                out.append(self._rx[:CHAT_LINE_MAX])
+            self._rx_skip = True
+            self._rx = b""
+        for raw in out:
+            self.mgr.chat_line(self, decode_line(raw.rstrip(b"\r"), cut=len(raw) >= CHAT_LINE_MAX))
 
     def chat_send(self, text: str) -> None:
         data = text.encode("utf-8", "replace") + b"\n"
@@ -333,8 +423,22 @@ class Transfer(QObject):
         if now - when >= 1:
             self.cps = int((self.pos - at) / (now - when))
             self._tick_base = (now, self.pos)
-        if self.state == "queued" and self.kind != "chat" and self.server is not None and now - self.created > OFFER_TIMEOUT:
-            self.fail("Nobody connected in time")
+        waited = now - self.created
+        offer, idle = self.mgr.timeouts()                 # 0 = wait for ever
+        if self.state == "queued":
+            if self.server is not None and (self.passive or self.kind == "chat"):
+                if offer and now - self.listening_since > offer:   # we listen for a passive answer or a chat
+                    self.fail("Nobody connected in time")
+            elif self.kind == "send" and self.passive:
+                if offer and waited > offer:            # our passive offer: no answer with the token
+                    self.fail("Nobody connected in time")
+            elif self.server is not None and self.kind != "chat":
+                if idle and waited > idle:              # our send offer: nobody connected
+                    self.fail("Nobody connected in time")
+            elif self.incoming and offer and waited > offer:   # their offer, never accepted
+                self.fail("Offer expired")
+        elif self.state == "active" and self.kind != "chat" and idle and now - self.last_data > idle:
+            self.fail("Transfer timed out")
 
     def percent(self) -> int:
         return int(self.pos * 100 / self.size) if self.size else 0
@@ -354,6 +458,8 @@ class DccManager(QObject):
         self.win = win
         self.cfg = win.cfg
         self.items: list[Transfer] = []
+        # on_exists(t, free_name): the window asks Overwrite / Resume / Rename, then calls accept(t, how, name)
+        self.on_exists = None
         self._used = {"send": 0, "recv": 0}
         self._ticker = QTimer(self, interval=1000, timeout=self._tick)
         self._ticker.start()
@@ -456,7 +562,7 @@ class DccManager(QObject):
             return None
         if passive:
             t.passive = True
-            t.token = str(int(time.time() * 1000) % 1000000)
+            t.token = self._new_token()
             s.send("PRIVMSG", nick, f"\x01DCC SEND {quoted} {addr} 0 {t.size} {t.token}\x01")
         else:
             if not t.listen():
@@ -489,9 +595,9 @@ class DccManager(QObject):
             elif verb == "CHAT" and len(a) >= 3:
                 self._offer_chat(s, nick, peer_ip(a[1], self.cfg.dcc_ipv6), int(a[2]))
             elif verb == "RESUME" and len(a) >= 3:
-                self._resume_asked(s, nick, a[0], int(a[1]), int(a[2]))
+                self._resume_asked(s, nick, a[0], int(a[1]), int(a[2]), a[3] if len(a) > 3 else "")
             elif verb == "ACCEPT" and len(a) >= 3:
-                self._resume_ok(s, nick, a[0], int(a[1]), int(a[2]))
+                self._resume_ok(s, nick, a[0], int(a[1]), int(a[2]), a[3] if len(a) > 3 else "")
             else:
                 s.add(s._front(), "info", "*", f"Received an unknown DCC {verb} from {nick}")
         except (ValueError, OSError, struct.error):
@@ -502,27 +608,35 @@ class DccManager(QObject):
         return is_trusted(self.cfg, s.net.name, getattr(s, "last_ctcp_prefix", "") or "")
 
     def _offer_file(self, s, nick, name, ip, port, size, token) -> None:
-        # an answer to our passive offer: they listen, we connect
-        if token:
-            for t in self.items:
-                if t.kind == "send" and t.passive and t.token == token and lower_eq(t.nick, nick) and t.state == "queued":
-                    t.ip, t.port = ip, port
-                    t.connect_out()
-                    return
+        # an answer to our passive offer: they listen, we connect. The token and the name pick which one
+        if token and port:
+            t = self._pick([t for t in self.items if t.kind == "send" and t.passive and t.token == token
+                            and lower_eq(t.nick, nick) and t.state == "queued"], name)
+            if t is not None:
+                t.ip, t.port = ip, port
+                t.connect_out()
+                return
+        if not self._offer_allowed(s, nick):
+            return
         clean = safe_name(name)
+        why = self.ignore_reason(clean)
+        if why:
+            s.add(s.server_buffer, "info", "*", f"DCC Send of {clean} from {nick} ignored ({why})")
+            return
         t = self._add(Transfer(self, s, "recv", nick, clean, size))
         t.ip, t.port, t.token, t.passive = ip, port, token, port == 0
+        t.incoming = True
         t.path = str(self.target_path(clean, nick))
         s.add(s._front(), "info", "*", f"{nick} has offered {clean} ({size} bytes)")
         s.last_dcc = nick
         trusted = self.trusted(s, nick)
-        auto = (self.cfg.dcc_auto == 1 or self.cfg.dcc_auto == 2 and trusted) and not is_program(clean)
+        auto = (self.cfg.dcc_auto == 1 or self.cfg.dcc_auto == 2 and trusted) and not auto_risky(clean)
         s.last_dcc_trusted = auto and trusted
         s.notify.emit(s._front(), "dcc")         # its own card; taskbar / tray blink follow the Private column
         if auto:
             if trusted:
                 s.add(s._front(), "info", "*", f"Accepted {clean} from {nick} (trusted).")
-            self.accept(t)
+            self.accept(t, auto=True)
         if self.cfg.dcc_open_recv:
             self.win.open_transfers()
 
@@ -532,14 +646,90 @@ class DccManager(QObject):
         return folder / name
 
     def _fresh_path(self, path: Path) -> Path:
-        n = 1
-        out = path
-        while out.exists():
-            out = path.with_name(f"{path.name}.{n}")
-            n += 1
-        return out
+        return _unique_name(path)
 
-    def accept(self, t: Transfer) -> None:
+    def _new_token(self) -> str:
+        """A passive offer's token, never one an offer still waiting already has."""
+        busy = {t.token for t in self.items if t.kind == "send" and t.passive and t.active}
+        n = int(time.time() * 1000) % 1000000
+        while str(n) in busy:
+            n = (n + 1) % 1000000
+        return str(n)
+
+    @staticmethod
+    def _pick(found: list, name: str):
+        """One transfer out of those that fit: the only one, or the only one with this name. Never a guess."""
+        if len(found) == 1:
+            return found[0]
+        named = [t for t in found if lower_eq(t.name, name) or lower_eq(t.name, safe_name(name))
+                 or lower_eq(t.name.replace(" ", "_"), name.replace(" ", "_"))]
+        return named[0] if len(named) == 1 else None
+
+    def ignore_reason(self, name: str) -> str:
+        """Why the DCC ignore list keeps this offer out ('' = it comes in). Off: nothing is kept out. Ignore mode:
+        the listed types are kept out. Accept mode: only the listed types come in (programs still wait for Accept)."""
+        if not getattr(self.cfg, "dcc_ignore_on", True):
+            return ""
+        listed = on_ignore_list(name, getattr(self.cfg, "dcc_ignore_exts", DCC_IGNORE_EXTS))
+        if getattr(self.cfg, "dcc_ignore_mode", "ignore") == "accept":
+            return "" if listed else "file type is not on the DCC accept list"
+        return "file type is on the DCC ignore list" if listed else ""
+
+    def ignore_command(self, s, b, args: list[str]) -> None:
+        """/dcc ignore [on|off|accept|ignore]: the list on or off, or what it does; nothing = how it is now."""
+        word = args[0].lower() if args else ""
+        if word in ("on", "off"):
+            self.cfg.dcc_ignore_on = word == "on"
+        elif word in ("accept", "ignore"):
+            self.cfg.dcc_ignore_mode = word
+        elif word:
+            s.add(b, "error", "*", "Usage: DCC IGNORE [on|off|accept|ignore]")
+            return
+        if word and hasattr(self.win, "save_config"):
+            self.win.save_config()
+        types = " ".join(getattr(self.cfg, "dcc_ignore_exts", DCC_IGNORE_EXTS)) or "none"
+        if not getattr(self.cfg, "dcc_ignore_on", True):
+            s.add(b, "info", "*", f"DCC ignore is off: every file offer comes in (list: {types}).")
+        elif getattr(self.cfg, "dcc_ignore_mode", "ignore") == "accept":
+            s.add(b, "info", "*", f"DCC ignore is on: only these file types come in: {types}")
+        else:
+            s.add(b, "info", "*", f"DCC ignore is on: these file types are ignored: {types}")
+
+    def _offer_allowed(self, s, nick: str) -> bool:
+        """Every offer reaches the user (the flood guard only limits what we answer). The one exception: someone
+        ignored for DCC, or for everything (an ignore with no type). The session drops those first; this is the net."""
+        ignored = getattr(s, "ignored", None)
+        if ignored is None:
+            return True
+        prefix = getattr(s, "last_ctcp_prefix", "") or ""
+        if not lower_eq(prefix.partition("!")[0], nick):
+            prefix = f"{nick}!*@*"
+        return not ignored(prefix, "D")
+
+    def timeouts(self) -> tuple[int, int]:
+        """(offer, idle) seconds: an offer waiting for Accept or for its passive answer, and a transfer the other
+        side sends nothing to. 0 = wait for ever."""
+        def secs(key, default):
+            try:
+                return max(0, int(getattr(self.cfg, key, default)))
+            except (TypeError, ValueError):
+                return default
+        return secs("dcc_offer_timeout", OFFER_TIMEOUT), secs("dcc_idle_timeout", IDLE_TIMEOUT)
+
+    def exists_choice(self) -> str:
+        """cfg.dcc_exists: what auto accept does when the file is already there (ask, resume, overwrite)."""
+        how = getattr(self.cfg, "dcc_exists", "ask")
+        return how if how in EXISTS_CHOICES else "ask"
+
+    def free_name(self, t: Transfer) -> str:
+        """The name a Rename starts with: the first free one, 'a (1).txt'."""
+        return _unique_name(Path(t.path)).name
+
+    def accept(self, t: Transfer, how: str = "", name: str = "", auto: bool = False) -> None:
+        """Start a file offer. When the file is already in the folder, how says what to do: 'overwrite' (the whole
+        file again), 'resume' (ask them for the rest), 'rename' (save as name, or the first free name), 'cancel'
+        (nothing starts, the offer keeps waiting). With no how, on_exists asks the user; auto accept uses
+        cfg.dcc_exists first. Never overwritten without being told to."""
         if t.kind == "chat":
             if t.state == "queued":
                 t.connect_out()
@@ -548,8 +738,26 @@ class DccManager(QObject):
             return
         path = Path(t.path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        t.path = str(self._fresh_path(path))
-        t.name = Path(t.path).name
+        if not how and path.exists():
+            how = self.exists_choice() if auto else "ask"
+            if how == "resume" and not self.can_resume(t):
+                how = "ask"
+            if how == "ask":
+                if self.on_exists is not None:
+                    self.on_exists(t, self.free_name(t))
+                    return
+                how = "rename"                  # nobody to ask: keep both files
+        if how == "resume":
+            if self.can_resume(t):
+                self.resume(t)
+            return
+        if how == "rename":
+            path = _unique_name(path.with_name(safe_name(name)) if name and name.strip() else path)
+        elif how not in ("", "overwrite"):
+            return                              # cancel
+        t.resume_from = 0
+        t.path = str(path)
+        t.name = path.name
         self._go(t)
 
     def _go(self, t: Transfer) -> None:
@@ -570,21 +778,30 @@ class DccManager(QObject):
             return
         t.resume_from = Path(t.path).stat().st_size
         quoted = f'"{t.name}"' if " " in t.name else t.name
-        t.session.send("PRIVMSG", t.nick, f"\x01DCC RESUME {quoted} {t.port} {t.resume_from}\x01")
+        token = f" {t.token}" if t.passive and t.token else ""        # passive: the token says which offer
+        t.session.send("PRIVMSG", t.nick, f"\x01DCC RESUME {quoted} {t.port} {t.resume_from}{token}\x01")
 
-    def _resume_asked(self, s, nick, name, port, pos) -> None:
-        for t in self.items:
-            if t.kind == "send" and t.port == port and lower_eq(t.nick, nick) and t.state == "queued" and 0 <= pos <= t.size:
-                t.pos = t.acked = pos
-                quoted = f'"{t.name}"' if " " in t.name else t.name
-                s.send("PRIVMSG", nick, f"\x01DCC ACCEPT {quoted} {port} {pos}\x01")
-                return
+    @staticmethod
+    def _same_offer(t: Transfer, port: int, token: str) -> bool:
+        """A RESUME / ACCEPT is about this offer: passive ones by their token, the others by their port."""
+        if t.passive:
+            return port == 0 and (t.token == token if token else True)
+        return not token and port != 0 and t.port == port
 
-    def _resume_ok(self, s, nick, name, port, pos) -> None:
-        for t in self.items:
-            if t.kind == "recv" and t.port == port and lower_eq(t.nick, nick) and t.state == "queued" and t.resume_from == pos:
-                self._go(t)
-                return
+    def _resume_asked(self, s, nick, name, port, pos, token: str = "") -> None:
+        t = self._pick([t for t in self.items if t.kind == "send" and lower_eq(t.nick, nick) and t.state == "queued"
+                        and self._same_offer(t, port, token) and 0 <= pos <= t.size], name)
+        if t is None:
+            return
+        t.pos = t.acked = pos
+        quoted = f'"{t.name}"' if " " in t.name else t.name
+        s.send("PRIVMSG", nick, f"\x01DCC ACCEPT {quoted} {port} {pos}{f' {token}' if token else ''}\x01")
+
+    def _resume_ok(self, s, nick, name, port, pos, token: str = "") -> None:
+        t = self._pick([t for t in self.items if t.kind == "recv" and lower_eq(t.nick, nick) and t.state == "queued"
+                        and self._same_offer(t, port, token) and t.resume_from and t.resume_from == pos], name)
+        if t is not None:
+            self._go(t)
 
     def finished(self, t: Transfer) -> None:
         s = t.session
@@ -607,8 +824,11 @@ class DccManager(QObject):
     # --- chat ---------------------------------------------------------------------------
 
     def _offer_chat(self, s, nick, ip, port) -> None:
+        if not self._offer_allowed(s, nick):
+            return
         t = self._add(Transfer(self, s, "chat", nick, "chat"))
         t.ip, t.port = ip, port
+        t.incoming = True
         s.add(s._front(), "info", "*", f"Received a DCC CHAT offer from {nick}")
         s.notify.emit(s._front(), "priv")
         if self.cfg.dcc_auto in (1, 2) and self.trusted(s, nick):

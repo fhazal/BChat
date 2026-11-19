@@ -7,6 +7,7 @@ import fnmatch
 import json
 import re
 import time
+import weakref
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, QUrl, Signal
@@ -18,7 +19,7 @@ from PySide6.QtWidgets import (QBoxLayout, QProgressBar, QTabBar, QToolButton, Q
 from . import __version__, commands, config, popups
 from .chatview import ChatPane
 from .config import Config, NetworkConfig, Server
-from .protocol import URL_RE, lower, strip_format
+from .protocol import URL_RE, lower, strip_format, trim_url
 from .session import ACTION, CHANNEL, HILITE, INFO, MSG, NOTICE, QUERY, SELF, SERVER, Buffer, Line, Session, User
 from .countries import country_of
 from .userlist import UserList, icon_name, light_pixmap
@@ -29,7 +30,7 @@ from .editors import rows_for
 from .about import AboutDialog
 from .notify import Notifier
 from .filetypes import is_program
-from .safety import CertDialog, LinkDialog, ProgramDialog, link_risk
+from .safety import CertDialog, FileExistsDialog, LinkDialog, ProgramDialog, link_risk
 from .updater import READY, Updater
 from .updatewindow import UpdateBadge, UpdateDialog
 from .switchertree import SwitcherTree, tree_icon
@@ -86,6 +87,8 @@ class InputBox(QLineEdit):
         self._cycle_i = 0
         self._cycle_start = 0
         self._cycle_text = ""
+        self._cycle_tail = ""
+        self._tabs: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()   # 0.8.5: tab -> its history and draft
         self._spell_timer = QTimer(self, singleShot=True, interval=250, timeout=self.mark_spelling)
         self.textChanged.connect(lambda _: self._spell_timer.start() if self.win.cfg.spell_check or self.bad_words else None)
         self.bad_words: list[tuple[int, int]] = []
@@ -134,11 +137,68 @@ class InputBox(QLineEdit):
         return None
 
     def contextMenuEvent(self, ev):
-        menu = self.createStandardContextMenu()
-        span = self.word_at_x(ev.pos().x())
-        self.fill_spell_menu(menu, span)
+        menu = self.build_menu(ev.pos().x())
         menu.exec(ev.globalPos())
         menu.deleteLater()
+
+    def build_menu(self, x: int) -> QMenu:
+        """The right-click menu: Qt's own, with Paste going the same way as Ctrl+V (0.8.5: several lines too)."""
+        menu = self.createStandardContextMenu()
+        paste = QKeySequence(QKeySequence.StandardKey.Paste)
+        for act in menu.actions():
+            if act.objectName() == "edit-paste" or (not act.shortcut().isEmpty() and act.shortcut() == paste):
+                act.triggered.disconnect()
+                act.triggered.connect(lambda _=False: self.paste_clipboard())
+        self.fill_spell_menu(menu, self.word_at_x(x))
+        return menu
+
+    def paste_clipboard(self) -> None:
+        """Ctrl+V and the menu's Paste: one line goes in the box, several go out as lines (the paste window)."""
+        pasted = QApplication.clipboard().text()
+        if "\n" in pasted.strip():
+            self.win.paste_lines(pasted, self.fixed)
+        else:
+            self.paste()
+
+    # --- 0.8.5: every tab has its own Up/Down history and keeps what was typed but not sent ---
+
+    def _current_text(self) -> tuple[str, int]:
+        if self.is_multi():
+            return self.multi.toPlainText(), self.multi.textCursor().position()
+        return self.text(), self.cursorPosition()
+
+    def switch_tab(self, old: "Buffer | None", new: "Buffer") -> None:
+        if old is new:
+            return
+        text, cur = self._current_text()
+        if old is not None:
+            self._tabs[old] = (self.history, self.pos_, text, cur)
+        elif new not in self._tabs:
+            return                                  # first tab shown: it keeps what is in the box
+        history, pos, draft, at = self._tabs.pop(new, ([], 0, "", 0))
+        self.history, self.pos_ = history, min(pos, len(history))
+        self._cycle = []
+        self.blockSignals(True)                     # not typing: no typing notice
+        try:
+            if self.is_multi():
+                self.multi.blockSignals(True)
+                self.collapse("", 0)
+                self.multi.blockSignals(False)
+            self.setText("" if "\n" in draft else draft)
+            self.setCursorPosition(min(at, len(self.text())))
+        finally:
+            self.blockSignals(False)
+        if "\n" in draft:
+            self.expand(draft, at)
+        if self.win.cfg.spell_check or self.bad_words:
+            self._spell_timer.start()
+
+    def clear_history(self) -> None:
+        """/clear history: every tab's typed lines."""
+        self.history.clear()
+        self.pos_ = 0
+        for history, *_ in self._tabs.values():
+            history.clear()
 
     def fill_spell_menu(self, menu: QMenu, span) -> None:
         if span is None:
@@ -169,6 +229,12 @@ class InputBox(QLineEdit):
         self.mark_spelling()
 
     def event(self, ev):
+        if ev.type() == QEvent.Type.KeyPress and ev.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab) \
+                and ev.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if self.fixed is None:                  # 0.8.5: Ctrl+Tab / Ctrl+Shift+Tab: next / previous tab
+                back = ev.key() == Qt.Key.Key_Backtab or bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                self.win._change_page(delta=-1 if back else 1)
+            return True
         if ev.type() == QEvent.Type.KeyPress and ev.key() == Qt.Key.Key_Tab:
             self._complete()
             return True
@@ -198,10 +264,8 @@ class InputBox(QLineEdit):
         if ev.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter) and mods in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier):
             self.apply_auto_replace()
         if ev.matches(QKeySequence.StandardKey.Paste):
-            pasted = QApplication.clipboard().text()
-            if "\n" in pasted.strip():
-                self.win.paste_lines(pasted)
-                return
+            self.paste_clipboard()
+            return
         if ev.key() in (Qt.Key.Key_PageUp, Qt.Key.Key_PageDown) and mods == Qt.KeyboardModifier.NoModifier:
             bar.setValue(bar.value() + (bar.pageStep() if ev.key() == Qt.Key.Key_PageDown else -bar.pageStep()))
         elif mods == Qt.KeyboardModifier.ShiftModifier and ev.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
@@ -306,6 +370,12 @@ class InputBox(QLineEdit):
         names = [u.nick for u in matches]
         if b.kind == QUERY and lower(b.name).startswith(low):
             names.append(b.name)
+        # 0.8.5: the nicks of the open dialogs too, after the people in this tab
+        seen = {s.fold(n) for n in names}
+        for x in s.buffers.values():
+            if x.kind == QUERY and not x.name.startswith("=") and lower(x.name).startswith(low) and s.fold(x.name) not in seen:
+                names.append(x.name)
+                seen.add(s.fold(x.name))
         return names
 
     def _complete(self) -> None:
@@ -317,20 +387,29 @@ class InputBox(QLineEdit):
         if text != self._cycle_text:
             self._cycle = []
         if not self._cycle:
-            cur = self.cursorPosition()
-            self._cycle_start = text.rfind(" ", 0, cur) + 1
-            word = text[self._cycle_start:cur]
-            if not word:
-                return
-            self._cycle = self._candidates(word, self._cycle_start == 0)
-            self._cycle_i = 0
-            if not self._cycle:
-                return
+            if not text.strip():                    # 0.8.5: empty box: /msg the last one who wrote to me; Tab again: before
+                self._cycle = [f"/msg {n}" for n in self.win.recent_private(b.session)]
+                self._cycle_start, self._cycle_i, self._cycle_tail = 0, 0, ""
+                if not self._cycle:
+                    return
+            else:
+                cur = self.cursorPosition()
+                self._cycle_start = text.rfind(" ", 0, cur) + 1
+                word = text[self._cycle_start:cur]
+                if not word:
+                    return
+                self._cycle = self._candidates(word, self._cycle_start == 0)
+                self._cycle_i = 0
+                self._cycle_tail = text[cur:].lstrip(" ")     # 0.8.5: what comes after the cursor stays
+                if not self._cycle:
+                    return
         item = self._cycle[self._cycle_i % len(self._cycle)]
         self._cycle_i += 1
         is_nick = not item.startswith("/") and not b.session.is_channel(item)
         suffix = self.win.cfg.nick_suffix if is_nick and self._cycle_start == 0 else ""
-        self.setText(text[: self._cycle_start] + item + suffix + " ")
+        head = text[: self._cycle_start] + item + suffix + " "
+        self.setText(head + self._cycle_tail)
+        self.setCursorPosition(len(head))
         self._cycle_text = self.text()
 
 
@@ -393,6 +472,9 @@ class MultiInput(QPlainTextEdit):
             QTimer.singleShot(0, self.fit)
 
     def event(self, ev):
+        if ev.type() == QEvent.Type.KeyPress and ev.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab) \
+                and ev.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            return self.owner.event(ev)             # 0.8.5: Ctrl+Tab moves tabs here too
         if ev.type() == QEvent.Type.KeyPress and ev.key() == Qt.Key.Key_Tab:
             self._complete()
             return True
@@ -463,6 +545,7 @@ class MainWindow(FramelessWindow):
         self.cfg = cfg
         self.cfg_dir = cfg_dir
         self.sessions: dict[str, Session] = {}
+        self._private_from: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()   # session -> nicks, newest first
         self.started_at = time.time()                  # /online: how long BChat has been running
         from .highlights import migrate
         migrate(cfg)                                    # XChat's highlight lists -> rules, however cfg was made
@@ -497,6 +580,7 @@ class MainWindow(FramelessWindow):
         self._load_urls()
         self.detached: dict = {}
         self.dcc = DccManager(self)
+        self.dcc.on_exists = self._file_exists
         self.plugins = PluginManager(self)
         self._tabs_busy = False
         self.updater = Updater(cfg, cfg_dir, self)
@@ -811,9 +895,10 @@ class MainWindow(FramelessWindow):
         m.addAction(self.update_act)
         self.update_badge = UpdateBadge(m, self.update_act, self.updater, self.cfg.theme)
 
-        for key, delta in (("Ctrl+PgUp", -1), ("Ctrl+PgDown", 1)):
+        for keys, delta in ((["Ctrl+PgUp"], -1), (["Ctrl+PgDown"], 1), (["Ctrl+Tab"], 1),
+                            (["Ctrl+Shift+Tab", "Ctrl+Shift+Backtab"], -1)):    # 0.8.5: Ctrl+Tab too
             a = QAction(self)
-            a.setShortcut(QKeySequence(key))
+            a.setShortcuts([QKeySequence(k) for k in keys])
             a.triggered.connect(lambda _=False, d=delta: self._change_page(delta=d))
             self.addAction(a)
         for n in range(1, 10):
@@ -843,10 +928,12 @@ class MainWindow(FramelessWindow):
             s.typing_changed.connect(lambda b: self.show_typing() if b is self.buf else None)
             s.line_added.connect(self._log_line)
             s.line_added.connect(self._grab_urls)
+            s.line_added.connect(self._note_private)
             s.friends_changed.connect(self._friends_changed)
             s.notify.connect(self._on_notify)
             s.cert_question.connect(lambda info, s=s: self._cert_question(s, info))
             s.pins_changed.connect(self.save_config)
+            s.servers_moved.connect(self.save_config)
             s.on_command = self.run_command
             s.on_dcc = self.dcc.incoming
             s.dcc_say = self.dcc.say
@@ -928,7 +1015,7 @@ class MainWindow(FramelessWindow):
                 b.session.stay_back = ""
             if (focus == 0 and self.buf is None) or not back and (focus == 1 or (focus == 2 and (asked or (b.kind == CHANNEL and reading_server)))):
                 self.select_buffer(b)
-            if b.kind == QUERY and self.cfg.dialogs_in_windows and b.name != "(notices)":
+            if b.kind == QUERY and self.cfg.dialogs_in_windows and b.name not in ("(notices)", "(messages)"):
                 self.detach(b)
         self._rebuild_tabs()
 
@@ -1273,6 +1360,7 @@ class MainWindow(FramelessWindow):
     def _show(self, b: Buffer) -> None:
         if self.replying is not None and self.replying[0] is not b:
             self.cancel_reply()                 # a reply belongs to the tab it was started in
+        self.input.switch_tab(self.buf, b)      # 0.8.5: each tab its own history and unsent text
         self.buf = b
         b.session.current = b
         b.unread, b.mentioned = 0, False
@@ -1431,7 +1519,8 @@ class MainWindow(FramelessWindow):
         if replying is not None and replying[0] is self.buf and not text.startswith("/") and self.buf is not None:
             self.cancel_reply()
             self.input.remember(text)
-            self.buf.session.say_reply(self.buf.name, self.expand_input(text), replying[1])
+            with self.buf.session.typed():
+                self.buf.session.say_reply(self.buf.name, self.expand_input(text), replying[1])
             return
         self.input.remember(text)
         from .reports import command_step
@@ -1443,7 +1532,8 @@ class MainWindow(FramelessWindow):
             else:
                 self.open_network_list()
             return
-        commands.run(self, self.buf.session, self.buf, self.expand_input(text))
+        with self.buf.session.typed():        # 0.8.5: typed lines go out at once, never behind a JOIN/WHO burst
+            commands.run(self, self.buf.session, self.buf, self.expand_input(text))
 
     def expand_input(self, text: str, buf: Buffer | None = None) -> str:
         """Input box settings: %B-style codes, %nnn values and completing "nic: hi" without Tab."""
@@ -1691,7 +1781,9 @@ class MainWindow(FramelessWindow):
         add_menu_title(menu, b.name)
         menu.addSeparator()
         if b.kind == CHANNEL:
-            menu.addAction("Leave Channel", lambda: s.send("PART", b.name, self.cfg.part_reason))
+            # 0.8.5: a greyed tab (not joined) has nothing to part: it just closes
+            menu.addAction("Leave Channel", lambda: s.send("PART", b.name, self.cfg.part_reason) if b.joined
+                           else self.close_buffer(b))
         if b.kind != SERVER:
             menu.addAction("Rejoin Channel" if b.kind == CHANNEL else "WhoIs",
                            (lambda: s.send("JOIN", b.name)) if b.kind == CHANNEL else (lambda: s.whois(b.name)))
@@ -1831,6 +1923,24 @@ class MainWindow(FramelessWindow):
         d.finished.connect(lambda _r: self.dcc.accept(t) if d.choice == "accept" else None)
         d.open()
 
+    def _file_exists(self, t, free: str) -> None:
+        """The file is already in the folder: ask Resume / Overwrite / Rename. Cancel leaves the offer waiting."""
+        p = Path(t.path)
+        try:
+            have = p.stat().st_size
+        except OSError:
+            have = 0
+        d = FileExistsDialog(self, t.name, t.size, t.nick, have, str(p.parent), free, self.dcc.can_resume(t))
+        self.exists_dialog = d
+
+        def done(_r) -> None:
+            if d.choice in ("resume", "overwrite"):
+                self.dcc.accept(t, d.choice)
+            elif d.choice == "rename":
+                self.dcc.accept(t, "rename", d.new_name())
+        d.finished.connect(done)
+        d.open()
+
     def _cert_question(self, s, info: dict) -> None:
         """Asked without stopping the rest of BChat: other networks keep chatting while this window is up."""
         d = CertDialog(self, info)
@@ -1931,8 +2041,12 @@ class MainWindow(FramelessWindow):
 
     def _run_with(self, cmd: str) -> None:
         s = self.session
-        if s is not None:
-            self.run_command(s, cmd if cmd.startswith(("!", "/")) else "/" + cmd)
+        if s is None:
+            return
+        if cmd.startswith("!"):                 # 0.8.5: typed "!" is chat now; a menu's "!program" still runs it
+            commands.start_program(s, self.buf, cmd[1:])
+        else:
+            self.run_command(s, cmd if cmd.startswith("/") else "/" + cmd)
 
     def nick_command(self, cmd: str, nicks: list[str]) -> None:
         """XChat's nick_command_parse: %a is every selected nick at once, %s runs once per nick."""
@@ -3128,6 +3242,10 @@ class MainWindow(FramelessWindow):
         if download or (download is None and not w.rows and not w.loading):
             w.download()
         elif download is False:
+            w.rows.clear()                      # 0.8.5: /list >400 twice: the new answer, not added to the old one
+            w.pending.clear()
+            w.view.clear()
+            w._update_status()
             s.list_sink = w
         return w
 
@@ -3377,13 +3495,41 @@ class MainWindow(FramelessWindow):
 
     EMAIL_RE = re.compile(r"(?<![\w.@!+-])[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![\w@])")
 
+    def _note_private(self, b: Buffer, ln) -> None:
+        """0.8.5: who wrote to me in private, newest first, for Tab in an empty box."""
+        if b.kind != QUERY or b.name.startswith("=") or ln.kind not in (MSG, HILITE, ACTION):
+            return
+        s = b.session
+        if b.name == s.MESSAGES:    # 0.8.6: the one Messages tab: the nick is in the line
+            nick = strip_format(ln.left)
+            if nick == "*":             # a /me: 'nick does something' (a highlighted one too)
+                nick = strip_format(ln.text).split(" ", 1)[0]
+                if " → " in strip_format(ln.text):      # my own /me to someone, from another client
+                    return
+            if not nick or nick == "*" or nick.startswith(">") or s.fold(nick) == s.fold(s.nick):
+                return
+            recent = self._private_from.setdefault(s, [])
+            recent[:] = [n for n in recent if s.fold(n) != s.fold(nick)][:19]
+            recent.insert(0, nick)
+            return
+        if ln.kind != ACTION and s.fold(strip_format(ln.left)) != s.fold(b.name):
+            return
+        if ln.kind == ACTION and not strip_format(ln.text).startswith(b.name):
+            return
+        recent = self._private_from.setdefault(s, [])
+        recent[:] = [n for n in recent if s.fold(n) != s.fold(b.name)][:19]
+        recent.insert(0, b.name)
+
+    def recent_private(self, s: Session) -> list[str]:
+        return list(self._private_from.get(s, []))
+
     def _grab_urls(self, b: Buffer, ln) -> None:
         """XChat's url_check_line: every link anyone shows, newest last, no repeats.
         0.6.0: also who, where and when; email addresses only in chat lines and only with the tick."""
         if not self.cfg.url_grabber or "." not in ln.text:
             return
         text = strip_format(ln.text)
-        found = [m.group(0).rstrip(".,);:!?'\"") for m in URL_RE.finditer(text)]
+        found = [trim_url(m.group(0)) for m in URL_RE.finditer(text)]
         if self.cfg.url_emails and ln.kind in (MSG, SELF, ACTION, HILITE, NOTICE):
             found += [m.group(0) for m in self.EMAIL_RE.finditer(text) if not any(m.group(0) in u for u in found)]
         changed = False

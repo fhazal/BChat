@@ -60,7 +60,7 @@ def test_identify_commands_and_joins_wait_for_the_end_of_the_motd(app):
     assert not joins(s)                                  # a moment after, not on the same line
     assert wait(app, lambda: joins(s), 2500)
     order = [l.split(" ")[0].upper() if not l.startswith("PRIVMSG") else "IDENTIFY" for l in s.out
-             if l.startswith(("PRIVMSG NickServ", "MODE", "JOIN"))]
+             if l.startswith(("PRIVMSG NickServ", "MODE", "JOIN")) and l != "MODE Belon +i"]   # 0.8.5: +i at 001
     assert order == ["IDENTIFY", "MODE", "JOIN"]
 
 

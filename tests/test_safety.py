@@ -240,6 +240,10 @@ def test_accepting_a_program_asks_first_and_cancel_leaves_it_waiting(app, tmp_pa
     assert wait(app, lambda: "#skinhead" in s.buffers)
     win.cfg.dcc_dir = str(tmp_path / "in")
     payload = b"MZ not really a program" * 50
+    srv.send(f":B3L0N!b@h PRIVMSG Badaboom :\x01DCC SEND barangbaik.exe 2130706433 1234 {len(payload)}\x01")
+    assert wait(app, lambda: "DCC Send of barangbaik.exe from B3L0N ignored (file type is on the DCC ignore list)"
+                in [l.text for l in s.server_buffer.lines]) and not win.dcc.items   # 0.8.5: the default list ignores it
+    win.cfg.dcc_ignore_exts = []
     port, _ = _sender(payload)
     srv.send(f":B3L0N!b@h PRIVMSG Badaboom :\x01DCC SEND barangbaik.exe 2130706433 {port} {len(payload)}\x01")
     assert wait(app, lambda: win.dcc.items)

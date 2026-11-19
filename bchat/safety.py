@@ -7,7 +7,7 @@ import re
 
 from PySide6.QtCore import QUrl, Qt
 from PySide6.QtGui import QFont, QGuiApplication, QPixmap
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
 
 from . import lucide
 from .widgets import FramedDialog, icon
@@ -194,6 +194,34 @@ class ProgramDialog(_Ask):
         self.cancel_btn = self.button("&Cancel", "cancel", "close-light", default=True)
         self.row.addStretch(1)
         self.accept_btn = self.button("&Accept", "accept")
+
+
+class FileExistsDialog(_Ask):
+    """A DCC file you already have (mockup A, OK'd 2026-11-19): Resume / Overwrite / Rename, as the mIRC help lists.
+    Cancel leaves the offer waiting. Resume only shows when the file on disk is smaller than the one offered."""
+
+    def __init__(self, parent, name: str, size: int, who: str, have: int, folder: str, free: str, can_resume: bool):
+        super().__init__(parent, "BChat: File already exists", "file-warning", "File already exists")
+        self.setWindowTitle("BChat: File already exists")
+        label = self.text(f"{_esc(who)} is sending <b>{_esc(name)}</b> ({_size(size)}).")
+        label.setTextFormat(Qt.TextFormat.RichText)
+        self.text(f"You already have {name} ({_size(have)}) in {folder}.", muted=True).setTextFormat(Qt.TextFormat.PlainText)
+        rn = QHBoxLayout()
+        rn.setSpacing(8)
+        rn.addWidget(QLabel("Rename to:"))
+        self.name_edit = QLineEdit(free)
+        rn.addWidget(self.name_edit, 1)
+        self.words.addLayout(rn)
+        self.cancel_btn = self.button("&Cancel", "cancel", "close-light")
+        self.row.addStretch(1)
+        self.rename_btn = self.button("Re&name", "rename")
+        self.overwrite_btn = self.button("&Overwrite", "overwrite", default=not can_resume)
+        self.resume_btn = self.button("&Resume", "resume", default=can_resume)
+        self.resume_btn.setVisible(can_resume)
+        self.name_edit.textChanged.connect(lambda v: self.rename_btn.setEnabled(bool(v.strip())))
+
+    def new_name(self) -> str:
+        return self.name_edit.text().strip()
 
 
 def _size(n: int) -> str:

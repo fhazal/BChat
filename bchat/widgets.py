@@ -41,23 +41,13 @@ def is_light(t: Theme) -> bool:
     return QColor(t.panel).lightness() > 140
 
 
-_os_palette: QPalette | None = None
-
-
 def set_light_palette(t: Theme) -> None:
     """Qt colours whatever BChat doesn't style itself (spin boxes, frame lines, plain tool buttons) from Windows,
-    and on a PC in dark mode that is dark. A light theme gets its own colours for those; a dark theme gets
-    exactly what Windows gave before, so dark themes look as they always did."""
-    global _os_palette
+    by default. Every theme now gives Qt its own colours for those, so nothing shows Windows' grey."""
     app = QApplication.instance()
     if app is None:
         return
-    if _os_palette is None:
-        _os_palette = QPalette(app.palette())
-    if not is_light(t):
-        app.setPalette(_os_palette)
-        return
-    p = QPalette()
+    p = QPalette()   # 0.8.6: dark themes too (they showed Windows' grey spin boxes and arrows)
     R = QPalette.ColorRole
     for role, colour in ((R.Window, t.window), (R.WindowText, t.text), (R.Base, t.panel), (R.AlternateBase, t.window),
                          (R.Text, t.text), (R.Button, t.popup), (R.ButtonText, t.text), (R.BrightText, t.marker),
@@ -103,7 +93,7 @@ def header_logo(dpr: float) -> QPixmap:
 
 
 def stylesheet(t: Theme) -> str:
-    return _sheet(t) + (_light_extra(t) if is_light(t) else "")
+    return _sheet(t) + _spin_sheet(t) + (_light_extra(t) if is_light(t) else "")
 
 
 def _svg_file(kind: str, colour: str) -> str:
@@ -116,6 +106,10 @@ def _svg_file(kind: str, colour: str) -> str:
     if kind == "tick":
         svg = (ASSETS / "lucide" / "check.svg").read_text(encoding="utf-8")
         svg = svg.replace("currentColor", colour).replace('stroke-width="2"', 'stroke-width="2.6"')
+    elif kind in ("up", "down"):   # chevrons for spin boxes, same line style as the icons
+        pts = "6 15 12 9 18 15" if kind == "up" else "6 9 12 15 18 9"
+        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" '
+               f'stroke="{colour}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="{pts}"/></svg>')
     else:
         svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5" fill="{colour}"/></svg>'
     try:
@@ -317,14 +311,29 @@ def _sheet(t: Theme) -> str:
     """
 
 
+def _spin_sheet(t: Theme) -> str:
+    """Spin boxes in the panel colour like the other entry boxes, in every theme (0.8.6)."""
+    return f"""
+    QAbstractSpinBox {{ background: {t.panel}; border: 1px solid {t.border}; selection-background-color: {t.selected};
+        selection-color: {t.marking_fg}; }}
+    QAbstractSpinBox:disabled {{ color: {t.disabled}; }}
+    QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{ subcontrol-origin: padding; width: 16px;
+        background: {t.panel}; border: none; border-left: 1px solid {t.border}; }}
+    QAbstractSpinBox::up-button {{ subcontrol-position: top right; }}
+    QAbstractSpinBox::down-button {{ subcontrol-position: bottom right; }}
+    QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {{ background: {t.popup}; }}
+    QAbstractSpinBox::up-arrow {{ image: url({_svg_file("up", t.text)}); width: 9px; height: 9px; }}
+    QAbstractSpinBox::down-arrow {{ image: url({_svg_file("down", t.text)}); width: 9px; height: 9px; }}
+    QAbstractSpinBox::up-arrow:disabled, QAbstractSpinBox::up-arrow:off {{ image: url({_svg_file("up", t.disabled)}); }}
+    QAbstractSpinBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:off {{ image: url({_svg_file("down", t.disabled)}); }}
+    """
+
+
 def _light_extra(t: Theme) -> str:
     """Only on a light theme: selected menu text in the theme's text colour (white is unreadable on light grey),
     and spin boxes in the panel colour like the other entry boxes."""
     return f"""
     QMenuBar::item:selected, QMenu::item:selected {{ color: {t.marking_fg}; }}
-    QAbstractSpinBox {{ background: {t.panel}; border: 1px solid {t.border}; selection-background-color: {t.selected};
-        selection-color: {t.marking_fg}; }}
-    QAbstractSpinBox:disabled {{ color: {t.disabled}; }}
     QPushButton:disabled {{ color: {t.away}; }}
     """
 

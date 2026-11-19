@@ -33,9 +33,23 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 
 ---
 
-## 🆕 What's new in 0.8.3
+## 🆕 What's new in 0.8.6
+
+- 💬 **One Messages tab** (*Settings → General*, off by default): all private messages on a network land in one **(messages)** tab. Reply with `/msg nick`; friends can keep their own tab.
+- 🔒 **Passwords stay hidden**: NickServ, OPER, PASS and SASL passwords never show in the chat, the log, the scrollback or the Raw Log.
+- 🔁 **Reconnects pick up where you were**: your away message, channel keys and connect commands come back. Channels you left stay left. A taken nick tries your alternate nick, then underscores.
+- 🔑 **If the login fails** (*Network List → Edit*): BChat disconnects and doesn't retry a bad SASL or certificate login, or you can choose to stay connected.
+- 🔌 **Connecting** (*Settings → Advanced*): give up after N retries, a connect time-out for silent servers, invisible mode (+i), on by default, and an option to try the server that worked first next time.
+- 🌊 **Flood protection** (*Settings → Flood*): what you type goes out at once, even behind a long paste, and automatic lines are paced. `/flood` works.
+- ⌨️ **Commands**: `/ban`, `/kickban` and `/ignore` take ban types 0 to 19 and look up unknown addresses. Long lines are split, not cut. Each tab keeps its own history and draft. Tab completion and **Ctrl+Tab** work better.
+- 📁 **File transfers**: a **File already exists** dialog (Resume, Overwrite, Rename, Cancel), plus time-outs, a file type list and `/dcc ignore`.
+- 🐝 **Bouncers**: BChat no longer reads ZNC's `*status` lines. A bouncer is treated like any other server.
+
+<details><summary>0.8.3</summary>
 
 - 🔌 **ZNC at the channel limit**: on a server where you were already at its channel limit, 0.8.2 showed you outside every channel after a restart, with "You have joined too many channels". BChat no longer asks the bouncer to join channels it already put you in, and that message no longer empties a tab.
+
+</details>
 
 <details><summary>0.8.2</summary>
 

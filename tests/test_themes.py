@@ -172,26 +172,39 @@ def test_coloured_nicks_use_the_theme(app, win):
     assert win.chat.nick_colour("Belon") in PALETTES["Catppuccin Mocha"].values()
 
 
-def test_light_fixes_only_touch_light_themes(app):
-    """Spin boxes, frame lines and Qt's own colours: Latte gets theme colours, dark themes keep what they had."""
+def test_every_theme_colours_spin_boxes_and_qt_palette(app):
+    """0.8.6: spin boxes, their arrows and Qt's own colours follow the theme in every theme. Dark themes used to keep
+    Windows' grey (#2d2d2d boxes, #4e4e4e arrows), which didn't match Mocha."""
     from PySide6.QtGui import QPalette
     from bchat import widgets
-    before = QPalette(app.palette())
     for name in THEME_NAMES:
         t = make_theme(name)
         sheet = widgets.stylesheet(t)
-        light = name in config.LIGHT_THEMES
-        assert ("QAbstractSpinBox" in sheet) == light
+        assert "QAbstractSpinBox {" in sheet and "QAbstractSpinBox::up-arrow" in sheet and "QAbstractSpinBox::down-button" in sheet
         assert 'QFrame[frameShape="HLine"]' in widgets._sheet(t)        # soft dialog lines: every theme (0.2.0)
         assert sheet.startswith(widgets._sheet(t))
+        assert sheet.endswith(widgets._light_extra(t)) == (name in config.LIGHT_THEMES)   # light-only extra stays light-only
         widgets.set_light_palette(t)
-        base = app.palette().color(QPalette.ColorRole.Base).name()
-        if light:
-            assert base == t.panel and app.palette().color(QPalette.ColorRole.Button).name() == t.popup
-        else:
-            assert app.palette() == widgets._os_palette    # exactly what Windows gave before
+        pal = app.palette()
+        assert pal.color(QPalette.ColorRole.Base).name() == t.panel
+        assert pal.color(QPalette.ColorRole.Button).name() == t.popup
+        assert pal.color(QPalette.ColorRole.Window).name() == t.window
     widgets.set_light_palette(make_theme("Catppuccin Mocha"))
-    assert app.palette() == before
+
+
+def test_spin_box_is_drawn_in_theme_colours(app):
+    """Real pixels: a Mocha spin box shows no Windows grey anywhere (field or arrow buttons)."""
+    from PySide6.QtWidgets import QSpinBox
+    from bchat import widgets
+    t = make_theme("Catppuccin Mocha")
+    widgets.set_light_palette(t)
+    app.setStyleSheet(widgets.stylesheet(t))
+    s = QSpinBox(); s.setRange(0, 100); s.setValue(5); s.resize(120, 26); s.show(); app.processEvents()
+    img = s.grab().toImage()
+    seen = {img.pixelColor(x, y).name() for y in range(img.height()) for x in range(img.width())}
+    assert not seen & {"#2d2d2d", "#4e4e4e", "#4f4f4f", "#494949", "#353535", "#3c3c3c"}
+    assert t.panel in seen
+    s.close(); app.setStyleSheet("")
 
 
 def test_topic_buttons_hide_when_you_cant_change_the_topic(app, win):
