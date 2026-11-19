@@ -37,7 +37,7 @@ def note(name, fn):
         results[name + " (error)"] = traceback.format_exc()[-400:]
 def run(userdata):
     from bchat.mainwindow import MainWindow, speller
-    from bchat.preferences import BUILT, CATEGORIES, PreferencesDialog
+    from bchat.preferences import BUILT, CATEGORIES, SUBPAGES, PreferencesDialog
     win = [w for w in QApplication.topLevelWidgets() if isinstance(w, MainWindow)][0]
     s = win.session
     note("spell word list loads", lambda: speller() is not None and speller().known(["hello"]) and not speller().known(["helo"]))
@@ -67,7 +67,7 @@ def run(userdata):
         note("editor " + key, ed)
     def pages():
         d = PreferencesDialog(win)
-        names = [p for g in CATEGORIES.values() for p in g]
+        names = [p for g in CATEGORIES.values() for p in g] + [p for g in SUBPAGES.values() for p in g]
         for n in names:
             d.show_page(n)
         d.reject()
@@ -295,13 +295,14 @@ def run(userdata):
     def passwords_not_in_file():
         from bchat import config as cfgmod
         net = win.cfg.networks[0]
-        net.password = "probe-pass-7731"
+        probe = "probe-pass-7731"  # dummy value, never a real password
+        net.password = probe
         cfgmod.save(win.cfg, win.cfg_dir)
         text = (win.cfg_dir / "config.json").read_text(encoding="utf-8")
         back = cfgmod.load(win.cfg_dir).networks[0].password
         net.password = ""
         cfgmod.save(win.cfg, win.cfg_dir)
-        return "probe-pass-7731" not in text and back == "probe-pass-7731"
+        return probe not in text and back == probe
     note("passwords kept out of config.json in the exe", passwords_not_in_file)
     def safety_windows():
         from bchat.safety import CertDialog, link_risk

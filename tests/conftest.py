@@ -17,6 +17,8 @@ winsound.PlaySound = lambda path, flags: SOUNDS_PLAYED.append(path)   # tests ne
 import bchat.sound, bchat.speech                                      # noqa: E401
 bchat.sound.MUTED = True            # mp3/ogg players really decode, muted
 bchat.speech.ENGINE = "mock"        # Qt's silent speech engine: nothing is read aloud in tests
+import bchat.notify                                                     # noqa: E402
+bchat.notify.windows_busy = lambda: False   # a full-screen app or Do Not Disturb on the test PC would mute every chime
 from PySide6.QtWidgets import QApplication
 
 

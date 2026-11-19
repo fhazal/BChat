@@ -34,6 +34,62 @@ def label(grid, row):
     return grid.itemAtPosition(row, 0).widget()
 
 
+def test_opening_preferences_flashes_no_other_window(app, tmp_path):
+    """TEST1: the Speech box was made without a parent and shown before it joined the page, so a bare
+    box flashed up as a window of its own every time Preferences opened."""
+    from PySide6.QtCore import QEvent, QObject
+    from bchat.preferences import PreferencesDialog
+    win, _ = make_win(tmp_path, 1)
+    shown = []
+
+    class Watch(QObject):
+        def eventFilter(self, obj, ev):
+            if ev.type() == QEvent.Type.Show and getattr(obj, "isWindow", None) and obj.isWindow():
+                shown.append(obj)
+            return False
+    watch = Watch()
+    app.installEventFilter(watch)
+    try:
+        d = PreferencesDialog(win, "Sound")
+        d.show()
+        settle(app)
+    finally:
+        app.removeEventFilter(watch)
+    stray = [w for w in shown if w is not d]
+    d.reject()
+    win.close()
+    assert not stray, [type(w).__name__ for w in stray]
+
+
+def test_quit_dialog_flashes_no_other_window(app, tmp_path, monkeypatch):
+    """TEST1: the Minimize to Tray button was shown before it had a parent, so a bare button
+    flashed up as a window of its own each time the Quit question opened."""
+    from PySide6.QtCore import QEvent, QObject
+    from bchat import quitdialog
+    from bchat.quitdialog import QuitDialog
+    monkeypatch.setattr(quitdialog.QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: True))
+    win, _ = make_win(tmp_path, 1)
+    shown = []
+
+    class Watch(QObject):
+        def eventFilter(self, obj, ev):
+            if ev.type() == QEvent.Type.Show and getattr(obj, "isWindow", None) and obj.isWindow():
+                shown.append(obj)
+            return False
+    watch = Watch()
+    app.installEventFilter(watch)
+    try:
+        d = QuitDialog(win, 2)
+        d.show()
+        settle(app)
+    finally:
+        app.removeEventFilter(watch)
+    stray = [w for w in shown if w is not d]
+    d.reject()
+    win.close()
+    assert not stray, [type(w).__name__ for w in stray]
+
+
 def test_proxy_off_shows_only_the_type(app, dialog):
     d = dialog()
     d.proxy_type.setCurrentIndex(0)

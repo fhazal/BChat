@@ -985,7 +985,7 @@ class PreferencesDialog(FramedDialog):
         g.addWidget(self.sound_volume_text, row, 2)
         lay.addLayout(g)
         # 0.8.8 Speech: hidden when this PC has no speech engine (nothing to use)
-        self.speech_box = QWidget()
+        self.speech_box = QWidget(page)                    # a parent, so showing it never opens a window of its own
         sl = QVBoxLayout(self.speech_box)
         sl.setContentsMargins(0, 0, 0, 0)
         sl.addWidget(_heading("Speech"))
@@ -1027,8 +1027,8 @@ class PreferencesDialog(FramedDialog):
         self.speak_only_away = QCheckBox("Only when BChat is not the active window")
         self.speak_only_away.setChecked(bool(c.speak_only_away))
         sl.addWidget(self.speak_only_away)
-        self.speech_box.setVisible(available)
         lay.addWidget(self.speech_box)
+        self.speech_box.setHidden(not available)
         lay.addStretch(1)
         return page
 

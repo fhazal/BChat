@@ -52,10 +52,9 @@ class QuitDialog(FramedDialog):
         self.body.addWidget(line)
         row = QHBoxLayout()
         row.setSpacing(8)
-        self.tray_btn = QPushButton("&Minimize to Tray")
+        self.tray_btn = QPushButton("&Minimize to Tray", self)    # a parent, so hiding/showing it never opens a window of its own
         self.tray_btn.setAutoDefault(False)
         self.tray_btn.clicked.connect(lambda _=False: self._pick("tray"))
-        self.tray_btn.setVisible(QSystemTrayIcon.isSystemTrayAvailable())
         row.addWidget(self.tray_btn)
         row.addStretch(1)
         self.cancel_btn = QPushButton(icon("close-light"), "&Cancel")
@@ -67,6 +66,7 @@ class QuitDialog(FramedDialog):
         self.quit_btn.clicked.connect(lambda _=False: self._pick("quit"))
         row.addWidget(self.quit_btn)
         self.body.addLayout(row)
+        self.tray_btn.setHidden(not QSystemTrayIcon.isSystemTrayAvailable())
         self.setFixedWidth(430)
 
     def _pick(self, choice: str) -> None:
