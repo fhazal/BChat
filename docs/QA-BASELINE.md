@@ -3,7 +3,43 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.8.3 release (18 Nov 2026)
+## Current baseline: 0.8.6 release (19 Nov 2026)
+
+Released as `v0.8.6` from commit `1631846` (0.8.4 + 0.8.5 + 0.8.6 work: one Messages tab for private messages,
+reconnect / flood protection / DCC / commands behave as IRC users expect, theme-coloured spin boxes; tests in
+`58c3a09`). Numbers from QA run `20261119-141307` on the release build (`build-check audit packaged ui perf`,
+full perf mode).
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.8.6` (`version_info` 0.8.6.0) |
+| Installer | `BChat-0.8.6-setup.exe`, 35,943,285 bytes |
+| Installer SHA-256 | `eb03bce82a8b2bb9ce9a68649c30109330442607af3d3dde3591ea60a1ddc709` |
+| `BChat.exe` SHA-256 | `2e290c3ac563b6987a3be61151dbc32f056ddc39d1630c1969aaa9b35397a65d` |
+| Packaged files | 209 |
+| VirusTotal installer | 1 / 69 (DeepInstinct, machine-learning guess) |
+| VirusTotal `BChat.exe` | 1 / 71 (APEX, as on every build) |
+
+### Performance (full mode)
+
+| Measure | 0.8.6 |
+| --- | --- |
+| Start to window | 0.50 s |
+| Start to joined (15 channels) | 1.6 s |
+| Idle working set | 102.6 MB |
+| Load 300 msg/s: CPU / worst UI stall | 61.3 % / 50 ms |
+| Burst of 5000 messages: time / worst UI stall | 4.1 s / 59 ms |
+| History 10k lines / all 15 tabs full | 170.7 / 288.0 MB |
+
+### Test results
+
+pytest 1061 collected, all passed (24 real-socket tests: SASL EXTERNAL certificate login over TLS, IPv6 DCC,
+transfers past 4 GB, and a real ZNC 1.10.3 bouncer); release build: build-check, secret scan, packaged 5/5,
+ui 748 controls no problems, perf PASS. Separate QA chat: QA PASSED 0.8.6. Published release checked: tag
+`v0.8.6`, latest, not draft/pre-release, anonymous download SHA-256 matches, signed update file verifies and a
+tampered copy is refused, 0.8.3 and 0.8.6-TEST2 are offered 0.8.6, 0.8.6 is not.
+
+## Previous baseline: 0.8.3 release (18 Nov 2026)
 
 Released as `v0.8.3` from commit `6be690c` (bug fix `2b1cd59`: through ZNC at a server's channel limit, 0.8.2's
 joins asked again for channels the bouncer had already joined, the server answered 405 "too many channels" and
