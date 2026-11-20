@@ -164,6 +164,12 @@ def test_settings_row_shows_and_saves_the_choice(app, tmp_path):
     box = d.dcc_send_mode
     assert [box.itemText(i) for i in range(box.count())] == ["Auto", "Normal", "Passive"]
     assert box.currentText() == "Passive" and box.isVisible()
+    # QA note 2: its own "Sending Files" heading, above Ports (Passive leaves the ports unused)
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QLabel
+    ys = {l.text(): l.mapTo(d, QPoint(0, 0)).y() for l in d.findChildren(QLabel) if l.isVisible()}
+    box_y = box.mapTo(d, QPoint(0, 0)).y()
+    assert ys["<b>Files and Directories</b>"] < ys["<b>Sending Files</b>"] < box_y < ys["<b>Ports</b>"]
     box.setCurrentIndex(1)
     d.accept()
     assert win.cfg.dcc_send_mode == "normal"

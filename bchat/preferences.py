@@ -1407,6 +1407,18 @@ class PreferencesDialog(FramedDialog):
         self.dcc_done.setPlaceholderText("Leave them where they were downloaded")
         lay.addLayout(g)
         self.dcc_nick = self._check(lay, "Save nick name in filenames", c.dcc_with_nick)
+        lay.addWidget(_heading("Sending Files"))   # 0.8.9 QA note 2: before Ports, which Passive leaves unused
+        g = QGridLayout()                      # 0.8.9: passive DCC for people behind a router
+        modes = ("auto", "normal", "passive")
+        self.dcc_send_mode = self._menu(g, 0, "Send files:", ("Auto", "Normal", "Passive"),
+                                        modes.index(c.dcc_send_mode) if c.dcc_send_mode in modes else 0)
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        how = QLabel("Auto: passive when people can't reach you (home-network address and the router doesn't open a "
+                     "port). Passive: the other person opens the port and you connect to them.")
+        how.setWordWrap(True)
+        how.setStyleSheet(f"color: {c.theme.muted};")
+        lay.addWidget(how)
         lay.addWidget(_heading("Ports"))
         g = QGridLayout()                      # one row: first and last port side by side
         self.dcc_first = self._number(g, 0, "First DCC send port:", c.dcc_first_port, 0, 65535)
@@ -1419,17 +1431,6 @@ class PreferencesDialog(FramedDialog):
         where = QLabel("The address file offers carry is on Network > Local.")
         where.setStyleSheet(f"color: {c.theme.muted};")
         lay.addWidget(where)
-        g = QGridLayout()                      # 0.8.9: passive DCC for people behind a router
-        modes = ("auto", "normal", "passive")
-        self.dcc_send_mode = self._menu(g, 0, "Send files:", ("Auto", "Normal", "Passive"),
-                                        modes.index(c.dcc_send_mode) if c.dcc_send_mode in modes else 0)
-        g.setColumnStretch(2, 1)
-        lay.addLayout(g)
-        how = QLabel("Auto: passive when people can't reach you (home-network address and the router doesn't open a "
-                     "port). Passive: the other person opens the port and you connect to them.")
-        how.setWordWrap(True)
-        how.setStyleSheet(f"color: {c.theme.muted};")
-        lay.addWidget(how)
         lay.addWidget(_heading("Maximum File Transfer Speeds (KB/s, 0 = no limit)"))
         g = QGridLayout()                      # two columns: uploads left, downloads right (room for Trusted people)
         self.dcc_up = self._number(g, 0, "One upload:", c.dcc_max_send, 0, 999999)
