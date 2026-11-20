@@ -3,7 +3,44 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.8.6 release (19 Nov 2026)
+## Current baseline: 0.8.8 release (20 Nov 2026)
+
+Released as `v0.8.8` from commit `52c9405` (0.8.7 + 0.8.8 work: find bar that lights every match, sound, speech,
+router (UPnP) and ident support, Preferences pages that fit the screen, new commands such as /font /flush
+/userhost; release fixes: the last DCC acknowledgement goes out before the file is moved, and closing an update
+check while it runs no longer shows a late or doubled answer). Numbers from QA run `20261120-105810` on the
+release build (`build-check audit packaged ui perf`, full perf mode); source stages from TEST4 run
+`20261120-100023` (same code apart from the version number).
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.8.8` (`version_info` 0.8.8.0) |
+| Installer | `BChat-0.8.8-setup.exe`, 43,438,091 bytes |
+| Installer SHA-256 | `712f3d8d3979cb6654a1d9aae671dae301019916139343dd63b46a42d34c7614` |
+| `BChat.exe` SHA-256 | `2183faaf0f2a6fb1719507f198ed522d16e90f2ffc19ba07547ce2cd4f5a830f` |
+| Packaged files | 225 |
+| VirusTotal installer | 0 / 70 |
+| VirusTotal `BChat.exe` | 2 / 71 (APEX, as on every build, and Zillya) |
+
+### Performance (full mode)
+
+| Measure | 0.8.8 |
+| --- | --- |
+| Start to window | 0.54 s |
+| Start to joined (15 channels) | 1.6 s |
+| Idle working set | 109.9 MB |
+| Load 300 msg/s: CPU / worst UI stall | 53.4 % / 35 ms |
+| Burst of 5000 messages: time / worst UI stall | 3.4 s / 48 ms |
+| History 10k lines / all 15 tabs full | 176.0 / 297.9 MB |
+
+### Test results
+
+pytest 1217 collected, all passed (TEST4 run); release build: build-check, secret scan, packaged 5/5, ui 813
+controls no problems, perf PASS. Separate QA chat: QA PASSED 0.8.8. Published release checked: tag `v0.8.8`,
+latest, not draft/pre-release, anonymous download SHA-256 matches, signed update file verifies and copies with a
+changed version or checksum are refused, 0.8.6 and 0.8.8-TEST4 are offered 0.8.8, 0.8.8 is not.
+
+## Previous baseline: 0.8.6 release (19 Nov 2026)
 
 Released as `v0.8.6` from commit `1631846` (0.8.4 + 0.8.5 + 0.8.6 work: one Messages tab for private messages,
 reconnect / flood protection / DCC / commands behave as IRC users expect, theme-coloured spin boxes; tests in
