@@ -459,3 +459,56 @@ def test_github_empty_list_and_no_asset_are_up_to_date(app, tmp_path, server):
     u2 = gh_make(app, tmp_path, github(base, www, [("v0.9.0", False, False, None)]))
     u2.check(manual=True)
     assert wait(app, lambda: u2.state == up.UPTODATE)
+
+
+def test_closing_the_window_while_checking_keeps_a_late_failure_quiet(app, tmp_path):
+    # 0.8.8 QA: the check went on after its window closed, and a late failure put a red entry on the menu bar
+    c = Config(nick="x")
+    u = up.Updater(c, tmp_path / "cfg", url="http://127.0.0.1:9/latest.json", current="0.1.0")
+    u.check(manual=True)
+    assert u.state == up.CHECKING
+    u.dismiss()                                                    # the window closed
+    assert u.state == up.NONE
+    assert wait(app, lambda: u.reason.startswith("Couldn't check"), 25000)
+    assert u.state == up.NONE and not u.visible()
+
+
+def test_closing_the_window_while_checking_still_shows_a_new_version(app, tmp_path, server):
+    base, release = server
+    release("0.1.1")
+    u = make(app, tmp_path, base)
+    u.check(manual=True)
+    u.dismiss()
+    assert wait(app, lambda: u.state == up.AVAILABLE) and u.visible()
+
+
+def test_checking_again_after_closing_waits_for_the_same_answer(app, tmp_path, server):
+    # 0.8.8 QA edge: close while checking, check again before the first answer came: a second request could land in
+    # either order and show the old one's result under the new check; now the new check waits for the same answer
+    base, release = server
+    release("0.1.1")
+    u = make(app, tmp_path, base)
+    asked = []
+    real_get = u.net.get
+    u.net.get = lambda req: asked.append(req.url().toString()) or real_get(req)
+    u.check(manual=True)
+    u.dismiss()
+    u.check(manual=True)                                           # opened again before the answer arrived
+    assert u.state == up.CHECKING and u.manual
+    assert wait(app, lambda: u.state == up.AVAILABLE) and u.visible()
+    assert asked == [f"{base}/latest.json"]                        # one request, not two
+
+
+def test_checking_again_after_closing_shows_the_failure_once(app, tmp_path):
+    c = Config(nick="x")
+    u = up.Updater(c, tmp_path / "cfg", url="http://127.0.0.1:9/latest.json", current="0.1.0")
+    states = []
+    u.changed.connect(lambda: states.append(u.state))
+    u.check(manual=True)
+    u.dismiss()
+    u.check(manual=True)                                           # you asked again: this failure is yours to see
+    assert wait(app, lambda: u.state == up.FAILED, 25000)
+    app.processEvents()
+    assert states[-1] == up.FAILED and states.count(up.FAILED) == 1
+    u.check(manual=True)                                           # and Try Again later sends a fresh request
+    assert u.state == up.CHECKING and u._asking is not None

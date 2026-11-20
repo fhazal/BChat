@@ -163,7 +163,12 @@ def run(userdata):
     note("tampered release refused in the exe", lambda: not up.signature_ok(dict(SIGNED, version="9.9.9")))
     note("update entry hidden when nothing to do", lambda: not win.update_act.isVisible())
     def upd_window():
-        win.check_updates()
+        # no real request: a late GitHub answer would change the menu bar entry under the next check
+        url, win.updater.url = win.updater.url, ""
+        try:
+            win.check_updates()
+        finally:
+            win.updater.url = url
         d = win.update_window
         ok = d is not None and d.isVisible() and "api.github.com/repos/fhazal/BChat/releases" in up.UPDATE_URL
         d.close()
@@ -173,24 +178,32 @@ def run(userdata):
     # TEST25: the update entry sits on the menu bar's own colour (TEST17-24 painted a dark box)
     def badge_bg():
         from bchat import updater as _up
-        from PySide6.QtGui import QColor
+        from PySide6.QtGui import QColor, QCursor
         old = (win.updater.state, win.updater.entry)
         win.updater._set(_up.FAILED, "probe")
         bar = win.menubar_
-        same = False
+        same, seen = False, {}
         # the bar relayouts and repaints after the entry changes; a busy PC can need more than a few event passes
         for _ in range(40):
+            if win.updater.state != _up.FAILED:      # something else moved the entry: put the probe back
+                win.updater._set(_up.FAILED, "probe")
+            bar.setActiveAction(None)                # no hover/press highlight on the entry
             QApplication.processEvents(); time.sleep(0.05)
             img = bar.grab().toImage(); dpr = img.devicePixelRatio()
             g = bar.actionGeometry(win.update_act)
+            seen = {"state": win.updater.state, "geometry_valid": g.isValid(), "visible": win.update_act.isVisible(),
+                    "cursor": [QCursor.pos().x(), QCursor.pos().y()]}
             if not g.isValid():
                 continue
             a = QColor(img.pixel(int((g.right() - 2) * dpr), int((g.top() + 2) * dpr))).name()
             b = QColor(img.pixel(int((bar.width() - 6) * dpr), int((g.top() + 2) * dpr))).name()
+            seen.update(entry_colour=a, bar_colour=b)
             if a == b:
                 same = True
                 break
         win.updater.entry = old[1]; win.updater._set(old[0])
+        if not same:
+            print("   menu bar check details:", seen)
         return same
     note("update entry has the menu bar's background", badge_bg)
     # TEST24: Preferences > BChat > Updates card, About status, Help icon

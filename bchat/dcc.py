@@ -333,6 +333,9 @@ class Transfer(QObject):
         self.finished_at = time.time()
         self._close_file()
         if self.sock is not None:
+            # send the final ack now: finished() below may move a big file to another drive first, and the
+            # sender only learns it's done once this ack arrives (a slow move made it time out)
+            self.sock.flush()
             self.sock.disconnectFromHost()
         self.mgr.finished(self)
         self.changed.emit(self)

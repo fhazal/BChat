@@ -88,6 +88,9 @@ class _FakeSock:
     def bytesToWrite(self):
         return 0
 
+    def flush(self):
+        return True
+
     def disconnectFromHost(self):
         self.closed = True
 

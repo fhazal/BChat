@@ -33,7 +33,16 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 
 ---
 
-## 🆕 What's new in 0.8.6
+## 🆕 What's new in 0.8.8
+
+- 🔎 **Find bar** (`Ctrl+F`): every match lights up as you type, `Enter` and `Shift+Enter` step through them, with match case and regular expressions. **Filter...** or `/filter word` puts the matching lines in a window of their own.
+- 🪟 **Settings → Windows**: choose where events show (the active window, the server tab, the Messages tab or a private chat) and what a double-click does. `/ctcps on|off` turns CTCP replies on or off.
+- 🔊 **Sound and speech** (*Settings → Sound*): sounds in .wav, .mp3 or .ogg at one volume, and BChat can read highlights, private messages and notices aloud with the voices Windows already has. `/speak text` reads a line.
+- 🔌 **Router and ident** (*Settings → Network setup*, both off by default): open the file-transfer ports on your router automatically (UPnP), and answer a network's ident check while connecting. Socks4 and Socks4a proxies join Socks5 and HTTP.
+- ⌨️ **Commands**: `/font` gives one window its own font, `/linesep` draws a separator, `/userhost` and `/flush` work. *Settings → Text box* can shade every other line or draw a line between messages.
+- ⚙️ **Settings fit your screen**: every page scrolls inside a dialog that never grows past 85 % of the screen, Network setup shows only the rows your proxy type uses, and Preferences opens quickly.
+
+<details><summary>0.8.6</summary>
 
 - 💬 **One Messages tab** (*Settings → General*, off by default): all private messages on a network land in one **(messages)** tab. Reply with `/msg nick`; friends can keep their own tab.
 - 🔒 **Passwords stay hidden**: NickServ, OPER, PASS and SASL passwords never show in the chat, the log, the scrollback or the Raw Log.
@@ -44,6 +53,8 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 - ⌨️ **Commands**: `/ban`, `/kickban` and `/ignore` take ban types 0 to 19 and look up unknown addresses. Long lines are split, not cut. Each tab keeps its own history and draft. Tab completion and **Ctrl+Tab** work better.
 - 📁 **File transfers**: a **File already exists** dialog (Resume, Overwrite, Rename, Cancel), plus time-outs, a file type list and `/dcc ignore`.
 - 🐝 **Bouncers**: BChat no longer reads ZNC's `*status` lines. A bouncer is treated like any other server.
+
+</details>
 
 <details><summary>0.8.3</summary>
 

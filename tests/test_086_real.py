@@ -242,8 +242,11 @@ class PeerSender:
                 self.error = f"acks: {e}"
 
     def join(self, secs=30):
+        # keep Qt's event loop running while waiting: BChat's last bytes (the final ack, the close) only
+        # leave through it, so a plain thread.join() would stall them until the peer's socket timed out
         if self.thread is not None:
-            self.thread.join(secs)
+            run_until(lambda: not self.thread.is_alive(), secs)
+            self.thread.join(1)
 
 
 class PeerReceiver:
@@ -320,8 +323,11 @@ class PeerReceiver:
         c.close()
 
     def join(self, secs=30):
+        # keep Qt's event loop running while waiting: BChat's last bytes (the final ack, the close) only
+        # leave through it, so a plain thread.join() would stall them until the peer's socket timed out
         if self.thread is not None:
-            self.thread.join(secs)
+            run_until(lambda: not self.thread.is_alive(), secs)
+            self.thread.join(1)
 
 
 # ---- one BChat + one other person on a local server --------------------------------------------------------------
@@ -798,3 +804,25 @@ def test_full_get_over_4gb(app, tmp_path, v4):
             got.unlink()                          # don't leave 4 GB in pytest's kept temp folders
         except OSError:
             pass
+
+
+def test_final_ack_goes_out_before_the_file_is_moved(app, tmp_path, v4):
+    # 0.8.8 QA: the last ack waited in Qt's buffer while finished() moved the file (to another drive it can
+    # take long), so the sender could time out on a transfer that had in fact arrived whole
+    srv, win, s, peer = v4
+    src = _payload(tmp_path, "ack.bin")
+    tx = PeerSender(src, LOCAL4).listen()
+    unsent = []
+    real = win.dcc.finished
+
+    def finished(t):
+        unsent.append(t.sock.bytesToWrite() if t.sock is not None else 0)
+        real(t)
+    win.dcc.finished = finished
+    offer_to_bchat(peer, f"DCC SEND ack.bin 2130706433 {tx.port} {tx.size}")
+    t = new_recv(win, "ack.bin")
+    win.dcc.accept(t)
+    assert run_until(lambda: t.state == "done", 30), (t.state, t.error, t.pos)
+    tx.join()
+    assert unsent == [0]
+    assert not tx.error and tx.sent == tx.size

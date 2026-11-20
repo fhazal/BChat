@@ -129,6 +129,7 @@ class Updater(QObject):
         self.can_install = getattr(sys, "frozen", False)
         self.net = QNetworkAccessManager(self)
         self._reply: QNetworkReply | None = None
+        self._asking: QNetworkReply | None = None     # the check request still out (release list or its update file)
         self._file = None
         self._hash = None
         self.timer = QTimer(self)
@@ -204,11 +205,16 @@ class Updater(QObject):
                 self._set(FAILED, "This build has no update address yet, so it can't look for updates.")
             return
         self._set(CHECKING)
-        reply = self.net.get(self._request(self.url))
+        if self._asking is not None:
+            # a check closed before its answer came is still out: that answer is today's, so it answers this one
+            # too (a second request could land in either order and show the old one's result)
+            return
+        reply = self._asking = self.net.get(self._request(self.url))
         reply.finished.connect(lambda: self._checked(reply))
 
     def _checked(self, reply: QNetworkReply) -> None:
         reply.deleteLater()
+        self._asking = None
         self.cfg.update_last_check = time.time()
         if reply.error() != QNetworkReply.NetworkError.NoError:
             return self._check_failed(f"Couldn't check for updates: {_why(reply)}")
@@ -221,13 +227,14 @@ class Updater(QObject):
             if found is None:
                 return self._offer(None)
             req = self._request(found[1])
-            asset = self.net.get(req)
+            asset = self._asking = self.net.get(req)
             asset.finished.connect(lambda: self._checked_asset(asset, found[0]))
             return
         self._offer(pick(manifest, self.current, self.want_test()) if isinstance(manifest, dict) else None)
 
     def _checked_asset(self, reply: QNetworkReply, version: str) -> None:
         reply.deleteLater()
+        self._asking = None
         if reply.error() != QNetworkReply.NetworkError.NoError:
             return self._check_failed(f"Couldn't check for updates: {_why(reply)}")
         try:
@@ -273,6 +280,10 @@ class Updater(QObject):
 
     def dismiss(self) -> None:
         """Close on a failure or an up-to-date answer: the entry goes away until the next check."""
+        if self.state == CHECKING:
+            # closed while still asking: the answer still arrives, but it's no longer one you're waiting for, so a
+            # failure stays quiet (no red entry later); a real new version still shows up on the menu bar
+            self.manual = False
         if self.state in (FAILED, UPTODATE, CHECKING):
             self._set(AVAILABLE if self.entry and self.state == FAILED and self._downloadable() else NONE)
 
