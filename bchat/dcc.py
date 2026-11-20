@@ -569,9 +569,9 @@ class DccManager(QObject):
         if upnp is not None and upnp.ports_open:
             return False
         c = self.cfg
-        if c.dcc_first_port and c.dcc_last_port:
-            return False
-        ip = c.dcc_ip.strip()
+        if c.dcc_first_port and c.dcc_last_port and not getattr(c, "upnp_on", False):
+            return False                    # a range without UPnP: maybe forwarded by hand. With UPnP on, the
+        ip = c.dcc_ip.strip()               # range was for the router, and it opened nothing (ports_open above)
         if not ip:
             sock = getattr(s, "sock", None)
             ip = plain_v4(sock.localAddress().toString()) if sock is not None else ""

@@ -26,8 +26,8 @@ class _Sock:
         return SimpleNamespace(toString=lambda: self.ip)
 
 
-def _mgr(mode="auto", dcc_ip="", first=0, last=0, ports_open=False):
-    cfg = SimpleNamespace(dcc_send_mode=mode, dcc_ip=dcc_ip, dcc_first_port=first, dcc_last_port=last)
+def _mgr(mode="auto", dcc_ip="", first=0, last=0, ports_open=False, upnp_on=False):
+    cfg = SimpleNamespace(dcc_send_mode=mode, dcc_ip=dcc_ip, dcc_first_port=first, dcc_last_port=last, upnp_on=upnp_on)
     m = DccManager.__new__(DccManager)          # only send_passive is used: no sockets, no timers
     m.cfg = cfg
     m.win = SimpleNamespace(upnp=SimpleNamespace(ports_open=ports_open))
@@ -53,6 +53,14 @@ def test_auto_is_passive_only_on_a_home_network_with_nothing_open():
     assert _mgr().send_passive(SimpleNamespace(sock=_Sock("127.0.0.1"))) is False      # a bouncer on this PC
     assert _mgr().send_passive(SimpleNamespace(sock=None)) is False
     assert _mgr("something odd").send_passive(home) is True                             # unknown value = Auto
+
+
+def test_auto_with_upnp_on_but_nothing_opened_is_passive():
+    # QA 0.8.9 note 1: the range was for the router; it refused or wasn't found, so nobody can reach us
+    home = SimpleNamespace(sock=_Sock(HOME))
+    assert _mgr(first=5000, last=5010, upnp_on=True).send_passive(home) is True
+    assert _mgr(first=5000, last=5010, upnp_on=True, ports_open=True).send_passive(home) is False
+    assert _mgr(first=5000, last=5010, upnp_on=True).send_passive(SimpleNamespace(sock=_Sock("8.8.8.8"))) is False
 
 
 def test_home_address_still_importable_from_preferences():
