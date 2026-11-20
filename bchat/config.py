@@ -448,6 +448,7 @@ class Config:
     dcc_open_chat: bool = True
     dcc_offer_timeout: int = 120   # 0.8.5: seconds an offer waits for Accept (or a passive offer for its answer); 0 = for ever
     dcc_idle_timeout: int = 300    # 0.8.5: seconds a transfer may get nothing from the other side; 0 = for ever
+    dcc_send_mode: str = "auto"     # 0.8.9: "auto" (passive when nobody can reach us), "normal" or "passive"
     dcc_exists: str = "ask"        # 0.8.5: auto accept onto a file already there: ask / resume / overwrite
     dcc_ignore_exts: list[str] = field(default_factory=lambda: list(DCC_IGNORE_EXTS))   # 0.8.5: offers never shown
     dcc_ignore_on: bool = True     # 0.8.5 /dcc ignore on|off: the list above is used at all

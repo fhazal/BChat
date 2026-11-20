@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QColorDial
                                QHeaderView, QStyle, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .config import DARK_THEMES, LIGHT_THEME_ORDER, PALETTES, THEME_NAMES, Config, Theme, is_custom, make_theme
+from .dcc import home_address  # noqa: F401  (tests import it from here)
 from .widgets import FramedDialog, icon
 
 CATEGORIES = {"Interface": ["Text box", "Input box", "User list", "Channel switcher", "Windows", "Colors"],
@@ -62,16 +63,6 @@ COLOUR_ROWS = [
     ("Interface Colors", [("New data:", "new_data"), ("Marker line:", "marker"), ("New message:", "new_msg"),
                           ("Away user:", "away"), ("Highlight:", "new_highlight")]),
 ]
-
-
-def home_address(ip: str) -> bool:
-    """192.168.x, 10.x, 172.16-31.x, 127.x, 100.64-127.x (carrier NAT): people on the internet can't reach it."""
-    from ipaddress import ip_address
-    try:
-        a = ip_address(ip.strip())
-    except ValueError:
-        return False
-    return a.is_private or a.is_loopback or a.is_link_local or (a.version == 4 and a in __import__("ipaddress").ip_network("100.64.0.0/10"))
 
 
 def _heading(text: str) -> QLabel:
@@ -1428,6 +1419,17 @@ class PreferencesDialog(FramedDialog):
         where = QLabel("The address file offers carry is on Network > Local.")
         where.setStyleSheet(f"color: {c.theme.muted};")
         lay.addWidget(where)
+        g = QGridLayout()                      # 0.8.9: passive DCC for people behind a router
+        modes = ("auto", "normal", "passive")
+        self.dcc_send_mode = self._menu(g, 0, "Send files:", ("Auto", "Normal", "Passive"),
+                                        modes.index(c.dcc_send_mode) if c.dcc_send_mode in modes else 0)
+        g.setColumnStretch(2, 1)
+        lay.addLayout(g)
+        how = QLabel("Auto: passive when people can't reach you (home-network address and the router doesn't open a "
+                     "port). Passive: the other person opens the port and you connect to them.")
+        how.setWordWrap(True)
+        how.setStyleSheet(f"color: {c.theme.muted};")
+        lay.addWidget(how)
         lay.addWidget(_heading("Maximum File Transfer Speeds (KB/s, 0 = no limit)"))
         g = QGridLayout()                      # two columns: uploads left, downloads right (room for Trusted people)
         self.dcc_up = self._number(g, 0, "One upload:", c.dcc_max_send, 0, 999999)
@@ -1854,6 +1856,7 @@ class PreferencesDialog(FramedDialog):
         c.dcc_dir, c.dcc_done_dir = self.dcc_dir.text().strip(), self.dcc_done.text().strip()
         c.dcc_with_nick = self.dcc_nick.isChecked()
         c.dcc_offer_timeout, c.dcc_idle_timeout = self.dcc_offer_wait.value(), self.dcc_idle_wait.value()
+        c.dcc_send_mode = ("auto", "normal", "passive")[self.dcc_send_mode.currentIndex()]
         c.dcc_exists = ("ask", "resume", "overwrite")[self.dcc_exists.currentIndex()]
         c.dcc_ignore_on = self.dcc_ignore_on.isChecked()
         c.dcc_ignore_mode = "accept" if self.dcc_only.isChecked() else "ignore"

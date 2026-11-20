@@ -3427,7 +3427,7 @@ class MainWindow(FramelessWindow):
         w.show()
         return w
 
-    def send_file_dialog(self, s: Session, nicks: list[str], passive: bool = False) -> None:
+    def send_file_dialog(self, s: Session, nicks: list[str], passive: bool | None = None) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, f"Send file to {', '.join(nicks)}")
         for nick in nicks:
             for p in paths:

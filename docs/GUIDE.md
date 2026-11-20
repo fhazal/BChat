@@ -338,6 +338,9 @@ Yes, in portable mode: start `BChat.exe -portable`, or put an empty file named `
 ### How do I send someone a file?
 Right-click their name → **Send a File**, or type `/dcc send nick`. **Window → File Transfers...** shows every transfer.
 
+### My file sends never start. I'm behind a router.
+People outside your home network can't connect to you, so send with **passive DCC**: the other person opens the connection and you connect to them. **Settings → Preferences → File transfers → Send files:** is **Auto** by default, which already does this when you're on a home network and the router hasn't opened a port. Pick **Passive** to always send this way, or type `/dcc psend nick` for one file. The other person's client must support passive DCC (most current ones do).
+
 ### How do I receive a file?
 When someone offers a file, it appears in **Window → File Transfers...**. Select it and click **Accept**. Files go to the folder set in **Settings → Preferences → File transfers → Download files to:** (by default `%APPDATA%\BChat\downloads`).
 

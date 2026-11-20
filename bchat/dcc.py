@@ -79,6 +79,16 @@ def safe_name(name: str) -> str:
     return name[:200]
 
 
+def home_address(ip: str) -> bool:
+    """192.168.x, 10.x, 172.16-31.x, 127.x, 100.64-127.x (carrier NAT): people on the internet can't reach it."""
+    from ipaddress import ip_address, ip_network
+    try:
+        a = ip_address(ip.strip())
+    except ValueError:
+        return False
+    return a.is_private or a.is_loopback or a.is_link_local or (a.version == 4 and a in ip_network("100.64.0.0/10"))
+
+
 def ip_to_int(ip: str) -> int:
     return struct.unpack(">I", socket.inet_aton(ip))[0]
 
@@ -549,7 +559,28 @@ class DccManager(QObject):
 
     # --- sending ------------------------------------------------------------------------
 
-    def send_file(self, s, nick: str, path: str, passive: bool = False) -> Transfer | None:
+    def send_passive(self, s) -> bool:
+        """0.8.9 Settings > File transfers > Send files. Auto = passive only when nobody outside can reach us:
+        a home-network address, no port range set (so none forwarded by hand) and the router (UPnP) opened nothing."""
+        mode = self.cfg.dcc_send_mode
+        if mode in ("normal", "passive"):
+            return mode == "passive"
+        upnp = getattr(self.win, "upnp", None)
+        if upnp is not None and upnp.ports_open:
+            return False
+        c = self.cfg
+        if c.dcc_first_port and c.dcc_last_port:
+            return False
+        ip = c.dcc_ip.strip()
+        if not ip:
+            sock = getattr(s, "sock", None)
+            ip = plain_v4(sock.localAddress().toString()) if sock is not None else ""
+        if not ip or ip.startswith("127.") or ip == "::1":
+            return False                # this PC only (a bouncer here, or a test): we can't tell, so send the usual way
+        return home_address(ip)
+
+    def send_file(self, s, nick: str, path: str, passive: bool | None = None) -> Transfer | None:
+        """passive None = Settings > File transfers > Send files decides (/dcc psend passes True)."""
         if self.locked(s):
             return None
         p = Path(path)
@@ -566,6 +597,8 @@ class DccManager(QObject):
                 self.items.remove(t)
             self.updated.emit()
             return None
+        if passive is None:
+            passive = self.send_passive(s)
         if passive:
             t.passive = True
             t.token = self._new_token()
@@ -574,7 +607,7 @@ class DccManager(QObject):
             if not t.listen():
                 return t
             s.send("PRIVMSG", nick, f"\x01DCC SEND {quoted} {addr} {t.port} {t.size}\x01")
-        s.add(s._front(), "info", "*", f"Offering {name} ({t.size} bytes) to {nick}")
+        s.add(s._front(), "info", "*", f"Offering {name} ({t.size} bytes) to {nick}" + (" (passive)" if t.passive else ""))
         if self.cfg.dcc_open_send:
             self.win.open_transfers()
         return t

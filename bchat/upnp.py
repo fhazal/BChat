@@ -30,6 +30,7 @@ SEARCH_FOR = ("urn:schemas-upnp-org:device:InternetGatewayDevice:1", *SERVICES[1
 
 LOOKING = "Looking for the router..."
 NO_ROUTER = "No router answered (UPnP)"
+OPENED = "Router found · outside address"   # how a success line starts
 NEED_RANGE = "Set a DCC port range in Settings › Files to open ports on the router"
 
 
@@ -184,6 +185,7 @@ class Manager(QObject):
         self.target, self.timeout = target, timeout
         self.status = ""
         self.external_ip = ""     # the router's outside address while ports are open: the DCC address
+        self.ports_open = False   # 0.8.9: the router opened the DCC port range (Auto sending stays normal)
         self._want = None         # GUI side: (first, last) asked for, () = no range, None = off
         self._q: queue.Queue = queue.Queue()
         self._thread: threading.Thread | None = None
@@ -202,6 +204,7 @@ class Manager(QObject):
             return
         self._want = want
         self.external_ip = ""
+        self.ports_open = False
         if want is None:
             self._set("")
             self._put(("unmap",))
@@ -216,6 +219,7 @@ class Manager(QObject):
         """BChat is quitting: take the ports off the router (waits a moment for it, never long)."""
         self._want = None
         self.external_ip = ""
+        self.ports_open = False
         if self._thread is None or not self._thread.is_alive():
             return
         self._q.put(("unmap",))
@@ -241,6 +245,7 @@ class Manager(QObject):
         if want != self._want:
             return                          # the tick changed while the router was asked: old news
         self.external_ip = ip
+        self.ports_open = text.startswith(OPENED)
         self._set(text)
 
     # --- worker thread -------------------------------------------------------------------
@@ -290,4 +295,4 @@ class Manager(QObject):
             self._router = None             # look again next time: the router may have changed
             return want, "", f"Router found, but it refused to open the ports ({e})"
         shown = outside or "unknown"
-        return want, outside, f"Router found · outside address {shown} · {ports_text(first, last)} open"
+        return want, outside, f"{OPENED} {shown} · {ports_text(first, last)} open"

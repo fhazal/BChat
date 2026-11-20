@@ -308,9 +308,9 @@ def _dcc_command(ui, s: Session, b: Buffer, args: list[str], rest: str) -> None:
     if verb in ("send", "psend") and len(args) >= 2:
         path = rest.split(None, 2)[2].strip('"') if len(args) > 2 else ""
         if not path:
-            ui.send_file_dialog(s, [args[1]], verb == "psend")
+            ui.send_file_dialog(s, [args[1]], True if verb == "psend" else None)
         else:
-            dcc.send_file(s, args[1], path, verb == "psend")
+            dcc.send_file(s, args[1], path, True if verb == "psend" else None)
     elif verb == "chat" and len(args) >= 2:
         waiting = [t for t in dcc.items if t.kind == "chat" and t.state == "queued" and t.ip and t.nick.lower() == args[1].lower()]
         if waiting:
