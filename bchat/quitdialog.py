@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSystemTrayIcon, QVBoxLayout
 
-from .widgets import FramedDialog, icon
+from .widgets import FramedDialog, icon, run_dialog
 
 
 class QuitDialog(FramedDialog):
@@ -76,5 +76,5 @@ class QuitDialog(FramedDialog):
     def ask(self) -> tuple[str, bool]:
         """(quit, tray or cancel; don't ask next time). The red button and Esc are Cancel."""
         self.cancel_btn.setFocus()
-        self.exec()
+        run_dialog(self)
         return self.choice, self.dont_ask.isChecked()

@@ -128,7 +128,7 @@ def ask_password(parent, folder: Path, d: dict, title: str = "BChat: Locked",
     """The start-up (or Preferences) password window. Returns the sealing key, or None for Quit/Cancel."""
     from PySide6.QtCore import QTimer, Qt
     from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton
-    from .widgets import FramedDialog, icon
+    from .widgets import FramedDialog, icon, run_dialog
 
     dlg = FramedDialog(title, parent)
     dlg.body.addWidget(QLabel(text, dlg))
@@ -167,7 +167,7 @@ def ask_password(parent, folder: Path, d: dict, title: str = "BChat: Locked",
     ok.clicked.connect(check)
     dlg.resize(340, 0)
     pw.setFocus()
-    dlg.exec()
+    run_dialog(dlg)
     return found[0] if found else None
 
 
@@ -175,6 +175,7 @@ def forgot_help(parent, folder: Path) -> None:
     from PySide6.QtCore import QUrl
     from PySide6.QtGui import QDesktopServices
     from PySide6.QtWidgets import QMessageBox
+    from .widgets import run_dialog
     box = QMessageBox(parent)
     box.setWindowTitle("BChat: Forgot Password")
     box.setText("To remove the lock, close BChat and delete lock.json in BChat's settings folder.\n\n"
@@ -183,7 +184,7 @@ def forgot_help(parent, folder: Path) -> None:
                                                      "this password, so you type them once more." if is_portable(folder) else ""))
     open_btn = box.addButton("Open Settings Folder", QMessageBox.ButtonRole.ActionRole)
     box.addButton(QMessageBox.StandardButton.Close)
-    box.exec()
+    run_dialog(box)
     if box.clickedButton() is open_btn:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 

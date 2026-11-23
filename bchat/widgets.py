@@ -515,6 +515,16 @@ class FramelessWindow(QMainWindow):
         self.titlebar.set_title(text)
 
 
+def run_dialog(d) -> int:
+    """0.8.9: exec() a dialog, then free it. A dialog with a parent otherwise stays in memory, hidden, until BChat
+    quits (Settings alone is about a thousand widgets, and each theme change restyles every one of them).
+    The free happens on the next event-loop pass, so reading its fields right after this call still works."""
+    try:
+        return d.exec()
+    finally:
+        d.deleteLater()
+
+
 class FramedDialog(QDialog):
     """Dialog with the same dark title bar and only the red button."""
 

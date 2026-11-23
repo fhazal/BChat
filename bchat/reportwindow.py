@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLa
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from . import reports
-from .widgets import FramedDialog, icon
+from .widgets import FramedDialog, icon, run_dialog
 
 
 def _pic(win, name: str, colour: str, px: int = 16) -> QPixmap:
@@ -148,7 +148,7 @@ class ReportDialog(FramedDialog):
                              self.freeze, self.picture if self.shot.isChecked() else b"")
 
     def show_sent(self) -> None:
-        WhatsSentDialog(self.win, self.report(), self).exec()
+        run_dialog(WhatsSentDialog(self.win, self.report(), self))
 
     def send(self) -> None:
         if not self.kind():
@@ -166,7 +166,7 @@ class ReportDialog(FramedDialog):
 
     def _sent(self, ans: dict) -> None:
         self.accept()
-        ThanksDialog(self.win, ans).exec()
+        run_dialog(ThanksDialog(self.win, ans))
 
     def _failed(self, why: str) -> None:
         self.status.setText(why)

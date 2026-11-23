@@ -27,6 +27,42 @@ def app():
     return QApplication.instance() or QApplication(["bchat-test"])
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _free_windows_after_each_file():
+    """Windows a test file opened are freed when the file is done. Without this, ~11,000 windows (6+ GB) piled up
+    over a full run, and app-wide calls like setStyleSheet crawled until the run timed out."""
+    app = QApplication.instance()
+    before = set(map(id, app.topLevelWidgets())) if app else set()
+    yield
+    app = QApplication.instance()
+    if app is None:
+        return
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from bchat.mainwindow import MainWindow
+    new = [w for w in app.topLevelWidgets() if id(w) not in before]
+    wins = [w for w in new if isinstance(w, MainWindow)]
+    for w in wins:
+        # Main windows stay alive (freeing one while its sessions, DCC and timers still run crashed Qt), but go quiet.
+        try:
+            for s in list(w.sessions.values()):
+                s.disconnect_from_network()
+            w.hide()
+        except RuntimeError:
+            pass
+    for _ in range(3):
+        app.processEvents()
+    for w in new:
+        if any(w is m for m in wins):
+            continue
+        try:                                   # dialogs, popups and cards: Settings alone is ~1,000 widgets
+            w.hide()
+            w.deleteLater()
+        except RuntimeError:                   # already gone
+            pass
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+
+
 @pytest.fixture
 def qa_server(tmp_path):
     """Factory for tests/qa_ircd.QaIrcd servers (QA item A). Every server made is stopped after the test, and a

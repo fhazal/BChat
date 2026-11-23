@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 
 from . import config
 from .config import NetworkConfig, Server, server_text
-from .widgets import FramedDialog, icon
+from .widgets import FramedDialog, icon, run_dialog
 from .xchat_import import parse_server
 
 
@@ -31,7 +31,7 @@ def ask_save(parent, name: str) -> str:
                       QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard |
                       QMessageBox.StandardButton.Cancel, parent)
     box.setDefaultButton(QMessageBox.StandardButton.Save)
-    r = box.exec()
+    r = run_dialog(box)
     return {QMessageBox.StandardButton.Save: "save", QMessageBox.StandardButton.Discard: "discard"}.get(
         QMessageBox.StandardButton(r), "stay")
 
@@ -133,7 +133,7 @@ class NetworkEditDialog(FramedDialog):
 
     def _choose_features(self) -> None:
         d = ServerFeaturesDialog(self, self.name.text().strip() or self.net.name, self.caps_off)
-        if d.exec():
+        if run_dialog(d):
             self.caps_off = d.caps_off()
             self._features_text()
 
@@ -603,7 +603,7 @@ class NetworkListDialog(FramedDialog):
     def _edit(self) -> None:
         n = self._current()
         if n is not None:
-            NetworkEditDialog(n, self).exec()
+            run_dialog(NetworkEditDialog(n, self))
             self._fill()
 
     def _sort(self) -> None:

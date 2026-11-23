@@ -1925,7 +1925,7 @@ class PreferencesDialog(FramedDialog):
 
 def new_password(parent) -> str:
     """Lock > Set Password: typed twice, at least 4 characters. '' = cancelled."""
-    from .widgets import FramedDialog
+    from .widgets import FramedDialog, run_dialog
     dlg = FramedDialog("BChat: Lock Password", parent)
     g = QGridLayout()
     one, two = QLineEdit(), QLineEdit()
@@ -1956,4 +1956,4 @@ def new_password(parent) -> str:
     two.textChanged.connect(lambda _: check())
     check()
     dlg.resize(320, 0)
-    return one.text() if dlg.exec() else ""
+    return one.text() if run_dialog(dlg) else ""

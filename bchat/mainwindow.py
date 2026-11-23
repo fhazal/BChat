@@ -27,7 +27,7 @@ from .protocol import URL_RE, lower, strip_format, trim_url
 from .session import ACTION, CHANNEL, HILITE, INFO, MSG, NOTICE, QUERY, SELF, SERVER, Buffer, Line, Session, User
 from .countries import country_of
 from .userlist import UserList, icon_name, light_pixmap
-from .widgets import ASSETS, FramedDialog, FramelessWindow, add_menu_title, icon, install_button_look, set_icon_theme, set_light_palette, stylesheet
+from .widgets import ASSETS, FramedDialog, FramelessWindow, add_menu_title, icon, install_button_look, run_dialog, set_icon_theme, set_light_palette, stylesheet
 from . import xchat_import
 from .topicbar import TopicBar, emoji_popup
 from .editors import rows_for
@@ -2717,7 +2717,7 @@ class MainWindow(FramelessWindow):
         d = LogQuestion(parent or self, where, self.cfg.theme)
         self.log_question = d                    # tests and the button check answer it
         try:
-            return d.keep_days() if d.exec() else None
+            return d.keep_days() if run_dialog(d) else None
         finally:
             self.log_question = None
             d.deleteLater()
@@ -2980,7 +2980,7 @@ class MainWindow(FramelessWindow):
         QDesktopServices.openUrl(QUrl(SUPPORT))
 
     def _about(self) -> None:
-        self._about_box().exec()
+        run_dialog(self._about_box())
 
     # --- updates ------------------------------------------------------------------
 
@@ -3045,7 +3045,7 @@ class MainWindow(FramelessWindow):
     def edit_network(self, net: NetworkConfig) -> None:
         """Server tab menu > Edit Network: the Network List's Edit window for this network, saved on OK."""
         from .networklist import NetworkEditDialog
-        if NetworkEditDialog(net, self).exec():
+        if run_dialog(NetworkEditDialog(net, self)):
             config.save(self.cfg, self.cfg_dir)
 
     def add_network_from(self, s: Session) -> NetworkConfig:
@@ -3077,12 +3077,12 @@ class MainWindow(FramelessWindow):
             for it in d.list.mine():                       # BR-3: a tree since 0.2.0, data() needs the column
                 if it.data(0, Qt.ItemDataRole.UserRole) is net:
                     d.list.setCurrentItem(it)
-            d.exec()
+            run_dialog(d)
         return net
 
     def open_preferences(self, page: str = "Text box") -> None:
         from .preferences import PreferencesDialog
-        PreferencesDialog(self, page).exec()
+        run_dialog(PreferencesDialog(self, page))
 
     def _style_emoji_btn(self) -> None:
         t = self.cfg.theme
@@ -3141,7 +3141,8 @@ class MainWindow(FramelessWindow):
     def report_problem(self, kind: str = "", error: str = "", sig: str = "", freeze: float = 0.0) -> None:
         from .reportwindow import ReportDialog
         self.report_dialog = ReportDialog(self, kind, error, sig, freeze)
-        self.report_dialog.exec()
+        run_dialog(self.report_dialog)
+        self.report_dialog = None
 
     def offer_report(self, headline: str, kind: str = "Crashed", error: str = "", sig: str = "", freeze: float = 0.0) -> None:
         self.report_bar.show_offer(headline, kind, error, sig, freeze)
@@ -3734,7 +3735,7 @@ class MainWindow(FramelessWindow):
 
     def open_network_list(self) -> None:
         from .networklist import NetworkListDialog
-        NetworkListDialog(self).exec()
+        run_dialog(NetworkListDialog(self))
 
     def closeEvent(self, ev):
         if self.cfg.close_to_tray and self.tray is not None and not getattr(self, "really_quit", False):
