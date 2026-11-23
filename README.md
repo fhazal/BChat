@@ -33,7 +33,12 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 
 ---
 
-## 🆕 What's new in 0.8.8
+## 🆕 What's new in 0.8.9
+
+- 📤 **Passive file sends** (*Settings → File transfers → Send files*: Auto, Normal or Passive): when your router won't let the other side connect to you, the other side's client opens the connection instead. **Auto**, the default, sends passive only when it's needed. `/dcc psend` always sends passive.
+- 🧹 **Lighter over time**: closed windows (Settings, Network List, About and others) are now freed instead of staying in memory until BChat quits.
+
+<details><summary>0.8.8</summary>
 
 - 🔎 **Find bar** (`Ctrl+F`): every match lights up as you type, `Enter` and `Shift+Enter` step through them, with match case and regular expressions. **Filter...** or `/filter word` puts the matching lines in a window of their own.
 - 🪟 **Settings → Windows**: choose where events show (the active window, the server tab, the Messages tab or a private chat) and what a double-click does. `/ctcps on|off` turns CTCP replies on or off.
@@ -41,6 +46,8 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 - 🔌 **Router and ident** (*Settings → Network setup*, both off by default): open the file-transfer ports on your router automatically (UPnP), and answer a network's ident check while connecting. Socks4 and Socks4a proxies join Socks5 and HTTP.
 - ⌨️ **Commands**: `/font` gives one window its own font, `/linesep` draws a separator, `/userhost` and `/flush` work. *Settings → Text box* can shade every other line or draw a line between messages.
 - ⚙️ **Settings fit your screen**: every page scrolls inside a dialog that never grows past 85 % of the screen, Network setup shows only the rows your proxy type uses, and Preferences opens quickly.
+
+</details>
 
 <details><summary>0.8.6</summary>
 
