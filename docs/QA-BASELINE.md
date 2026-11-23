@@ -3,7 +3,44 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.8.8 release (20 Nov 2026)
+## Current baseline: 0.8.9 release (23 Nov 2026)
+
+Released as `v0.8.9` from commit `95954b4` (passive file sends: *Send files* Normal / Passive / Auto, Auto sends
+passive when UPnP opened nothing; closed dialogs are freed instead of staying hidden until quit). Numbers from QA
+run `20261123-212718` on the release build (`build-check audit packaged ui perf`, full perf mode); source stages
+from TEST1 run `20261123-204556` (same code apart from the version number).
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.8.9` (`version_info` 0.8.9.0) |
+| Installer | `BChat-0.8.9-setup.exe`, 43,440,951 bytes |
+| Installer SHA-256 | `7bec5c851c6f54780249dc118f29a834a19f55a36e48f3e2aa446f3d7b66beff` |
+| `BChat.exe` SHA-256 | `26bb3c171403fef17b448e250c142b0a719f38a1bd920f5215bea1d959ac571e` |
+| Packaged files | 225 |
+| VirusTotal installer | 0 / 69 |
+| VirusTotal `BChat.exe` | 2 / 70 (APEX and Zillya, as on 0.8.8) |
+
+### Performance (full mode)
+
+| Measure | 0.8.9 |
+| --- | --- |
+| Start to window | 0.53 s |
+| Start to joined (15 channels) | 1.6 s |
+| Idle working set | 109.7 MB |
+| Load 300 msg/s: CPU / worst UI stall | 60.7 % / 50 ms |
+| Burst of 5000 messages: time / worst UI stall | 4.3 s / 50 ms |
+| History 10k lines / all 15 tabs full | 177.7 / 300.6 MB |
+| 5-minute soak, all tabs full | -0.3 MB/min (no growth) |
+
+### Test results
+
+pytest 1232 collected, all passed (TEST1 run); release build: build-check, secret scan, packaged 5/5, ui 816
+controls no problems, perf PASS. Separate QA chat: QA PASSED 0.8.9. Published release checked: tag `v0.8.9`,
+latest, not draft/pre-release, anonymous download SHA-256 matches, the published update file is byte-identical to
+the signed one, its signature verifies and a copy with a changed checksum is refused, 0.8.8 and 0.8.9-TEST1 are
+offered 0.8.9, 0.8.9 is not.
+
+## Previous baseline: 0.8.8 release (20 Nov 2026)
 
 Released as `v0.8.8` from commit `52c9405` (0.8.7 + 0.8.8 work: find bar that lights every match, sound, speech,
 router (UPnP) and ident support, Preferences pages that fit the screen, new commands such as /font /flush
