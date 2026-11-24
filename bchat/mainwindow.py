@@ -1443,8 +1443,15 @@ class MainWindow(FramelessWindow):
 
     def check_autostart(self) -> str:
         """At every start: Windows' startup entry put back in line with the tick (it can vanish on its own)."""
-        from . import autostart
+        from . import autostart, linuxdesk
+        if linuxdesk.SUPPORTED:
+            linuxdesk.sync_menu(self.cfg.app_menu, self.cfg.irc_links, autostart.installed_exe())
         return autostart.sync(self.cfg.start_with_windows, autostart.installed_exe())
+
+    def set_desktop_entry(self, menu: bool, links: bool) -> None:
+        """Linux: the app-menu entry and its irc:// link types, written when Preferences says OK."""
+        from . import autostart, linuxdesk
+        linuxdesk.sync_menu(menu, links, autostart.installed_exe())
 
     def _show(self, b: Buffer) -> None:
         if self.replying is not None and self.replying[0] is not b:

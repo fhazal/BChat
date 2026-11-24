@@ -485,7 +485,9 @@ class Config:
     # Interface extras
     meters: int = 0                # 0 off, 1 graph, 2 text, 3 both
     opacity: int = 100
-    start_with_windows: bool = False
+    start_with_windows: bool = False     # Linux: 'Start when I log in'
+    app_menu: bool = False         # Linux: BChat in the desktop's app menu (the AppImage has no installer)
+    irc_links: bool = False        # Linux: that menu entry also opens irc:// and ircs:// links
     start_minimized: bool = False
     start_in_tray: bool = False    # 0.5.0 'When BChat starts: In the tray' (Show / Minimized / In the tray)
     tray_click: str = "one"        # one | double: what opens BChat from the tray icon

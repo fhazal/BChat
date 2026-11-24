@@ -17,13 +17,17 @@ def command(exe: str) -> str:
 
 
 def installed_exe() -> str | None:
-    """The running BChat.exe, or None from source (nothing stable to point Windows at)."""
+    """The running BChat.exe (on Linux the AppImage), or None from source (nothing stable to point at)."""
+    if os.name != "nt":
+        from . import linuxdesk
+        return linuxdesk.installed_exe()
     return sys.executable if getattr(sys, "frozen", False) else None
 
 
 def current(key_path: str = RUN_KEY) -> str | None:
-    if os.name != "nt":         # the Linux autostart file comes in its own step; until then there is nothing to read
-        return None
+    if os.name != "nt":         # Linux: the autostart file's Exec line
+        from . import linuxdesk
+        return linuxdesk._exec_of(linuxdesk._read(linuxdesk.autostart_file()))
     import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
@@ -36,7 +40,10 @@ def current(key_path: str = RUN_KEY) -> str | None:
 def sync(on: bool, exe: str | None, key_path: str = RUN_KEY) -> str:
     """Makes the Run value match the tick. Answers 'added', 'fixed' (pointed elsewhere), 'removed', 'ok' or
     'skipped' (from source). Never raises: a locked registry must not stop BChat starting."""
-    if exe is None or os.name != "nt":
+    if os.name != "nt":
+        from . import linuxdesk
+        return linuxdesk.sync_autostart(on, exe)
+    if exe is None:
         return "skipped"
     import winreg
     want = command(exe)

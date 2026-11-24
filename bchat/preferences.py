@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QColorDial
 
 from .config import DARK_THEMES, LIGHT_THEME_ORDER, PALETTES, THEME_NAMES, Config, Theme, is_custom, make_theme
 from .dcc import home_address  # noqa: F401  (tests import it from here)
+from . import linuxdesk
 from .widgets import FramedDialog, icon
 
 CATEGORIES = {"Interface": ["Text box", "Input box", "User list", "Channel switcher", "Windows", "Colors"],
@@ -725,7 +726,17 @@ class PreferencesDialog(FramedDialog):
         self.skip_motd = self._check(lay, "Skip the server's welcome message (MOTD)", c.skip_motd,
                                      "Type /motd to read it any time")
         lay.addWidget(_heading("Starting and Closing"))
-        self.start_win = self._check(lay, "Start with Windows", c.start_with_windows, "Only for the installed BChat")
+        if linuxdesk.SUPPORTED:
+            self.start_win = self._check(lay, "Start when I log in", c.start_with_windows, "Only for the BChat AppImage")
+            self.app_menu = self._check(lay, "Add BChat to the app menu", c.app_menu,
+                                        "Puts BChat and its icon in your desktop's app menu. Only for the BChat AppImage")
+            self.irc_links = self._check(lay, "Open irc:// and ircs:// links with BChat (it always asks before joining)",
+                                         c.irc_links, "Links in your browser open in BChat")
+            self.irc_links.setStyleSheet("margin-left: 20px;")
+            self.app_menu.toggled.connect(self.irc_links.setEnabled)
+            self.irc_links.setEnabled(c.app_menu)
+        else:
+            self.start_win = self._check(lay, "Start with Windows", c.start_with_windows, "Only for the installed BChat")
         g = QGridLayout()
         g.setHorizontalSpacing(8)
         self.start_how = self._menu(g, 0, "When BChat starts:", ["Show the window", "Minimized", "In the tray"],
@@ -1888,6 +1899,11 @@ class PreferencesDialog(FramedDialog):
         if self.start_win.isChecked() != c.start_with_windows:
             self.win.set_autostart(self.start_win.isChecked())
         c.start_with_windows, c.close_to_tray = self.start_win.isChecked(), self.close_tray.isChecked()
+        if linuxdesk.SUPPORTED:
+            menu, links = self.app_menu.isChecked(), self.irc_links.isChecked()
+            if (menu, links) != (c.app_menu, c.irc_links):
+                self.win.set_desktop_entry(menu, links)
+            c.app_menu, c.irc_links = menu, links
         c.start_minimized, c.start_in_tray = self.start_how.currentIndex() == 1, self.start_how.currentIndex() == 2
         c.minimize_to_tray, c.ask_on_quit = self.min_tray.isChecked(), self.ask_quit.isChecked()
         c.report_offer = self.report_offer.isChecked()
