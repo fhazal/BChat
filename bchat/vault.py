@@ -1,16 +1,21 @@
-"""Passwords in Windows Credential Manager instead of config.json.
+"""Passwords in Windows Credential Manager (Linux: the desktop's keyring, via the Secret Service) instead of config.json.
 
 Windows encrypts these for the signed-in user, so they're not readable from the settings file, a backup of it or a
 copy sent to someone. Honest limit: a program running as the same Windows user can still ask Windows for them.
 
 One settings folder = one set of entries, "BChat:<folder hash>:0", ":1", ... (an entry holds up to 2560 bytes, so a
 long list is split). Tests set BCHAT_VAULT=memory and never touch the real Credential Manager.
+
+Linux: the same entries go to the default keyring collection (GNOME Keyring, KWallet, KeePassXC ...), labelled
+"BChat IRC passwords" and found by the attribute bchat-target. No keyring running = put() says False, and on Linux
+config.save then keeps no passwords at all (never a plain file).
 """
 from __future__ import annotations
 
 import ctypes
 import hashlib
 import os
+import sys
 from ctypes import wintypes
 from pathlib import Path
 
@@ -28,9 +33,8 @@ def _memory_mode(folder: Path | None = None) -> bool:
     those never write to the real Credential Manager. The installed program ALWAYS uses Credential Manager,
     wherever its settings folder is, unless a build check asks for the stand-in with BCHAT_VAULT=file
     (a password must never end up in a plain file just because someone used --config-dir in %TEMP%)."""
-    import sys
     mode = os.environ.get("BCHAT_VAULT", "")
-    if mode == "memory" or os.name != "nt":
+    if mode == "memory":
         return True
     if getattr(sys, "frozen", False) and mode != "file":
         return False
@@ -53,6 +57,60 @@ class _CRED(ctypes.Structure):
 
 
 GENERIC, LOCAL_MACHINE = 1, 2       # CRED_TYPE_GENERIC, CRED_PERSIST_LOCAL_MACHINE (this PC, this user, no roaming)
+LINUX = sys.platform.startswith("linux")
+LABEL = "BChat IRC passwords"
+NO_KEYRING = ("No keyring was running last time, so BChat didn't keep your network passwords "
+              "(it never writes them to a plain file).\n\nStart or install a keyring (GNOME Keyring, KWallet or "
+              "KeePassXC), then type them once more in the Network List.")
+
+
+def _keyring(work):
+    """Run work(collection) on the default keyring collection. Any trouble (no keyring, locked and the user said
+    no, D-Bus missing) comes back as OSError, which put/get/clear already treat as "the store said no"."""
+    try:
+        import secretstorage
+        with secretstorage.dbus_init() as conn:
+            col = secretstorage.get_default_collection(conn)
+            if col.is_locked() and col.unlock():          # unlock() is True when the user dismissed the prompt
+                raise OSError("keyring stays locked")
+            return work(col)
+    except OSError:
+        raise
+    except Exception as e:                                  # secretstorage / jeepney errors, ImportError
+        raise OSError(str(e)) from e
+
+
+def keyring_ok(folder: Path | None = None) -> bool:
+    """Will passwords typed now be kept? Always yes on Windows; on Linux only while a keyring answers on D-Bus.
+    Asks only whether the keyring service is there, so it never pops up an unlock prompt."""
+    if not LINUX or _memory_mode(folder):
+        return True
+    try:
+        import secretstorage
+        with secretstorage.dbus_init() as conn:
+            return bool(secretstorage.check_service_availability(conn))
+    except Exception:                                       # no D-Bus, no secretstorage: nothing would be kept
+        return False
+
+
+def _attrs(target: str) -> dict:
+    return {"application": "BChat", "bchat-target": target}
+
+
+def _ss_write(target: str, data: bytes) -> bool:
+    return _keyring(lambda col: bool(col.create_item(LABEL, _attrs(target), data, replace=True)))
+
+
+def _ss_read(target: str) -> bytes | None:
+    def work(col):
+        for item in col.search_items(_attrs(target)):
+            return bytes(item.get_secret())
+        return None
+    return _keyring(work)
+
+
+def _ss_delete(target: str) -> None:
+    _keyring(lambda col: [item.delete() for item in col.search_items(_attrs(target))])
 
 
 def _fake_store(folder) -> dict:
@@ -81,6 +139,8 @@ def _write(target: str, data: bytes, folder=None) -> bool:
         store[target] = data
         _fake_save(folder, store)
         return True
+    if LINUX:
+        return _ss_write(target, data)
     buf = ctypes.create_string_buffer(data, len(data))
     c = _CRED(Type=GENERIC, TargetName=target, Comment="BChat IRC passwords", CredentialBlobSize=len(data),
               CredentialBlob=ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)), Persist=LOCAL_MACHINE, UserName="BChat")
@@ -90,6 +150,8 @@ def _write(target: str, data: bytes, folder=None) -> bool:
 def _read(target: str, folder=None) -> bytes | None:
     if _memory_mode(folder):
         return _fake_store(folder).get(target)
+    if LINUX:
+        return _ss_read(target)
     p = ctypes.POINTER(_CRED)()
     if not ctypes.windll.advapi32.CredReadW(target, GENERIC, 0, ctypes.byref(p)):
         return None
@@ -105,6 +167,8 @@ def _delete(target: str, folder=None) -> None:
         store.pop(target, None)
         _fake_save(folder, store)
         return
+    if LINUX:
+        return _ss_delete(target)
     ctypes.windll.advapi32.CredDeleteW(target, GENERIC, 0)
 
 
@@ -138,7 +202,10 @@ def get(folder: Path) -> str | None:
 
 
 def clear(folder: Path) -> None:
-    i = 0
-    while _read(_target(folder, i), folder) is not None:
-        _delete(_target(folder, i), folder)
-        i += 1
+    try:
+        i = 0
+        while _read(_target(folder, i), folder) is not None:
+            _delete(_target(folder, i), folder)
+            i += 1
+    except (OSError, AttributeError, ValueError):     # no keyring: nothing of ours to clear
+        pass

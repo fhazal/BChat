@@ -97,6 +97,17 @@ class NetworkEditDialog(FramedDialog):
                          ("Server features:", feat_row)):
             form.addRow(label, w)
         self.form = form
+        self.keyring_note = None
+        from . import vault
+        if vault.LINUX:
+            win = getattr(parent, "win", parent)
+            if not vault.keyring_ok(getattr(win, "cfg_dir", None)):
+                # Linux with no keyring: say so where the password is typed (nothing goes to a plain file)
+                self.keyring_note = QLabel("No keyring is running: passwords you type here work until BChat closes, "
+                                           "then they are forgotten.", self)
+                self.keyring_note.setWordWrap(True)
+                self.keyring_note.setStyleSheet(f"color: {_muted(self)};")
+                form.insertRow(form.getWidgetPosition(self.password)[0] + 1, "", self.keyring_note)
         self.body.addLayout(form)
         self.login.currentIndexChanged.connect(self._login_rows)
         self._login_rows()
@@ -121,6 +132,10 @@ class NetworkEditDialog(FramedDialog):
         row.addWidget(cancel)
         row.addWidget(save)
         self.body.addLayout(row)
+        if self.keyring_note is not None:      # a wrapped label asks for one line until it knows its width
+            self.keyring_note.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            self.keyring_note.setMinimumHeight(self.keyring_note.heightForWidth(self.width() - 150))
+        self.resize(self.width(), max(self.height(), self.sizeHint().height()))   # taller fonts (Linux): grow, don't squeeze
         self._start = self._state()
 
     # --- Server Features (0.6.0) --------------------------------------------------------------

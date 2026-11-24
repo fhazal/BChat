@@ -3,6 +3,7 @@
 commands.run() hands these over by name; each one prints one short line that says what happened."""
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 
@@ -54,7 +55,7 @@ HELP = {
     "donotdisturb": "DONOTDISTURB [on|off]: no sounds, flashes or pop-up cards until it is off again. Alone: says which",
     "play": "PLAY [-e] [#channel or nick] <file.txt> [<ms between lines>]: sends a text file line by line. "
             "-e shows it only to you. PLAY STOP stops",
-    "run": "RUN <file, folder or link>: opens it with its Windows program. Asks first before starting a program",
+    "run": "RUN <file, folder or link>: opens it with its " + ("default" if sys.platform.startswith("linux") else "Windows") + " program. Asks first before starting a program",
 }
 
 # these work without a server (a tab made with /newserver -noconnect, or before the first connect)
@@ -266,7 +267,7 @@ def _run(ui, s, b, rest) -> None:
             ui.cfg.run_allowed.append(str(path))
             ui.save_config()
     if not open_path(path):
-        _err(s, b, f"Windows couldn't open {path}")
+        _err(s, b, f"No program is set to open {path}" if sys.platform.startswith("linux") else f"Windows couldn't open {path}")
 
 
 # --- /dns -------------------------------------------------------------------------------------------------

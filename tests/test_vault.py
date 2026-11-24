@@ -51,6 +51,7 @@ def test_rename_and_same_names_keep_the_right_passwords(tmp_path):
 
 
 def test_windows_refusing_keeps_the_passwords_in_the_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "LINUX", False)          # Linux keeps none instead: tests/test_vault_linux.py
     monkeypatch.setattr(vault, "put", lambda folder, text: False)
     config.save(Config(nick="x", networks=[net("SkinIRC", password=SECRETS[0])]), tmp_path)
     d = json.loads(raw(tmp_path))

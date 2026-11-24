@@ -3,6 +3,7 @@ messages and notices aloud) on Settings > Sound, plus /speak. Players run muted 
 "mock" one (conftest.py), so nothing is heard. Loopback sockets only."""
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from bchat import config, sound, speech
 from bchat.config import Config
 from bchat.protocol import strip_format
 from test_live import live, make_win, prefs, wait  # noqa: F401  (live is a fixture)
+
+DEFAULT_VOICE = "System default" if sys.platform.startswith("linux") else "Windows default"
 
 DATA = Path(__file__).with_name("data")
 NEW_FIELDS = ("sound_volume", "speak_hilights", "speak_private", "speak_notices", "speak_voice", "speak_rate",
@@ -111,7 +114,7 @@ def test_settings_save_and_reload(app, tmp_path, talker):
     assert d.sound_volume.value() == 35 and d.sound_volume_text.text() == "35 %"
     assert d.speak_hilights.isChecked() and not d.speak_private.isChecked() and d.speak_notices.isChecked()
     assert not d.speak_only_away.isChecked() and d.speak_voice.currentText() == "Ben" and d.speak_rate.value() == -4
-    assert d.speak_voice.itemText(0) == "Windows default" and d.speak_voice.itemData(0) == ""
+    assert d.speak_voice.itemText(0) == DEFAULT_VOICE and d.speak_voice.itemData(0) == ""
     d.reject(); win.close()
 
 
@@ -358,7 +361,7 @@ def test_speech_group_hidden_without_engine(app, tmp_path, monkeypatch):
     monkeypatch.setattr(speech, "_SPEAKER", Talker())
     d = PreferencesDialog(win, "Sound"); d.show()
     _settle(app, 50)
-    assert d.speech_box.isVisible() and [d.speak_voice.itemText(i) for i in range(3)] == ["Windows default", "Ana", "Ben"]
+    assert d.speech_box.isVisible() and [d.speak_voice.itemText(i) for i in range(3)] == [DEFAULT_VOICE, "Ana", "Ben"]
     d.reject(); win.close()
 
 

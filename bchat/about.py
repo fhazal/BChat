@@ -41,10 +41,16 @@ def windows_name() -> str:
     return f"{platform.release()} (build {build})" if build else platform.release()
 
 
+def _linux_name() -> str:
+    """Ubuntu 22.04.5 LTS (kernel 6.6.87): the /sysinfo name without the 64-bit (every Linux build of BChat is)."""
+    from .sysinfo import linux_os_text
+    return linux_os_text().replace(" 64-bit", "")
+
+
 def info_rows() -> list[tuple[str, str]]:
     return [("Version", full_version()),
             ("Built", built_on()),
-            ("Windows", windows_name()),
+            ("Linux", _linux_name()) if sys.platform.startswith("linux") else ("Windows", windows_name()),
             ("Processors", str(os.cpu_count() or "?")),
             ("Python / Qt", f"{platform.python_version()} / {pyside_version}")]
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import time
 import weakref
 
@@ -39,7 +40,7 @@ VERSION = "BChat"           # %v in user commands: _version() adds the real numb
 def _version() -> str:
     from . import full_version
     return f"BChat {full_version()}"
-MACHINE = "Windows"
+MACHINE = "Linux" if sys.platform.startswith("linux") else "Windows"
 
 
 HELP = {

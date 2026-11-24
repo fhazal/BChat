@@ -4,6 +4,7 @@ from __future__ import annotations
 import dataclasses
 import html
 import fnmatch
+import sys
 import json
 import re
 import time
@@ -757,7 +758,7 @@ class MainWindow(FramelessWindow):
         bottom.addLayout(meters)
         self.emoji_btn = QToolButton(body)
         self.emoji_btn.setText("\U0001F642")
-        self.emoji_btn.setToolTip("Emoji (Windows: Win + . for all of them)")
+        self.emoji_btn.setToolTip("Emoji" if sys.platform.startswith("linux") else "Emoji (Windows: Win + . for all of them)")
         self._style_emoji_btn()
         self.emoji_btn.clicked.connect(self._emoji_for_input)
         bottom.addWidget(self.emoji_btn)

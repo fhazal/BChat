@@ -13,10 +13,11 @@ import bchat.updater
 bchat.updater.UPDATE_URL = ""      # tests never ask the real GitHub for releases
 SOUNDS_PLAYED: list = []
 import bchat.sound, bchat.speech                                      # noqa: E401
-try:
+if os.name == "nt":
     import winsound
     winsound.PlaySound = lambda path, flags: SOUNDS_PLAYED.append(path)   # tests never make a sound on the user's PC
-except ImportError:             # Linux: no Windows player, every sound goes through Qt (muted below); note what it plays
+else:                           # Linux: no Windows player, every sound goes through Qt (muted below); note what it plays
+    sys.modules["winsound"] = None      # as on a real Linux desktop, even with a stub winsound.py on the path
     _qt_media = bchat.sound.Player._media
     def _noted_media(self, p, volume):
         SOUNDS_PLAYED.append(str(p))
@@ -45,29 +46,56 @@ def _free_windows_after_each_file():
     if app is None:
         return
     from PySide6.QtCore import QCoreApplication, QEvent
-    from bchat.mainwindow import MainWindow
     new = [w for w in app.topLevelWidgets() if id(w) not in before]
-    wins = [w for w in new if isinstance(w, MainWindow)]
-    for w in wins:
-        # Main windows stay alive (freeing one while its sessions, DCC and timers still run crashed Qt), but go quiet.
-        try:
-            for s in list(w.sessions.values()):
-                s.disconnect_from_network()
-            w.hide()
-        except RuntimeError:
-            pass
+    for w in new:
+        _go_quiet(w)
     for _ in range(3):
         app.processEvents()
     for w in new:
-        if any(w is m for m in wins):
-            continue
-        try:                                   # dialogs, popups and cards: Settings alone is ~1,000 widgets
+        try:                                   # Settings alone is ~1,000 widgets, a main window more
             w.hide()
             w.deleteLater()
         except RuntimeError:                   # already gone
             pass
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
+
+
+def _go_quiet(w) -> None:
+    """Before a window is freed nothing of it may still run: a main window gets the same shutdown as when BChat
+    quits (connections, DCC, router ports, pop-up cards), then every timer it owns stops. Freeing one that was
+    still busy is what used to crash Qt, so they were kept alive and piled up until setStyleSheet crawled."""
+    from PySide6.QtCore import QTimer
+    from bchat.mainwindow import MainWindow
+    try:
+        if isinstance(w, MainWindow):
+            owners = [w]
+            for part, how in (("notifier", "clear"), ("dcc", "shutdown"), ("upnp", "shutdown")):
+                obj = getattr(w, part, None)
+                if obj is None:
+                    continue
+                owners.append(obj)
+                try:
+                    getattr(obj, how)()
+                except Exception:                  # half-built window (a test that broke early): carry on
+                    pass
+            for s in list(getattr(w, "sessions", {}).values()):
+                owners.append(s)
+                try:
+                    s.disconnect_from_network()
+                except Exception:
+                    pass
+            tray = getattr(w, "tray", None)
+            if tray is not None:
+                tray.hide()
+        else:
+            owners = [w]
+        for o in owners:                           # sessions and DCC keep timers of their own (reconnect, keepalive)
+            if hasattr(o, "findChildren"):
+                for t in o.findChildren(QTimer):
+                    t.stop()
+    except RuntimeError:                           # already gone
+        pass
 
 
 @pytest.fixture

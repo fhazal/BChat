@@ -5,6 +5,7 @@ Pages and options follow XChat 2.8.8's src/fe-gtk/setup.c. Every page works. Not
 from __future__ import annotations
 
 import html
+import sys
 import time
 from dataclasses import fields
 
@@ -1010,7 +1011,7 @@ class PreferencesDialog(FramedDialog):
         vrow = QHBoxLayout()
         vrow.addWidget(QLabel("Voice:"))
         self.speak_voice = QComboBox()
-        self.speak_voice.addItem("Windows default", "")
+        self.speak_voice.addItem("System default" if sys.platform.startswith("linux") else "Windows default", "")
         talker = speech.speaker()
         available = talker.available()
         for name in talker.voices() if available else []:

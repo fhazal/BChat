@@ -52,7 +52,12 @@ class FakeIrcd:
         while not self.stop_flag:
             try:
                 conn, _ = self.srv.accept()
-            except OSError:
+            except socket.timeout:
+                continue
+            except OSError:            # closed or failing socket: an instant error every pass would hog the GIL
+                if self.srv.fileno() == -1:
+                    break
+                time.sleep(0.05)
                 continue
             try:
                 if self.ctx and not self.starttls:

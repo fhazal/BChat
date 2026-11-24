@@ -663,6 +663,8 @@ def load(directory: Path) -> Config:
                     for f in SECRET_FIELDS:
                         setattr(n, f, s.get("networks", {}).get(key, {}).get(f, ""))
                 cfg.proxy_password = s.get("proxy_password", "")
+        if d.get("secrets") == "nostore":
+            cfg.no_password_store = True      # Linux, no keyring last time: the passwords were never kept
         return cfg
     return fresh_config()
 
@@ -700,7 +702,7 @@ def fresh_config() -> Config:
 
 def save(cfg: Config, directory: Path) -> None:
     """Settings to config.json, passwords to Windows Credential Manager. If Windows won't store them,
-    they stay in the file as before rather than being lost."""
+    they stay in the file as before rather than being lost. Linux: the keyring, or not kept at all."""
     from . import vault
     directory.mkdir(parents=True, exist_ok=True)
     d = asdict(cfg)
@@ -730,6 +732,13 @@ def save(cfg: Config, directory: Path) -> None:
                 n[f] = ""
         d["proxy_password"] = ""
         d["secrets"] = "vault"
+    elif vault.LINUX:
+        # Linux without a working keyring: never a plain file. Typed passwords work until BChat closes.
+        for n in d["networks"]:
+            for f in SECRET_FIELDS:
+                n[f] = ""
+        d["proxy_password"] = ""
+        d["secrets"] = "nostore"
     else:
         d["secrets"] = "file"
     tmp = directory / "config.json.tmp"

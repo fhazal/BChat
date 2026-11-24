@@ -1,9 +1,10 @@
 """/np: the song playing now, from Windows' own media controls (the box that pops up with the volume keys),
-plus classic Winamp's window title. Nothing to set up. Privacy first: off until the user turns it on, music only,
+plus classic Winamp's window title; on Linux from MPRIS, which every desktop's media keys use. Nothing to set up. Privacy first: off until the user turns it on, music only,
 only players the user allows (browsers start unticked), and only when /np is typed."""
 from __future__ import annotations
 
 import re
+import sys
 import threading
 import time
 from dataclasses import dataclass, replace
@@ -11,7 +12,7 @@ from dataclasses import dataclass, replace
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
 DEFAULT_LINE = "is listening to {artist} – {title} ({album}) · {player} · {time}"
-BROWSERS = ("chrome", "msedge", "edge", "firefox", "opera", "brave", "vivaldi", "browser", "arc")
+BROWSERS = ("chrome", "msedge", "edge", "firefox", "opera", "brave", "vivaldi", "browser", "arc", "chromium")
 NAMES = {"spotify": "Spotify", "applemusic": "Apple Music", "itunes": "iTunes", "musicbee": "MusicBee", "aimp": "AIMP",
          "foobar2000": "foobar2000", "potplayer": "PotPlayer", "vlc": "VLC", "zunemusic": "Media Player",
          "microsoft.media.player": "Media Player", "chrome": "Google Chrome", "msedge": "Microsoft Edge",
@@ -124,8 +125,75 @@ def _winamp() -> list[Track]:
     return [Track(WINAMP, "Winamp", artist if sep else "", name if sep else song, "", True)]
 
 
+# Linux (0.9.0): MPRIS, the desktop's standard for media players (Spotify, VLC, Rhythmbox, browsers ...), on D-Bus.
+MPRIS = "org.mpris.MediaPlayer2."
+_VIDEO = (".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg", ".ts", ".ogv")
+
+
+_SIG = set("ybnqiuxtdsogvah{}()")
+
+
+def _plain(v):
+    """jeepney hands D-Bus variants over as (signature, value) pairs, sometimes nested: keep just the value."""
+    while isinstance(v, tuple) and len(v) == 2 and isinstance(v[0], str) and v[0] and set(v[0]) <= _SIG:
+        v = v[1]
+    return v
+
+
+def mpris_track(bus_name: str, identity: str, player: dict) -> Track | None:
+    """One player's Player properties -> a Track, or None when it isn't playing."""
+    if str(_plain(player.get("PlaybackStatus", ""))) != "Playing":
+        return None
+    meta = {k: _plain(v) for k, v in (_plain(player.get("Metadata", {})) or {}).items()}
+    pid = bus_name[len(MPRIS):].split(".")[0] if bus_name.startswith(MPRIS) else bus_name   # firefox.instance_1_84 -> firefox
+    artist = meta.get("xesam:artist") or []
+    artist = ", ".join(str(a) for a in artist) if isinstance(artist, (list, tuple)) else str(artist)
+    url = str(meta.get("xesam:url") or "").lower().split("?")[0]
+    try:
+        length = max(0.0, float(meta.get("mpris:length") or 0) / 1_000_000)
+        pos = max(0.0, float(_plain(player.get("Position", 0)) or 0) / 1_000_000)
+    except (TypeError, ValueError):
+        length = pos = 0.0
+    return Track(pid, identity or player_name(pid), artist, str(meta.get("xesam:title") or ""),
+                 str(meta.get("xesam:album") or ""), not url.endswith(_VIDEO), min(pos, length or pos), length)
+
+
+def _mpris(timeout: float = 1.0) -> list[Track]:
+    """Every MPRIS player that is playing. A player that doesn't answer within the timeout is skipped."""
+    from jeepney import DBusAddress, Properties, message_bus, new_method_call
+    from jeepney.io.blocking import open_dbus_connection
+    out = []
+    with open_dbus_connection(bus="SESSION") as conn:
+        names = conn.send_and_get_reply(new_method_call(message_bus, "ListNames"), timeout=timeout).body[0]
+        for name in sorted(n for n in names if n.startswith(MPRIS)):
+            try:
+                obj = DBusAddress("/org/mpris/MediaPlayer2", bus_name=name)
+                reply = conn.send_and_get_reply(Properties(obj.with_interface(MPRIS + "Player")).get_all(), timeout=timeout)
+                if reply.header.message_type.name == "error":
+                    continue
+                player = reply.body[0]
+                try:
+                    who = conn.send_and_get_reply(Properties(obj.with_interface(MPRIS.rstrip("."))).get("Identity"),
+                                                  timeout=timeout)
+                    identity = str(_plain(who.body[0])) if who.header.message_type.name != "error" else ""
+                except Exception:
+                    identity = ""
+                t = mpris_track(name, identity, player)
+                if t is not None:
+                    out.append(t)
+            except Exception:          # one odd player must not hide the others
+                continue
+    return out
+
+
 def playing() -> list[Track]:
     tracks: list[Track] = []
+    if sys.platform.startswith("linux"):
+        try:
+            tracks += _mpris()
+        except Exception:      # no session bus (a bare console) or jeepney missing: nothing to read
+            pass
+        return [tidy(t) for t in tracks]
     try:
         tracks += _windows_media()
     except Exception:          # no media controls (old Windows, missing parts): Winamp may still answer
@@ -144,7 +212,7 @@ def choose(tracks: list[Track], cfg) -> tuple[Track | None, str]:
             cfg.np_players[t.player_id] = not is_browser(t.player_id)     # browsers start unticked
         cfg.np_names[t.player_id] = t.player
     if not tracks:
-        return None, "Nothing is playing right now (or the player doesn't tell Windows)."
+        return None, f"Nothing is playing right now (or the player doesn't tell {'the desktop' if sys.platform.startswith('linux') else 'Windows'})."
     allowed = [t for t in tracks if cfg.np_players.get(t.player_id)]
     if not allowed:
         return None, f"Nothing to share: {', '.join(sorted({t.player for t in tracks}))} isn't ticked in Preferences > Chatting > Now Playing."

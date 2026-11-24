@@ -193,8 +193,14 @@ def main(argv: list[str] | None = None) -> int:
             start_network(win, args.server, args.join, args.nick)
         if getattr(cfg, "vault_missing", False):     # 0.8.2: after the connects, so a hidden box can't hold them up
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(win, "BChat: saved passwords", "BChat couldn't read your saved network passwords from "
-                                "Windows Credential Manager. Please enter them again in the Network List.")
+            from .vault import LINUX
+            store = "your keyring" if LINUX else "Windows Credential Manager"
+            QMessageBox.warning(win, "BChat: saved passwords", f"BChat couldn't read your saved network passwords from "
+                                f"{store}. Please enter them again in the Network List.")
+        if getattr(cfg, "no_password_store", False):    # Linux, no keyring last time: the passwords were dropped
+            from PySide6.QtWidgets import QMessageBox
+            from .vault import NO_KEYRING
+            QMessageBox.warning(win, "BChat: passwords not kept", NO_KEYRING)
         from .welcome import first_start_action, run_welcome
         action = first_start_action(cfg, bool(win.sessions))
         if action == "welcome" and not args.server:
