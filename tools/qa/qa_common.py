@@ -23,6 +23,8 @@ DEFAULT_EXE = ROOT / "dist" / "BChat" / "BChat.exe"
 
 def exe_version(exe: str | os.PathLike) -> str:
     """ProductVersion from the exe's version resource (what packaging/version_info.txt put there)."""
+    if os.name != "nt":                 # an AppImage has no version resource: --expect / BCHAT_EXPECT say it
+        return ""
     v = ctypes.windll.version
     size = v.GetFileVersionInfoSizeW(str(exe), None)
     if not size:

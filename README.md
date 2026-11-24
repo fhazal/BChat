@@ -10,10 +10,11 @@
   </picture>
 </h1>
 
-**Handle IRC as a bee does a flower. A calm, modern IRC client for Windows, made by BajuBesi Labs.**
+**Handle IRC as a bee does a flower. A calm, modern IRC client for Windows and Linux, made by BajuBesi Labs.**
 Classic XChat feel · seventeen themes · safe by default · notification cards · Python plugins
 
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?logo=windows&logoColor=white)
+![Linux AppImage](https://img.shields.io/badge/Linux-AppImage-fab387?logo=linux&logoColor=white)
 [![Licence: GPL-2.0-or-later](https://img.shields.io/badge/licence-GPL--2.0--or--later-a6e3a1)](LICENSE)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab?logo=python&logoColor=white)
 ![Qt 6](https://img.shields.io/badge/Qt-6%20(PySide6)-41cd52?logo=qt&logoColor=white)
@@ -289,13 +290,13 @@ All of them can be changed in *Settings → Advanced → Keyboard Shortcuts*.
 <tr>
 <td width="55%" valign="top">
 
-- **Passwords stay out of files.** Network, SASL, NickServ and proxy passwords are kept in Windows Credential Manager. Older settings move there by themselves on the next save.
+- **Passwords stay out of files.** Network, SASL, NickServ and proxy passwords are kept in Windows Credential Manager, or on Linux in your desktop's keyring (GNOME Keyring, KDE Wallet, KeePassXC). Older settings move there by themselves on the next save. With no keyring, BChat keeps no passwords at all rather than writing them to a file.
 - **Log in without a password.** With a certificate (SASL EXTERNAL) nothing secret is stored or sent; its private key never leaves your PC. With SCRAM-SHA-256, used whenever the server offers it, your password itself is never sent.
 - **Typos don't leak passwords.** `//ns identify ...` runs the command instead of saying it in the channel, and passwords typed to `/ns` or `/oper` are hidden in the raw log.
 - **Certificates are checked.** A bad or changed certificate gets a clear question with its fingerprint: *Don't Connect*, *Connect Once* or *Always Trust*. If a trusted certificate ever changes, BChat warns you.
 - **Risky links ask first.** Program downloads, look-alike names and bare IP links show where they lead before they open. Normal links still open with one click.
 - **DCC tricks are stripped.** Hidden right-to-left characters that disguise `photo.exe` as a picture are removed from file names, and programs need your OK.
-- **Updates are signed.** Every installer is verified with BajuBesi Labs' own key before it runs.
+- **Updates are signed.** Every update is verified with BajuBesi Labs' own key before it runs, and the Windows and Linux updates are signed apart, so neither can be passed off as the other.
 
 </td>
 <td width="45%" align="center" valign="top">
@@ -319,6 +320,16 @@ All of them can be changed in *Settings → Advanced → Keyboard Shortcuts*.
 
 BChat isn't code-signed yet, so some antivirus programs may stop the installer or the self-update. If yours does, either run the installer yourself, or add BChat's install folder as an exception in your antivirus. BChat is open source: everything it does is in this repository.
 
+### Linux
+
+BChat for Linux is one file, an **AppImage**: no install, no admin password. It runs on Ubuntu 22.04 or newer, Fedora, and other current 64-bit distros.
+
+1. Download **`BChat-x86_64.AppImage`** from **[Releases](https://github.com/fhazal/BChat/releases/latest)**. A good home for it is `~/Applications`.
+2. Make it runnable: right-click it → **Properties** → tick **Allow executing as a program** (or *Is executable*), or run `chmod +x BChat-x86_64.AppImage`.
+3. Double-click it. To have it in your app menu, tick **Add BChat to the app menu** in *Settings → Preferences → General* (*Start when I log in* and opening `irc://` links are there too).
+
+It updates itself like the Windows version: the AppImage file is replaced in place, so your menu entry and shortcuts keep working. Keep it where you can write to it (your home folder) so the update can replace it.
+
 ---
 
 ## 🔐 Privacy
@@ -341,6 +352,8 @@ BChat connects only to the IRC networks you add, and to GitHub to look for updat
 | `updates\` | A downloaded update waiting to install |
 
 Passwords are in **Windows Credential Manager** under entries named `BChat:…`.
+
+**On Linux** the same files are in `~/.config/BChat/` (or `$XDG_CONFIG_HOME/BChat`), and passwords are in your desktop's keyring as **BChat IRC passwords**. With a file named `portable.txt` next to the AppImage, everything stays in a `BChat-data` folder beside it instead (handy on a USB stick).
 
 </details>
 
@@ -371,6 +384,8 @@ python -m pytest              # all tests
 ```
 
 The installer is built with [PyInstaller](https://pyinstaller.org) and [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`packaging/bchat.iss`).
+
+On Linux it runs from source the same way (`python3 -m bchat`). The AppImage is built on Ubuntu 22.04 with `bash packaging/build-linux.sh <version>` (PyInstaller and [appimagetool](https://github.com/AppImage/appimagetool)); see [docs/BUILD-GUIDE.md](docs/BUILD-GUIDE.md).
 
 </details>
 

@@ -21,6 +21,55 @@ ICON = Path(__file__).with_name("assets") / "bchat.png"
 _RESERVED = set(' \t\n"\'\\><~|&;$*?#()`')
 
 
+def own_libs_for_children(env=None) -> None:
+    """The packaged app's bootloader points LD_LIBRARY_PATH at BChat's bundled libraries (older ones, from the build
+    distro). Programs BChat starts must get the desktop's own: speech-dispatcher, xdg-open and the browser it opens
+    crash on an older glib. BChat itself keeps its libraries: the loader read the variable when BChat started."""
+    env = os.environ if env is None else env
+    if not (SUPPORTED and getattr(sys, "frozen", False)):
+        return
+    orig = env.pop("LD_LIBRARY_PATH_ORIG", None)      # the user's own value, kept by the bootloader
+    if orig is None:
+        env.pop("LD_LIBRARY_PATH", None)
+    else:
+        env["LD_LIBRARY_PATH"] = orig
+
+
+def platform_args(env=None) -> list[str]:
+    """Wayland doesn't let an app place its own windows: the notification cards would land mid-screen (KDE centres
+    them) and BChat couldn't reopen where it was. On a Wayland desktop that has XWayland, BChat runs as an X11 app
+    instead (KDE and GNOME scale it sharply). Passed to QApplication, not set in the environment, so programs BChat
+    opens keep the desktop's choice. The user's own QT_QPA_PLATFORM always wins; no XWayland = native Wayland."""
+    env = os.environ if env is None else env
+    if not SUPPORTED or env.get("QT_QPA_PLATFORM"):
+        return []
+    wayland = env.get("WAYLAND_DISPLAY") or env.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+    return ["-platform", "xcb"] if wayland and env.get("DISPLAY") else []
+
+
+def pipewire_conf_dirs(env=None) -> list[Path]:
+    """Where PipeWire looks for client.conf (its own search order)."""
+    env = os.environ if env is None else env
+    dirs = [Path(env["PIPEWIRE_CONFIG_DIR"])] if env.get("PIPEWIRE_CONFIG_DIR") else []
+    home = env.get("XDG_CONFIG_HOME") or (str(Path(env["HOME"]) / ".config") if env.get("HOME") else "")
+    if home:
+        dirs.append(Path(home) / "pipewire")
+    return dirs + [Path("/etc/pipewire"), Path("/usr/share/pipewire")]
+
+
+def safe_sound_backend(env=None, dirs=None) -> None:
+    """Qt picks its PipeWire sound backend wherever libpipewire is installed, and crashes (segfault, at the first
+    sound) when PipeWire's client.conf is missing, as on minimal installs where another package pulled the library in.
+    No client.conf: use Qt's PulseAudio backend, which copes with no sound server at all. The user's own
+    QT_AUDIO_BACKEND always wins. Before anything touches Qt Multimedia."""
+    env = os.environ if env is None else env
+    if not SUPPORTED or env.get("QT_AUDIO_BACKEND"):
+        return
+    dirs = pipewire_conf_dirs(env) if dirs is None else dirs
+    if not any((d / "client.conf").is_file() for d in dirs):
+        env["QT_AUDIO_BACKEND"] = "pulseaudio"
+
+
 def installed_exe() -> str | None:
     """The BChat AppImage being run (its runtime sets $APPIMAGE), or None from source: nothing stable to point at."""
     path = os.environ.get("APPIMAGE", "")

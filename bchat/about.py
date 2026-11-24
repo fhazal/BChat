@@ -25,7 +25,11 @@ def built_on() -> str:
     """A build shows the day its exe was made; running from source says so."""
     if getattr(sys, "frozen", False):
         try:
-            return datetime.fromtimestamp(Path(sys.executable).stat().st_mtime).strftime("%b %d %Y")
+            exe = sys.executable
+            if os.name != "nt":         # an AppImage: the date of the AppImage file, not of its temporary mount
+                from . import linuxdesk
+                exe = linuxdesk.installed_exe() or exe
+            return datetime.fromtimestamp(Path(exe).stat().st_mtime).strftime("%b %d %Y")
         except OSError:
             return "unknown"
     return "source"

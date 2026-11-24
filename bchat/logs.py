@@ -120,7 +120,10 @@ def parse_line(raw: str, stamp_format: str, f: LogFile | None = None) -> tuple[f
     h = mi = s = 0
     if stamp:
         try:
-            st = time.strptime(stamp.strip(), stamp_format.strip())
+            got, fmt = stamp.strip(), stamp_format.strip()
+            if not re.search(r"%[Yy]", fmt):    # Python 3.15 refuses %d without a year; the year also lets 29 Feb parse
+                got, fmt = f"{y} {got}", f"%Y {fmt}"
+            st = time.strptime(got, fmt)
             if re.search(r"%[bBmh]", stamp_format) and not (f is not None and f.day):
                 mo = st.tm_mon
             if "%d" in stamp_format and not (f is not None and f.day):

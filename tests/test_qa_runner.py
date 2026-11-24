@@ -75,8 +75,13 @@ def test_missing_exe_through_the_command_line(tmp_path):
     run = next(p for p in tmp_path.iterdir() if p.is_dir())
     rep = json.loads((run / "report.json").read_text())
     assert rc == 1 and rep["overall"] == "FAIL"
-    assert {s["name"]: s["status"] for s in rep["stages"]} == {"build-check": "NOT RUN", "packaged": "NOT RUN"}
-    assert all("no BChat.exe" in s["reason"] for s in rep["stages"])
+    got = {s["name"]: (s["status"], s["reason"]) for s in rep["stages"]}
+    if qa.LINUX:       # Linux mode: the installer check is Windows only, the AppImage is what's missing
+        assert got["build-check"][0] == "SKIP" and "Windows only" in got["build-check"][1]
+        assert got["packaged"][0] == "NOT RUN" and "no AppImage" in got["packaged"][1]
+    else:
+        assert {k: v[0] for k, v in got.items()} == {"build-check": "NOT RUN", "packaged": "NOT RUN"}
+        assert all("no BChat.exe" in v[1] for v in got.values())
 
 
 def test_timeout_kills_the_child(tmp_path):

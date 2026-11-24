@@ -3,6 +3,7 @@ The file logic runs on every OS against throwaway XDG folders; the real desktop 
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -243,3 +244,88 @@ def test_start_syncs_menu_entry_on_linux(app, tmp_path, monkeypatch):
     win.check_autostart()
     assert seen == [(True, True, "/opt/BChat.AppImage")]
     win.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the AppImage is Linux only")
+def test_appimage_portable_folder_and_build_date_follow_the_appimage_file(tmp_path, monkeypatch):
+    """An AppImage runs from a read-only temporary mount: BChat-data and the build date go by the AppImage file."""
+    import sys
+    from bchat import about
+    from bchat.__main__ import portable_dir
+    mount = tmp_path / ".mount_BChatXY"
+    mount.mkdir()
+    img = tmp_path / "apps" / "BChat-0.9.0-x86_64.AppImage"
+    img.parent.mkdir()
+    img.write_bytes(b"\x7fELF")
+    os.utime(img, (1_700_000_000, 1_700_000_000))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(mount / "BChat"))
+    monkeypatch.setenv("APPIMAGE", str(img))
+    assert portable_dir(True) == img.parent / "BChat-data"
+    assert portable_dir(False) is None
+    (img.parent / "portable.txt").write_text("")
+    assert portable_dir(False) == img.parent / "BChat-data"
+    from datetime import datetime
+    assert about.built_on() == datetime.fromtimestamp(1_700_000_000).strftime("%b %d %Y")
+
+
+def test_programs_bchat_starts_get_the_desktops_own_libraries(monkeypatch):
+    # the packaged app's bootloader points LD_LIBRARY_PATH at the bundle; children (speech-dispatcher, xdg-open)
+    # crash on its older glib, so it goes back to the user's own value, or away when there was none
+    monkeypatch.setattr(linuxdesk, "SUPPORTED", True)
+    monkeypatch.setattr(linuxdesk.sys, "frozen", True, raising=False)
+    env = {"LD_LIBRARY_PATH": "/tmp/.mount_BChat/usr/lib/bchat/_internal", "PATH": "/usr/bin"}
+    linuxdesk.own_libs_for_children(env)
+    assert env == {"PATH": "/usr/bin"}
+    env = {"LD_LIBRARY_PATH": "/tmp/.mount_BChat/usr/lib/bchat/_internal", "LD_LIBRARY_PATH_ORIG": "/opt/mine/lib"}
+    linuxdesk.own_libs_for_children(env)
+    assert env == {"LD_LIBRARY_PATH": "/opt/mine/lib"}
+    # from source (not frozen) and on Windows nothing changes
+    monkeypatch.setattr(linuxdesk.sys, "frozen", False, raising=False)
+    env = {"LD_LIBRARY_PATH": "/opt/dev/lib"}
+    linuxdesk.own_libs_for_children(env)
+    assert env == {"LD_LIBRARY_PATH": "/opt/dev/lib"}
+    monkeypatch.setattr(linuxdesk.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(linuxdesk, "SUPPORTED", False)
+    linuxdesk.own_libs_for_children(env)
+    assert env == {"LD_LIBRARY_PATH": "/opt/dev/lib"}
+
+
+def test_sound_backend_falls_back_when_pipewire_has_no_client_conf(tmp_path, monkeypatch):
+    # Qt's PipeWire backend segfaults at the first sound when libpipewire is there but client.conf is not
+    monkeypatch.setattr(linuxdesk, "SUPPORTED", True)
+    empty, full = tmp_path / "empty", tmp_path / "full"
+    empty.mkdir(); full.mkdir()
+    (full / "client.conf").write_text("context.properties = {}\n")
+    env = {}
+    linuxdesk.safe_sound_backend(env, [empty])
+    assert env == {"QT_AUDIO_BACKEND": "pulseaudio"}
+    env = {}
+    linuxdesk.safe_sound_backend(env, [empty, full])
+    assert env == {}                                             # a normal desktop: Qt chooses as it likes
+    env = {"QT_AUDIO_BACKEND": "pipewire"}
+    linuxdesk.safe_sound_backend(env, [empty])
+    assert env == {"QT_AUDIO_BACKEND": "pipewire"}               # the user's own choice wins
+    monkeypatch.setattr(linuxdesk, "SUPPORTED", False)
+    env = {}
+    linuxdesk.safe_sound_backend(env, [empty])
+    assert env == {}                                             # Windows: never
+
+
+def test_pipewire_looks_where_pipewire_looks(tmp_path):
+    dirs = linuxdesk.pipewire_conf_dirs({"PIPEWIRE_CONFIG_DIR": "/opt/pw", "XDG_CONFIG_HOME": str(tmp_path)})
+    assert dirs == [Path("/opt/pw"), tmp_path / "pipewire", Path("/etc/pipewire"), Path("/usr/share/pipewire")]
+    assert linuxdesk.pipewire_conf_dirs({"HOME": "/home/b"})[0] == Path("/home/b/.config/pipewire")
+
+
+def test_wayland_desktops_run_bchat_through_xwayland(monkeypatch):
+    # Wayland ignores where an app puts its windows: KDE centred the notification cards (seen 11-25, Fedora 45)
+    monkeypatch.setattr(linuxdesk, "SUPPORTED", True)
+    kde = {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0", "XDG_SESSION_TYPE": "wayland"}
+    assert linuxdesk.platform_args(kde) == ["-platform", "xcb"]
+    assert linuxdesk.platform_args({"XDG_SESSION_TYPE": "wayland", "DISPLAY": ":1"}) == ["-platform", "xcb"]
+    assert linuxdesk.platform_args(dict(kde, QT_QPA_PLATFORM="wayland")) == []      # the user's own choice wins
+    assert linuxdesk.platform_args({"WAYLAND_DISPLAY": "wayland-0"}) == []           # no XWayland: native Wayland
+    assert linuxdesk.platform_args({"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"}) == []   # X11 desktop: Qt's own pick
+    monkeypatch.setattr(linuxdesk, "SUPPORTED", False)
+    assert linuxdesk.platform_args(kde) == []                                         # Windows: never

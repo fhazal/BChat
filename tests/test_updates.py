@@ -247,7 +247,8 @@ def test_blocked_installer_offers_the_download_page(app, tmp_path, server):
     u.download()
     assert wait(app, lambda: u.state == up.READY)
     assert not u.install(restart=True)
-    assert u.state == up.FAILED and "Antivirus" in u.reason and u.download_page()
+    said = "couldn't replace its AppImage" if up.LINUX else "Antivirus"
+    assert u.state == up.FAILED and said in u.reason and u.download_page()
 
 
 # --- the window -----------------------------------------------------------------------
@@ -357,7 +358,7 @@ def test_quit_runs_a_ready_installer_and_install_now_restarts(app, tmp_path, ser
     assert launched == [True] and quits == [True]
     # settings saved before the installer ran, with the ready file noted
     saved = json.loads((tmp_path / "wcfg" / "config.json").read_text(encoding="utf-8"))
-    assert saved["update_ready_file"].endswith("BChat-0.1.1-setup.exe")
+    assert saved["update_ready_file"].endswith("BChat-0.1.1-x86_64.AppImage" if up.LINUX else "BChat-0.1.1-setup.exe")
 
 
 def test_preferences_update_options_save(app, tmp_path, win):

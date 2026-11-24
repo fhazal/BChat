@@ -11,6 +11,10 @@ dev-tools/make_manifest.py writes it and signs with the release key, which never
 On GitHub, UPDATE_URL is the repository's releases list (the GitHub API). Each release carries one asset,
 bchat-update.json, holding that release's single signed entry; stable releases are normal releases and TEST
 builds are pre-releases. BChat picks the newest release it wants from the list, then reads only that one asset.
+
+Linux (the AppImage): the same, with its own asset bchat-update-linux.json, and the signature also covers the
+word "linux", so a Linux entry never checks out on Windows or the other way round. Installing = swapping the
+AppImage file in place (same name, so menu entries and shortcuts keep working), then starting it again.
 """
 from __future__ import annotations
 
@@ -19,6 +23,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -31,7 +36,8 @@ from . import full_version
 
 # Where updates are listed: the GitHub releases of fhazal/BChat (a plain manifest URL works too).
 UPDATE_URL = "https://api.github.com/repos/fhazal/BChat/releases?per_page=30"
-UPDATE_ASSET = "bchat-update.json"
+LINUX = sys.platform.startswith("linux")
+UPDATE_ASSET = "bchat-update-linux.json" if LINUX else "bchat-update.json"
 PUBLIC_KEY = "ARhI0vJdhDtK1QX6sN1F7jKkLS0mataG0pUi7uN2830="
 DAY_MS = 24 * 3600 * 1000
 RETRY_MS = 3600 * 1000
@@ -54,15 +60,18 @@ def is_test(v: str) -> bool:
     return version_key(v)[1:] != (1, 0) and version_key(v)[0] != ()
 
 
-def signed_text(entry: dict) -> bytes:
-    return f"{entry.get('version', '')}\n{entry.get('sha256', '').lower()}".encode()
+def signed_text(entry: dict, linux: bool | None = None) -> bytes:
+    """What the release key signs. Linux entries add a 'linux' line: decided by the BChat reading it, never by the
+    entry, so a Windows BChat can't be handed a Linux download (or the other way round)."""
+    text = f"{entry.get('version', '')}\n{entry.get('sha256', '').lower()}"
+    return (text + "\nlinux" if (LINUX if linux is None else linux) else text).encode()
 
 
-def signature_ok(entry: dict, key_b64: str | None = None) -> bool:
+def signature_ok(entry: dict, key_b64: str | None = None, linux: bool | None = None) -> bool:
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         key = Ed25519PublicKey.from_public_bytes(base64.b64decode(key_b64 or PUBLIC_KEY))
-        key.verify(base64.b64decode(entry.get("sig", "")), signed_text(entry))
+        key.verify(base64.b64decode(entry.get("sig", "")), signed_text(entry, linux))
         return True
     except Exception:
         return False
@@ -109,6 +118,36 @@ def launch_installer(path: str, restart: bool) -> None:
     subprocess.Popen(args, close_fds=True, creationflags=flags)
 
 
+def swap_appimage(path: str, restart: bool, target: str | None = None, wait_pid: int | None = None) -> None:
+    """Linux: the downloaded AppImage takes the running one's place, under the same name (menu entries, autostart and
+    the user's own shortcuts keep pointing at it). The copy is checked against the download before it replaces
+    anything, and the swap is one rename, so a failure leaves the old AppImage as it was. The running BChat is
+    unaffected (it runs from the old file's mount). With restart, the new one starts once this BChat has quit."""
+    from . import linuxdesk
+    target = Path(target or linuxdesk.installed_exe() or "")
+    if not target.name:
+        raise OSError(2, "no AppImage to replace")
+    new = target.with_name(f".{target.name}.new")
+    try:
+        shutil.copyfile(path, new)
+        os.chmod(new, 0o755)
+        if _sha256(new) != _sha256(Path(path)):
+            raise OSError(5, "the copy didn't match the download")
+        os.replace(new, target)
+    except OSError:
+        try:
+            new.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    if restart:
+        # wait for this BChat to be gone, so the new one never connects next to it (twice on a ZNC, nick clashes)
+        subprocess.Popen(["/bin/sh", "-c", 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; exec "$2"',
+                          "bchat-restart", str(wait_pid or os.getpid()), str(target)],
+                         cwd=str(target.parent), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+
+
 class Updater(QObject):
     changed = Signal()
 
@@ -125,8 +164,12 @@ class Updater(QObject):
         self.manual = False
         self.install_after = False        # Install Now pressed before the download finished
         self._download_after_check = False
-        self.launcher = launch_installer
-        self.can_install = getattr(sys, "frozen", False)
+        self.launcher = swap_appimage if LINUX else launch_installer
+        if LINUX:                               # only a running AppImage has a file to swap
+            from . import linuxdesk
+            self.can_install = getattr(sys, "frozen", False) and linuxdesk.installed_exe() is not None
+        else:
+            self.can_install = getattr(sys, "frozen", False)
         self.net = QNetworkAccessManager(self)
         self._reply: QNetworkReply | None = None
         self._asking: QNetworkReply | None = None     # the check request still out (release list or its update file)
@@ -307,7 +350,8 @@ class Updater(QObject):
         if self.state == DOWNLOADING or not self.entry:
             return
         self.dir.mkdir(parents=True, exist_ok=True)
-        name = re.sub(r"[^A-Za-z0-9._-]", "_", f"BChat-{self.entry['version']}-setup.exe")
+        name = re.sub(r"[^A-Za-z0-9._-]", "_", f"BChat-{self.entry['version']}-x86_64.AppImage" if LINUX
+                      else f"BChat-{self.entry['version']}-setup.exe")
         self._target = self.dir / name
         self._part = self.dir / (name + ".part")
         try:
@@ -389,7 +433,8 @@ class Updater(QObject):
             return self.download(install_after=True)
         if not self.can_install:
             self.install_after = False
-            return self._set(FAILED, "Only an installed BChat can update itself. This one runs from source.")
+            return self._set(FAILED, "Only the BChat AppImage can update itself. This one runs from source." if LINUX
+                             else "Only an installed BChat can update itself. This one runs from source.")
         self.install_requested.emit()
 
     def install(self, restart: bool) -> bool:
@@ -400,8 +445,17 @@ class Updater(QObject):
         try:
             self.launcher(path, restart)
         except OSError as e:
-            self._set(FAILED, f"Windows wouldn't start the installer ({e.strerror}). Antivirus may have blocked it: "
-                              "use Download to get it from the website instead.")
+            if LINUX:
+                from . import linuxdesk
+                where = Path(linuxdesk.installed_exe() or "").parent
+                home = str(Path.home())
+                folder = str(where).replace(home, "~", 1) if str(where).startswith(home) else str(where)
+                why = "no permission" if isinstance(e, PermissionError) else (e.strerror or str(e)).lower()
+                self._set(FAILED, f"BChat couldn't replace its AppImage in {folder} ({why}). "
+                                  "Use Download to get the new one from the website.")
+            else:
+                self._set(FAILED, f"Windows wouldn't start the installer ({e.strerror}). Antivirus may have blocked it: "
+                                  "use Download to get it from the website instead.")
             return False
         return True
 

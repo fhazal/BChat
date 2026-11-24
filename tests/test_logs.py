@@ -32,6 +32,9 @@ def test_parse_line_reads_back_what_was_written(tmp_path):
     # a monthly file takes the day from the stamp
     m = logs.LogFile(tmp_path / "x.log", "Libera", "#bchat", 2026, 11, 0)
     assert time.localtime(logs.parse_line("Nov 21 08:00:00 Belon\tx", "%b %d %H:%M:%S ", m)[0])[:3] == (2026, 11, 21)
+    # 29 Feb in a leap year's monthly file (a stamp with no year parses with the file's year)
+    leap = logs.LogFile(tmp_path / "y.log", "Libera", "#bchat", 2028, 2, 0)
+    assert time.localtime(logs.parse_line("Feb 29 23:59:00 Belon\tx", "%b %d %H:%M:%S ", leap)[0])[:5] == (2028, 2, 29, 23, 59)
 
 
 def test_line_kinds():

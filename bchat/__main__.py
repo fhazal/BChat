@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -62,6 +63,10 @@ def portable_dir(flag: bool) -> Path | None:
     """0.6.0 portable BChat: -portable, or a file named portable.txt next to BChat.exe ->
     settings, logs and downloads in BChat-data next to it."""
     exe_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
+    if os.name != "nt":                 # an AppImage runs from a read-only mount: BChat-data goes next to the AppImage file
+        from . import linuxdesk
+        if img := linuxdesk.installed_exe():
+            exe_dir = Path(img).parent
     if flag or (exe_dir / "portable.txt").exists():
         return exe_dir / "BChat-data"
     return None
@@ -127,6 +132,9 @@ class AlwaysUnderline(QProxyStyle):
 
 
 def main(argv: list[str] | None = None) -> int:
+    from . import linuxdesk
+    linuxdesk.own_libs_for_children()     # Linux AppImage: speech, links and /exec get the desktop's own libraries
+    linuxdesk.safe_sound_backend()        # Linux without PipeWire's config: Qt's PipeWire sound would crash
     ap = argparse.ArgumentParser(prog="bchat")
     ap.add_argument("--config-dir", type=Path, default=config.default_dir())
     ap.add_argument("--no-autoconnect", action="store_true")
@@ -144,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         config.PORTABLE = True
     link = args.link if args.link.lower().startswith(("irc://", "ircs://")) else ""
 
-    app = QApplication(sys.argv[:1])
+    app = QApplication(sys.argv[:1] + linuxdesk.platform_args())    # Linux Wayland: X11 so cards sit in the corner
     if link and hand_to_running(args.config_dir, link):
         return 0
     app.setStyle(AlwaysUnderline("Fusion"))

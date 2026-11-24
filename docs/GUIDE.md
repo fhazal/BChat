@@ -1,6 +1,6 @@
 # BChat guide
 
-How to do things in BChat, the calm IRC client for Windows by BajuBesi Labs. Every answer below matches what BChat really does. Menu paths are written like **Settings → Preferences → Colors**.
+How to do things in BChat, the calm IRC client for Windows and Linux by BajuBesi Labs. Every answer below matches what BChat really does. Menu paths are written like **Settings → Preferences → Colors**.
 
 New to IRC? Start with [Getting started](#getting-started). Something not working? Jump to [When something goes wrong](#when-something-goes-wrong).
 
@@ -12,7 +12,10 @@ New to IRC? Start with [Getting started](#getting-started). Something not workin
 IRC is one of the oldest ways to chat on the internet. You join a **network** (a group of servers, like Libera.Chat or BajuBesi Community), then **channels** on it (rooms whose names start with `#`, like `#BChat`). You pick a **nickname**. No account or phone number is needed.
 
 ### Is BChat on Mac or Linux?
-No. BChat is made for **Windows 10 and 11**. There is no Mac or Linux version.
+Linux, yes: BChat runs on **Windows 10 and 11** and on **Linux** (Ubuntu 22.04 or newer, Fedora and other current 64-bit distros). There is no Mac version.
+
+### How do I install BChat on Linux?
+Download **`BChat-x86_64.AppImage`** from the [Releases](https://github.com/fhazal/BChat/releases/latest) page and put it somewhere in your home folder, like `~/Applications`. Make it runnable (right-click → **Properties** → **Allow executing as a program** / **Is executable**, or `chmod +x BChat-x86_64.AppImage`) and double-click it. Nothing gets installed. To find BChat in your app menu next time, tick **Settings → Preferences → General → Add BChat to the app menu**.
 
 ### What happens the first time I open BChat?
 If BChat finds no networks, it shows the **Welcome** window: type a nickname, pick where to start, and click **Connect**.
@@ -191,7 +194,7 @@ Yes: in **Window → Friends List...**, pick a friend and click **Edit...**. Wri
 First turn it on in **Settings → Preferences → Now Playing**, then type `/np` in a channel. It's off at first, shares only music (no videos), and shows you the line before it's sent. To announce every new song, right-click in a channel and choose **Share → Announce Songs Here**.
 
 ### How do I share my PC specs?
-Type `/sysinfo` in a channel: one line with Windows, CPU, memory, disks, graphics card and uptime. `/sysinfo -e` shows it only to you. It never includes your PC name, user name or IP address.
+Type `/sysinfo` in a channel: one line with your system (the Windows version, or the Linux distro and kernel), CPU, memory, disks, graphics card and uptime. `/sysinfo -e` shows it only to you. It never includes your PC name, user name or IP address.
 
 ### How do I run a command later, or make my own commands?
 `/timer 1 60 Back in a minute!` sends that line once after 60 seconds. `/timer news 0 600 /msg #chat Read the news` repeats every 10 minutes until `/timer news off`. `/timers` lists your timers. `/alias hi /say Hello $1!` makes a new command: `/hi Belon` says "Hello Belon!". Use `$1`, `$2-`, `$nick`, `$chan`, `$me`, `$network`, and `|` between commands. `/alias` alone lists yours.
@@ -234,7 +237,7 @@ Yes: **Settings → Preferences → Sound → Speech**. Tick **Read highlights a
 Yes: **Settings → Preferences → Alerts**, in the row **Show pop-up notifications on:**, untick what you don't want (channel messages, private messages, highlights).
 
 ### Will cards pop up while I'm gaming?
-No. BChat stays quiet while Windows says you're busy: full-screen games, presentations, and Focus / Do Not Disturb. Messages still make the tray icon blink.
+On Windows, no. BChat stays quiet while Windows says you're busy: full-screen games, presentations, and Focus / Do Not Disturb. Messages still make the tray icon blink. On Linux BChat can't see that yet, so cards still pop up: turn them off in **Settings → Preferences → Alerts** while you play.
 
 ### How do I make BChat quiet for a while?
 Right-click the tray icon and tick **Do not disturb**, or type `/donotdisturb on`. Until you turn it off again, BChat plays no sounds and shows no pop-up cards, and the taskbar button and tray icon don't flash. Messages still arrive and still colour their tabs. `/donotdisturb` alone says whether it's on.
@@ -248,8 +251,8 @@ BChat never floods your screen. Messages from the same person update one card, a
 ### What's in the tray icon's menu?
 Right-click the tray icon: **Show BChat**, then your open channels and private chats by network. Bold with a number means unread lines, **@** means someone said your nick. Click one to open BChat right there. Below them: **Away** (sets you away on every network; untick to come back), **Do not disturb**, **Preferences...** and **Quit**. Hovering the tray icon shows how many lines are unread. To open BChat with a double-click instead of one click, or to hide the list, see **Settings → Preferences → Alerts → Tray icon**.
 
-### Can BChat start with Windows?
-Yes: **Settings → Preferences → General → Start with Windows**. Next to **When BChat starts**, choose **Minimized** or **In the tray** if you want it to start quietly: in the tray, BChat connects and stays out of sight until you click the tray icon.
+### Can BChat start with Windows (or when I log in on Linux)?
+Yes: **Settings → Preferences → General → Start with Windows**. Next to **When BChat starts**, choose **Minimized** or **In the tray** if you want it to start quietly: in the tray, BChat connects and stays out of sight until you click the tray icon. On Linux the box is called **Start when I log in**; it, **Add BChat to the app menu** and **Open irc:// and ircs:// links with BChat** work in the AppImage (not when BChat runs from source).
 
 ---
 
@@ -289,7 +292,7 @@ Yes: in that channel type `/font 12 Consolas` (size, then font name). Only that 
 ## Safety and privacy
 
 ### Where does BChat keep my passwords?
-In **Windows Credential Manager**, not in a settings file. That covers server, SASL, NickServ and proxy passwords. Your settings file (`%APPDATA%\BChat\config.json`) holds no passwords.
+In **Windows Credential Manager**, not in a settings file. That covers server, SASL, NickServ and proxy passwords. Your settings file (`%APPDATA%\BChat\config.json`) holds no passwords. On Linux they go to your desktop's keyring (GNOME Keyring, KDE Wallet or KeePassXC) as **BChat IRC passwords**. If no keyring answers, BChat says so and keeps no passwords at all (you type them again next time); it never writes them to a file.
 
 ### Can I log in without a password?
 Yes, with a certificate (SASL EXTERNAL), on networks whose services support it (Anope and Atheme do). Open the network's **Edit...** window and set **Log in with:** to **Certificate (SASL EXTERNAL)**:
@@ -332,7 +335,7 @@ A safer way to log in with SASL. When a network offers it, BChat uses it by itse
 Yes: **Settings → Preferences → Lock → Set Password...**. Then BChat asks for the password when it starts, and you can limit it: **No file transfers or direct chats**, **No new private chats** (they show in the server tab), and **Only these channels**. Changing the lock needs the password. Forgot it? Delete `lock.json` in BChat's settings folder: the lock is a house rule, not a safe.
 
 ### Can I run BChat from a USB stick?
-Yes, in portable mode: start `BChat.exe -portable`, or put an empty file named `portable.txt` next to `BChat.exe`. Settings, logs and downloads then go into a **BChat-data** folder next to the program. Passwords aren't stored in Windows; with a Lock password they are sealed with it, otherwise BChat doesn't keep them.
+Yes, in portable mode: start `BChat.exe -portable`, or put an empty file named `portable.txt` next to `BChat.exe`. Settings, logs and downloads then go into a **BChat-data** folder next to the program. Passwords aren't stored in Windows; with a Lock password they are sealed with it, otherwise BChat doesn't keep them. On Linux it works the same with the AppImage: put `portable.txt` next to `BChat-x86_64.AppImage` and **BChat-data** appears beside it.
 ## Files and direct chats (DCC)
 
 ### How do I send someone a file?
@@ -428,7 +431,7 @@ BChat isn't code-signed yet, and some antivirus programs distrust unsigned apps.
 Check **Settings → Preferences → Alerts → Show pop-up notifications on:**. Also check that Windows Focus / Do Not Disturb is off, and that you're not in a full-screen game: BChat stays quiet then on purpose.
 
 ### Where are my settings, logs and downloads?
-In `%APPDATA%\BChat`: `config.json` (settings and networks, no passwords), `logs\`, `scrollback\`, `addons\` (scripts), `downloads\` (files received over DCC). Passwords are in Windows Credential Manager under entries named `BChat:...`.
+In `%APPDATA%\BChat`: `config.json` (settings and networks, no passwords), `logs\`, `scrollback\`, `addons\` (scripts), `downloads\` (files received over DCC). Passwords are in Windows Credential Manager under entries named `BChat:...`. On Linux: `~/.config/BChat/` with the same files, and passwords in your keyring.
 
 ### How do I report a bug or ask for help?
 In BChat 0.3.0 and newer: **Help → Report a Problem...**, pick what happened and click **Send**. BChat adds the details for you and hides names and addresses; **See what's sent** shows every word first. After a crash or a freeze, BChat offers this by itself on the next start. You can also ask in **#BChat** on irc.bajubesi.org (people there and the Buzz helper bot can help), in the BChat forum on bajubesi.org, or open an issue on [GitHub](https://github.com/fhazal/BChat/issues).

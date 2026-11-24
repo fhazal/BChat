@@ -25,6 +25,7 @@ import importlib.util
 import json
 import os
 import platform
+import shutil
 import signal
 import subprocess
 import sys
@@ -39,7 +40,8 @@ sys.path.insert(0, str(QA))
 from qa_common import exe_version, sha256  # noqa: E402
 
 DATA = QA / "data"
-ORDER = ["build-check", "tests", "protocol", "irc", "audit", "packaged", "ui", "perf"]
+LINUX = sys.platform.startswith("linux")    # Linux mode: the packaged stage checks the AppImage (frozen_linux.py)
+ORDER =["build-check", "tests", "protocol", "irc", "audit", "packaged", "ui", "perf"]
 IRC_TESTS = ["tests/test_live.py", "tests/test_040.py", "tests/test_060.py", "tests/test_060c.py",
              "tests/test_safety.py", "tests/test_comfort.py", "tests/test_welcome.py", "tests/test_qa_ircd.py"]
 PROTOCOL_TESTS = ["tests/test_core.py", "tests/test_irclink.py", "tests/test_conformance.py"]
@@ -150,6 +152,14 @@ def plan(names: list[str], a, run_dir: Path) -> list[Stage]:
                        needs_files=[QA / f"{tool}.py"], result_json=res / "packaged" / f"{tool}.json",
                        baseline_key=f"packaged:{tool}"))
     stages["packaged"] = Stage("packaged", "Packaged app: the built BChat.exe with throwaway settings", heavy=True, steps=pk)
+    if LINUX:                                  # the AppImage: bundle, X11, Wayland, keyring, portable (own D-Bus session)
+        fl = QA / "frozen_linux.py"
+        cmd = [py, str(fl), *common, "--out", str(res / "packaged")]
+        if shutil.which("dbus-run-session"):
+            cmd = ["dbus-run-session", "--", *cmd]
+        stages["packaged"] = Stage("packaged", "Packaged app: the built AppImage with throwaway settings", heavy=True, steps=[
+            Step("frozen_linux", cmd, timeout=900, needs_files=[fl], result_json=res / "packaged" / "frozen_linux.json",
+                 baseline_key="packaged:frozen_linux")])
 
     bc = [py, str(QA / "build_check.py"), *common, "--out", str(res / "build-check")]
     for opt in ("installer", "pyi_log", "iscc_log", "spec"):
@@ -171,11 +181,28 @@ def plan(names: list[str], a, run_dir: Path) -> list[Stage]:
 
     for s in ("packaged", "build-check", "perf"):
         if not exe_ok:
-            stages[s].not_run_reason = f"no BChat.exe at {exe} (build it, or pass --exe)"
+            stages[s].not_run_reason = (f"no AppImage at {exe} (bash packaging/build-linux.sh <version>, then --exe)"
+                                        if LINUX else f"no BChat.exe at {exe} (build it, or pass --exe)")
+    if LINUX:                                  # installer + perf tools drive Windows (Inno Setup, Win32 windows)
+        for s in ("build-check", "perf"):
+            stages[s].skip_reason = "Windows only (the installer and perf tools); run them in the Windows QA"
     return [stages[n] for n in ORDER if n in names]
 
 
 # ---- environment ----------------------------------------------------------------------------------------------
+
+def linux_machine() -> dict:
+    """CPU and RAM from /proc (Linux has no PowerShell for the Windows lines)."""
+    cpu = ram = ""
+    try:
+        cpu = next((ln.split(":", 1)[1].strip() for ln in Path("/proc/cpuinfo").read_text().splitlines()
+                    if ln.startswith("model name")), "")
+        kb = next((int(ln.split()[1]) for ln in Path("/proc/meminfo").read_text().splitlines()
+                   if ln.startswith("MemTotal:")), 0)
+        ram = round(kb / 1024 / 1024, 1) if kb else ""
+    except (OSError, ValueError, IndexError):
+        pass
+    return {"cpu": cpu, "ram_gb": ram, "gpu": ""}
 
 def git(*args) -> str:
     try:
@@ -203,7 +230,7 @@ def environment(a) -> dict:
     exe = Path(a.exe)
     changed = [ln for ln in git("status", "--porcelain").splitlines() if ln.strip()]
     vi = (ROOT / "packaging" / "version_info.txt")
-    spec = Path(a.spec) if a.spec else ROOT / "packaging" / "BChat.spec"
+    spec = Path(a.spec) if a.spec else ROOT / "packaging" / ("BChat-linux.spec" if LINUX else "BChat.spec")
     return {
         "source": {"commit": git("rev-parse", "HEAD"), "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
                    "uncommitted_files": len(changed), "dirty": bool(changed)},
@@ -216,9 +243,10 @@ def environment(a) -> dict:
                          "cryptography": version_of("cryptography"), "pyspellchecker": version_of("pyspellchecker"),
                          "pytest": version_of("pytest")},
         "machine": {"python": platform.python_version(), "python_exe": sys.executable, "windows": platform.platform(),
-                    "cpu": ps("(Get-CimInstance Win32_Processor).Name"),
-                    "ram_gb": ps("[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)"),
-                    "gpu": ps("(Get-CimInstance Win32_VideoController | Select-Object -First 1).Name")},
+                    **(linux_machine() if LINUX else {
+                        "cpu": ps("(Get-CimInstance Win32_Processor).Name"),
+                        "ram_gb": ps("[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)"),
+                        "gpu": ps("(Get-CimInstance Win32_VideoController | Select-Object -First 1).Name")})},
     }
 
 

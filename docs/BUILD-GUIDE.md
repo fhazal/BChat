@@ -116,3 +116,59 @@ python tools/qa.py all --exe dist/BChat/BChat.exe   # runs the steps below and w
 - **Packaging change gone wrong:** rebuild with the previous `packaging/BChat.spec`
   from git.
 - **Settings:** BChat ignores unknown keys, so older versions can read newer settings files.
+
+
+## Linux AppImage (0.9.0+)
+
+The Windows build above is unchanged; the Linux build is separate and never touches `packaging/BChat.spec`,
+`build/build-test.sh`, `dist/BChat` or the installer.
+
+**Where:** an Ubuntu 22.04 system (the oldest glibc BChat supports, so the AppImage runs on Ubuntu 22.04+, Fedora
+and other current distros). On the Fedora PC this is a podman container; WSL Ubuntu 22.04 works the same way.
+
+**Needs:** Python 3.12 (deadsnakes PPA on 22.04) in a venv with `PySide6==6.12.0`, pyspellchecker, cryptography,
+jeepney, secretstorage, pytest and `pyinstaller==6.22.3`; `patchelf file binutils desktop-file-utils xdg-utils`;
+Qt's runtime libraries (libgl1, libegl1, libxkbcommon-x11-0, the libxcb-* set, libwayland-*, libfontconfig1,
+libdbus-1-3, libpulse0, libspeechd2); and `appimagetool` (AppImage project, GitHub "continuous" release).
+
+**Build:** from a copy of the source (git-tracked files plus `packaging/BChat-linux.spec`, which `*.spec` in
+`.gitignore` hides, so add it with `git add -f`):
+
+    BCHAT_PY=/opt/bchat-venv/bin/python bash packaging/build-linux.sh <version> [out-dir]
+
+It writes `bchat/assets/version.txt` for the build and removes it after, freezes with
+`packaging/BChat-linux.spec` (drops Qt parts BChat doesn't use and the libraries every desktop already has), builds
+the AppDir (AppRun, `bchat.desktop` with irc/ircs links, icon) and runs appimagetool. Output:
+`<out-dir>/BChat-<version>-x86_64.AppImage` plus its SHA-256. Work files go to `build/linux/` (git-ignored).
+
+**Check:** `python tools/qa.py packaged --exe <AppImage> --expect <version>` on Linux runs `tools/qa/frozen_linux.py`
+in its own D-Bus session: bundle, X11 (Xvfb), Wayland (weston headless), keyring (gnome-keyring), portable mode,
+a DCC file, speech and sound. Run it as a normal user, not root (gnome-keyring refuses root in a container). On
+Linux `build-check` and `perf` are SKIP: they are Windows tools and run in the Windows QA. Before a release, the
+QA runs on Ubuntu 22.04, Ubuntu 24.04 and Fedora, and once on a real desktop.
+
+**Linux-only startup guards** (`bchat/linuxdesk.py`, no effect on Windows): programs BChat starts get the
+desktop's own `LD_LIBRARY_PATH`, not the bundle's (else Fedora's speech-dispatcher and xdg-open crash on the older
+bundled glib); and without PipeWire's `client.conf` BChat tells Qt to use its PulseAudio sound backend (Qt's
+PipeWire backend crashes there).
+
+**Updates (Linux):** the AppImage updates itself (`bchat/updater.py`, Linux only): it reads its own
+`bchat-update-linux.json` from the GitHub release (Windows keeps `bchat-update.json`), and that signature also
+covers the word `linux`, so neither system ever accepts the other's file. Install = the AppImage file is replaced
+in place under the same name (menu entries, autostart and shortcuts keep working), then BChat starts again once the
+old one has quit. Check it with a real TEST-to-TEST update (local server, throwaway key, nothing online):
+
+    dbus-run-session -- python3 tools/qa/update_linux.py --exe <TEST1.AppImage> --new <TEST2.AppImage> --out <dir>
+
+(add `--desktop` to run it on a real desktop, where the AppImage is FUSE-mounted as users get it).
+
+**Release (Linux), next to the Windows files:**
+
+1. Upload the AppImage under the version-free name **`BChat-x86_64.AppImage`** (the build's versioned file,
+   renamed): an update keeps the file name, so the name must not carry a version.
+2. Sign it: `python dev-tools/make_manifest.py --linux BChat-x86_64.AppImage <version> <url of that asset> [--test]`
+   (same release key; writes `dist/bchat-update-linux.json` and `dist/latest-linux.json`, never the Windows files).
+3. Upload `bchat-update-linux.json` to the same release.
+
+**Every release:** VirusTotal on the AppImage too; never distribute an AppImage built on a newer distro (Fedora
+builds only run on that Fedora version or newer).
