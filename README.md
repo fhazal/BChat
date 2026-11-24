@@ -33,10 +33,19 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 
 ---
 
-## 🆕 What's new in 0.8.9
+## 🆕 What's new in 0.8.10
+
+- 📁 **File transfers has its own place in Settings**: *Settings → File transfers* now holds **Options** and **Trusted people**.
+- 🚫 **Choose who may send you files and direct chats** (*File transfers → Options*): *File offers* and *Direct chat offers* each have Ask me, Accept from trusted people, Accept from everyone or Ignore them. An ignored offer leaves one grey line. `/sreq` and `/creq` set them too.
+- 🔌 **Proxy "Not for:"** (*Settings → Network setup*): list servers that should connect directly, without the proxy.
+- ⌨️ **Commands**: `/updatenl` reloads the nick list, `/queryrn old new` renames a private tab, and `/timer1 ...`, `/timer1 off` or `/timer<name>` give timers a name.
+
+<details><summary>0.8.9</summary>
 
 - 📤 **Passive file sends** (*Settings → File transfers → Send files*: Auto, Normal or Passive): when your router won't let the other side connect to you, the other side's client opens the connection instead. **Auto**, the default, sends passive only when it's needed. `/dcc psend` always sends passive.
 - 🧹 **Lighter over time**: closed windows (Settings, Network List, About and others) are now freed instead of staying in memory until BChat quits.
+
+</details>
 
 <details><summary>0.8.8</summary>
 
