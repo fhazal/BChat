@@ -14,7 +14,6 @@ real IRC client (qa_ircd.IrcTestClient) on the same local server plus a real soc
 import ctypes
 import datetime
 import hashlib
-import msvcrt
 import os
 import re
 import shutil
@@ -23,7 +22,6 @@ import ssl
 import struct
 import threading
 import time
-from ctypes import wintypes
 from pathlib import Path
 
 import pytest
@@ -65,17 +63,22 @@ def settle(secs: float) -> None:
     run_until(lambda: False, secs)
 
 
-_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-_k32.DeviceIoControl.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD, wintypes.LPVOID,
-                                 wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
-_k32.DeviceIoControl.restype = wintypes.BOOL
-_k32.GetCompressedFileSizeW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
-_k32.GetCompressedFileSizeW.restype = wintypes.DWORD
+if os.name == "nt":
+    import msvcrt
+    from ctypes import wintypes
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _k32.DeviceIoControl.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD, wintypes.LPVOID,
+                                     wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
+    _k32.DeviceIoControl.restype = wintypes.BOOL
+    _k32.GetCompressedFileSizeW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
+    _k32.GetCompressedFileSizeW.restype = wintypes.DWORD
 FSCTL_SET_SPARSE = 0x000900C4
 
 
 def allocated(path: Path) -> int:
     """Bytes the file really takes on disk (a sparse file: only the parts written)."""
+    if os.name != "nt":
+        return path.stat().st_blocks * 512
     high = wintypes.DWORD(0)
     low = _k32.GetCompressedFileSizeW(str(path), ctypes.byref(high))
     return (high.value << 32) + low
@@ -86,8 +89,8 @@ def make_sparse(path: Path, size: int, markers) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"")
     with open(path, "r+b") as f:
-        n = wintypes.DWORD(0)
-        if not _k32.DeviceIoControl(msvcrt.get_osfhandle(f.fileno()), FSCTL_SET_SPARSE, None, 0, None, 0,
+        n = wintypes.DWORD(0) if os.name == "nt" else None      # Linux: seeking past the end already leaves a hole
+        if n is not None and not _k32.DeviceIoControl(msvcrt.get_osfhandle(f.fileno()), FSCTL_SET_SPARSE, None, 0, None, 0,
                                     ctypes.byref(n), None):
             pytest.skip(f"this drive can't make sparse files (error {ctypes.get_last_error()})")
         f.seek(size - 1)

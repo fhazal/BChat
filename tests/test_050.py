@@ -288,7 +288,7 @@ def test_cards_for_kick_invite_disconnect_with_one_soft_sound(app, tmp_path, awa
     assert not any(c.kind == "kicked" for c in win.notifier.cards)
     # lost connection: a card; quitting yourself: none
     win.notifier.last_new = 0
-    srv.client.close()
+    srv.drop()
     assert wait(app, lambda: any(c.kind == "disconnect" for c in win.notifier.cards), 6000)
     win.notifier.clear(); wait(app, lambda: not win.notifier.cards, 1000); win.notifier.last_new = 0
     s.disconnect_from_network()                      # you did it yourself: no card

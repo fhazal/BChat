@@ -11,10 +11,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pytest
 import bchat.updater
 bchat.updater.UPDATE_URL = ""      # tests never ask the real GitHub for releases
-import winsound
 SOUNDS_PLAYED: list = []
-winsound.PlaySound = lambda path, flags: SOUNDS_PLAYED.append(path)   # tests never make a sound on the user's PC
 import bchat.sound, bchat.speech                                      # noqa: E401
+try:
+    import winsound
+    winsound.PlaySound = lambda path, flags: SOUNDS_PLAYED.append(path)   # tests never make a sound on the user's PC
+except ImportError:             # Linux: no Windows player, every sound goes through Qt (muted below); note what it plays
+    _qt_media = bchat.sound.Player._media
+    def _noted_media(self, p, volume):
+        SOUNDS_PLAYED.append(str(p))
+        return _qt_media(self, p, volume)
+    bchat.sound.Player._media = _noted_media
 bchat.sound.MUTED = True            # mp3/ogg players really decode, muted
 bchat.speech.ENGINE = "mock"        # Qt's silent speech engine: nothing is read aloud in tests
 import bchat.notify                                                     # noqa: E402

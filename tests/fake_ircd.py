@@ -70,6 +70,16 @@ class FakeIrcd:
             except OSError:
                 pass
 
+    def drop(self):
+        """Cuts the client off. shutdown() first: on Linux a close() alone, while the serve thread still waits in
+        recv(), never sends the goodbye, so BChat would not notice the server is gone."""
+        if self.client:
+            try:
+                self.client.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            self.client.close()
+
     def _serve(self, conn):
         buf = b""
         while not self.stop_flag:

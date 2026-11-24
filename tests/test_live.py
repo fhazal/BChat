@@ -2,6 +2,7 @@
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -226,7 +227,7 @@ def test_garbage_from_server_does_not_crash(live):
 
 def test_reconnects_after_drop(live):
     app, srv, win, s = live
-    srv.client.close()
+    srv.drop()
     assert wait(app, lambda: s.state == "disconnected")
     assert s._reconnect.isActive()
     s.disconnect_from_network()
@@ -568,7 +569,7 @@ def test_session_limit_stops_retrying(live):
     app, srv, win, s = live
     srv.send(":OperServ!s@services.my NOTICE Badaboom :The session limit for your IP 192.168.1.20 has been exceeded.")
     assert wait(app, lambda: any("will not retry" in l.text for l in s.server_buffer.lines))
-    srv.client.close()
+    srv.drop()
     assert wait(app, lambda: s.state == "disconnected")
     wait(app, lambda: False, 200)
     assert not s._reconnect.isActive()
@@ -658,7 +659,7 @@ def test_status_strip_follows_connection_and_op(app, tmp_path):
     srv.send(":Fhazal!f@h MODE #skinhead +v Badaboom")   # voice stays green
     assert wait(app, lambda: "+" in b.users[lower("Badaboom")].prefixes)
     assert win.status_info()[0] == "on"
-    srv.client.close()
+    srv.drop()
     assert wait(app, lambda: s.state == "disconnected")
     assert win.status_info()[0] == "off" and win._status_colour == theme.status_off
     s.disconnect_from_network()
@@ -1158,7 +1159,7 @@ def test_own_nick_greys_while_away(live):
 def test_tab_greys_when_disconnected(live):
     app, srv, win, s = live
     b = s.buffers["#skinhead"]
-    srv.client.close()
+    srv.drop()
     assert wait(app, lambda: s.state == "disconnected")
     assert win.items[id(b)].foreground(0).color().name() == win.cfg.theme.away
     s.disconnect_from_network()
@@ -1461,7 +1462,7 @@ def test_prefs_advanced_reconnect_raw_modes_hide_joins(live):
     srv.send(":Nobody!n@h PART #skinhead :x")
     assert wait(app, lambda: lower("Nobody") not in b.users)
     assert not any("Nobody" in l.text for l in b.lines)
-    srv.client.close()
+    srv.drop()
     assert wait(app, lambda: s.state == "disconnected")
     assert s._reconnect.interval() == 33000 and any("33 seconds" in l.text for l in s.server_buffer.lines)
     s.disconnect_from_network()
@@ -3107,7 +3108,19 @@ QTimer.singleShot(1500, lambda: win().close())
     assert code == 0        # ended by itself after the close button, no tray options on
 
 
+def _desktop_has_tray() -> bool:
+    """Asked of the real desktop in a child (this test process draws offscreen, where Qt never sees a tray)."""
+    if os.name == "nt":
+        return True
+    env = {k: v for k, v in os.environ.items() if k != "QT_QPA_PLATFORM"}
+    probe = "from PySide6.QtWidgets import QApplication, QSystemTrayIcon as T; a = QApplication([]); print(T.isSystemTrayAvailable())"
+    out = subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, text=True, timeout=30).stdout
+    return out.strip() == "True"
+
+
 def test_real_program_survives_in_tray_until_quit(tmp_path):
+    if not _desktop_has_tray():
+        pytest.skip("no tray on this desktop (BChat then keeps the window, which another test covers)")
     probe = PROBE_HEAD + """
 def step1():
     w = win()

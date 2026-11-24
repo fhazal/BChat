@@ -1,7 +1,7 @@
 """Start with Windows: the Run value follows the tick at every start (a throwaway key, never the real Run key)."""
-import winreg
-
 import pytest
+
+winreg = pytest.importorskip("winreg", reason="the Windows Run key; Linux autostart has its own tests")
 
 from bchat import autostart
 

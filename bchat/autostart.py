@@ -5,6 +5,7 @@ the value can vanish behind BChat's back: an antivirus undoing an app's changes,
 Only BChat's own value ("BChat") is ever touched."""
 from __future__ import annotations
 
+import os
 import sys
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -21,6 +22,8 @@ def installed_exe() -> str | None:
 
 
 def current(key_path: str = RUN_KEY) -> str | None:
+    if os.name != "nt":         # the Linux autostart file comes in its own step; until then there is nothing to read
+        return None
     import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
@@ -33,7 +36,7 @@ def current(key_path: str = RUN_KEY) -> str | None:
 def sync(on: bool, exe: str | None, key_path: str = RUN_KEY) -> str:
     """Makes the Run value match the tick. Answers 'added', 'fixed' (pointed elsewhere), 'removed', 'ok' or
     'skipped' (from source). Never raises: a locked registry must not stop BChat starting."""
-    if exe is None:
+    if exe is None or os.name != "nt":
         return "skipped"
     import winreg
     want = command(exe)

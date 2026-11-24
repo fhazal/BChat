@@ -173,8 +173,9 @@ def _start_wrapper(tmp_path):
     fwd = lambda x: str(x).replace("\\", "/")          # forward slashes: no escapes inside the generated script
     w.write_text(WRAPPER.format(qa=fwd(ROOT / "tools" / "qa.py"), tests=fwd(ROOT / "tests"), run=fwd(run), pid=fwd(pid),
                                 lock=fwd(tmp_path / ".l")))
-    p = subprocess.Popen([PY, str(w)], cwd=tmp_path, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+             else {"start_new_session": True})
+    p = subprocess.Popen([PY, str(w)], cwd=tmp_path, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **group)
     end = time.time() + 30
     while not pid.exists() and time.time() < end:
         time.sleep(0.1)
@@ -184,6 +185,11 @@ def _start_wrapper(tmp_path):
 
 
 def _alive(pid):
+    if os.name != "nt":
+        try:
+            return Path(f"/proc/{pid}/stat").read_text().split(") ")[1][0] != "Z"   # a zombie has ended
+        except (OSError, IndexError):
+            return False
     out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
     return str(pid) in out
 
@@ -191,7 +197,7 @@ def _alive(pid):
 def test_interrupt_gives_interrupted_report_and_kills_the_child(tmp_path):
     import signal
     p, run, child = _start_wrapper(tmp_path)
-    p.send_signal(signal.CTRL_BREAK_EVENT)
+    p.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGINT)
     assert p.wait(30) == 130
     rep = json.loads((run / "report.json").read_text())
     assert rep["overall"] == "INTERRUPTED"
@@ -210,7 +216,10 @@ def test_hard_kill_leaves_an_incomplete_report_never_pass(tmp_path):
     rep = json.loads((run / "report.json").read_text())
     assert rep["overall"] == "INCOMPLETE"
     assert "Overall: INCOMPLETE" in (run / "summary.md").read_text()
-    subprocess.run(["taskkill", "/F", "/PID", str(child)], capture_output=True)   # the orphan sleeper
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/PID", str(child)], capture_output=True)   # the orphan sleeper
+    else:
+        os.kill(child, 9)
 
 
 def test_lock_works_across_processes_and_frees_when_the_holder_dies(tmp_path):

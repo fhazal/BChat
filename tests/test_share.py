@@ -1,6 +1,8 @@
 """/sysinfo and /np: what they send, and that /np never shares anything the user didn't allow."""
+import os
 import time
 
+import pytest
 from fake_ircd import FakeIrcd
 
 from bchat import commands, nowplaying, sysinfo
@@ -32,6 +34,7 @@ def live(app, tmp_path, **cfg):
 
 # --- /sysinfo ------------------------------------------------------------------------------
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows facts; the Linux /sysinfo has its own test")
 def test_sysinfo_reads_this_pc_and_never_names_it():
     import getpass, os, socket
     info = sysinfo.collect("0.2.0-TEST30")
@@ -132,6 +135,7 @@ def test_np_only_to_me_and_video_is_never_sent(app, tmp_path):
     win.close(); srv.stop()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Winamp is a Windows program")
 def test_winamp_window_title_is_read(monkeypatch):
     import ctypes
 

@@ -580,6 +580,8 @@ LOCK_KEY: bytes | None = None   # 0.6.0: from the Lock password; seals portable 
 
 
 def default_dir() -> Path:
+    if os.name != "nt":         # Linux: ~/.config/BChat (or wherever XDG_CONFIG_HOME points)
+        return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "BChat"
     return Path(os.environ.get("APPDATA", str(Path.home()))) / "BChat"
 
 

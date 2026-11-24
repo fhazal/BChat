@@ -238,13 +238,17 @@ class HeavyLock:
     def acquire(self) -> str:
         """Lock byte 0 of the lock file (Windows releases it when the process dies). Who holds it is written to a
         separate .info file, because a locked byte can't be read by anyone else."""
-        import msvcrt
         self.path.parent.mkdir(parents=True, exist_ok=True)
         info = self.path.with_suffix(".info")
         self.fh = open(self.path, "a+b")
         self.fh.seek(0)                                    # locking() starts at the file position: always byte 0
         try:
-            msvcrt.locking(self.fh.fileno(), msvcrt.LK_NBLCK, 1)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(self.fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:                                          # Linux: the same "freed when the process dies" lock
+                import fcntl
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             self.fh.close()
             self.fh = None
@@ -258,10 +262,14 @@ class HeavyLock:
 
     def release(self):
         if self.fh:
-            import msvcrt
             try:
                 self.fh.seek(0)
-                msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
             except OSError:
                 pass
             self.fh.close()
@@ -271,7 +279,13 @@ class HeavyLock:
 # ---- running --------------------------------------------------------------------------------------------------
 
 def kill_tree(p: subprocess.Popen):
-    subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
+        return
+    try:                                                   # Linux: the child leads its own session (see run_step)
+        os.killpg(p.pid, signal.SIGKILL)
+    except OSError:
+        pass
 
 
 def read_junit(path: Path) -> dict:
@@ -311,8 +325,9 @@ def run_step(st: Step, logs: Path, interrupted: list) -> None:
     t0 = time.time()
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
     with open(out_p, "w", encoding="utf-8") as so, open(err_p, "w", encoding="utf-8") as se:
-        p = subprocess.Popen(st.cmd, cwd=ROOT, stdout=so, stderr=se, env=env,
-                             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+        group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+                 else {"start_new_session": True})
+        p = subprocess.Popen(st.cmd, cwd=ROOT, stdout=so, stderr=se, env=env, **group)
         try:
             while p.poll() is None:
                 if time.time() - t0 > st.timeout:

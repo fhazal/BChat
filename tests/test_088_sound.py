@@ -2,6 +2,7 @@
 messages and notices aloud) on Settings > Sound, plus /speak. Players run muted and the speech engine is Qt's silent
 "mock" one (conftest.py), so nothing is heard. Loopback sockets only."""
 import json
+import os
 import time
 from pathlib import Path
 
@@ -156,7 +157,8 @@ def test_wav_at_full_volume_plays_as_before(app, player):
     p, said = player
     conftest.SOUNDS_PLAYED.clear()
     assert p.play(str(DATA / "tone.wav"), 100) is True
-    assert conftest.SOUNDS_PLAYED == [str(DATA / "tone.wav")] and p.playing() == 0 and said == []
+    on_qt = 0 if os.name == "nt" else 1      # Windows: the quick .wav path; Linux: the Qt player, like other files
+    assert conftest.SOUNDS_PLAYED == [str(DATA / "tone.wav")] and p.playing() == on_qt and said == []
 
 
 def test_volume_is_applied_everywhere(app, tmp_path, monkeypatch):

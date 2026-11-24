@@ -280,7 +280,7 @@ def test_nick_typed_while_waiting_is_used_on_the_real_reconnect(app):
         s.connect_to_network()
         assert wait(app, lambda: s.state == "connected" and srv.nick == "Belon")
         srv.welcomed, srv.user_seen, srv.nick = False, False, ""
-        srv.client.close()
+        srv.drop()
         assert wait(app, lambda: s.state == "disconnected")
         s.send("NICK", "Neo")
         assert wait(app, lambda: s.state == "connected" and srv.nick == "Neo", 8000)

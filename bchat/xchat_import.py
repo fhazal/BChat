@@ -14,6 +14,8 @@ FLAG_INVALID = 32
 
 
 def default_sources() -> list[Path]:
+    if os.name != "nt":         # Linux: XChat 2 keeps its settings in ~/.xchat2
+        return [p for p in (Path.home() / ".xchat2",) if p.is_dir()]
     appdata = Path(os.environ.get("APPDATA", ""))
     return [p for p in (appdata / "XChat-SE", appdata / "X-Chat 2") if p.is_dir()]
 
