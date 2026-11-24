@@ -646,6 +646,16 @@ class DccManager(QObject):
         """Preferences > File transfers > Trusted people: the whole address must match (a nick alone never does)."""
         return is_trusted(self.cfg, s.net.name, getattr(s, "last_ctcp_prefix", "") or "")
 
+    def _ignored_line(self, s, nick: str, text: str) -> None:
+        """One grey line in the server tab per nick a minute, so a flood of ignored offers stays one line."""
+        seen = self.__dict__.setdefault("_ignored_at", {})
+        key = (id(s), nick.lower(), text.split(" from ", 1)[0])
+        now = time.monotonic()
+        if now - seen.get(key, -999) < 60:
+            return
+        seen[key] = now
+        s.add(s.server_buffer, "info", "*", text)
+
     def _offer_file(self, s, nick, name, ip, port, size, token) -> None:
         # an answer to our passive offer: they listen, we connect. The token and the name pick which one
         if token and port:
@@ -658,6 +668,10 @@ class DccManager(QObject):
         if not self._offer_allowed(s, nick):
             return
         clean = safe_name(name)
+        if self.cfg.dcc_auto == 3:                 # 0.8.10: File offers: Ignore them
+            self._ignored_line(s, nick, f"Ignored a file offer from {nick} ({clean}). "
+                                        "Settings > File transfers > File offers.")
+            return
         why = self.ignore_reason(clean)
         if why:
             s.add(s.server_buffer, "info", "*", f"DCC Send of {clean} from {nick} ignored ({why})")
@@ -865,13 +879,20 @@ class DccManager(QObject):
     def _offer_chat(self, s, nick, ip, port) -> None:
         if not self._offer_allowed(s, nick):
             return
+        how = self.cfg.dcc_chat_auto
+        if how == 3:                               # 0.8.10: Direct chat offers: Ignore them
+            self._ignored_line(s, nick, f"Ignored a direct chat offer from {nick}. "
+                                        "Settings > File transfers > Direct chat offers.")
+            return
         t = self._add(Transfer(self, s, "chat", nick, "chat"))
         t.ip, t.port = ip, port
         t.incoming = True
         s.add(s._front(), "info", "*", f"Received a DCC CHAT offer from {nick}")
         s.notify.emit(s._front(), "priv")
-        if self.cfg.dcc_auto in (1, 2) and self.trusted(s, nick):
-            s.add(s._front(), "info", "*", f"Direct chat with {nick} accepted (trusted).")
+        trusted = self.trusted(s, nick)
+        if how == 1 or how == 2 and trusted:
+            if trusted:
+                s.add(s._front(), "info", "*", f"Direct chat with {nick} accepted (trusted).")
             self.accept(t)
         if self.cfg.dcc_open_chat:
             self.win.open_chats()

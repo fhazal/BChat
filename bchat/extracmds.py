@@ -1,4 +1,4 @@
-"""0.8.8 commands: /userhost, /flush, /linesep and /font.
+"""0.8.8 commands: /userhost, /flush, /linesep and /font. 0.8.10: /creq, /sreq, /updatenl, /queryrn.
 
 commands.run() hands these over by name, like everyday.py; each one prints one short line that says what happened."""
 from __future__ import annotations
@@ -7,10 +7,14 @@ from PySide6.QtGui import QFontDatabase
 
 from . import tabopts
 from .chatview import LINESEP
-from .session import ERROR, INFO, Buffer, Session
+from .session import CHANNEL, ERROR, INFO, QUERY, Buffer, Session
 
-NAMES = ("userhost", "flush", "linesep", "font")
-LOCAL = ("flush", "linesep", "font")          # work without a server
+NAMES = ("userhost", "flush", "linesep", "font", "creq", "sreq", "updatenl", "queryrn")
+LOCAL = ("flush", "linesep", "font", "creq", "sreq")          # work without a server
+
+# Settings > File transfers: what /creq and /sreq set (the same values as the menus)
+OFFER_WORDS = {"ask": 0, "auto": 1, "trusted": 2, "ignore": 3}
+OFFER_SHOWN = {0: "Ask me", 1: "Accept from everyone", 2: "Accept from trusted people", 3: "Ignore them"}
 
 HELP = {
     "userhost": "USERHOST <nick> [<nick>...]: shows the address of up to 5 nicks, and whether they're away",
@@ -18,6 +22,11 @@ HELP = {
     "linesep": "LINESEP: draws a dim line across this window, to mark a spot",
     "font": "FONT [<size>] [<family>]: a font for this window only. /font -d: back to the chat font. "
             "Alone: shows the font",
+    "creq": "CREQ ask|auto|trusted|ignore: what happens to direct chat offers (auto = accept from everyone). "
+            "Alone: shows it",
+    "sreq": "SREQ ask|auto|trusted|ignore: what happens to file offers (auto = accept from everyone). Alone: shows it",
+    "updatenl": "UPDATENL: asks the server for this channel's names again and rebuilds the nick list",
+    "queryrn": "QUERYRN <nick> <newnick>: renames a private tab, for when a nick change wasn't seen",
 }
 
 USERHOST_MAX = 5
@@ -59,7 +68,41 @@ def _refresh(ui, b) -> None:
 
 def run(ui, s: Session, b: Buffer, cmd: str, args: list[str], rest: str) -> None:
     cfg = ui.cfg
-    if cmd == "userhost":
+    if cmd in ("creq", "sreq"):
+        field_, what = ("dcc_chat_auto", "Direct chat offers") if cmd == "creq" else ("dcc_auto", "File offers")
+        if not args:
+            _info(s, b, f"{what}: {OFFER_SHOWN.get(getattr(cfg, field_), 'Ask me')}.")
+        elif args[0].lower() not in OFFER_WORDS:
+            _err(s, b, "Use: " + HELP[cmd].split(":")[0].lower().replace(cmd, "/" + cmd, 1))
+        else:
+            setattr(cfg, field_, OFFER_WORDS[args[0].lower()])
+            ui.save_config()
+            _info(s, b, f"{what}: {OFFER_SHOWN[getattr(cfg, field_)]}. (Settings > File transfers)")
+    elif cmd == "updatenl":
+        chan = args[0] if args else (b.name if b.kind == CHANNEL else "")
+        if not chan:
+            _err(s, b, "/updatenl needs a channel tab.")
+        elif s.state != "connected":
+            _err(s, b, "Not connected. Use Server > Reconnect.")
+        else:
+            s.rebuild_nicklist(chan)
+    elif cmd == "queryrn":
+        if len(args) != 2:
+            _err(s, b, "Use: /queryrn <nick> <newnick>")
+            return
+        found = s.buffers.get(s.fold(args[0]))
+        if found is None or found.kind != QUERY:
+            _err(s, b, f"No private tab called {args[0]}.")
+        elif s.fold(args[1]) in s.buffers and s.fold(args[1]) != s.fold(args[0]):
+            _err(s, b, f"There is already a tab called {args[1]}.")
+        else:
+            old = found.name
+            s.buffers.pop(s.fold(old), None)
+            found.name = args[1]
+            s.buffers[s.fold(args[1])] = found
+            s.buffer_changed.emit(found)
+            _info(s, found, f"Private tab {old} is now {args[1]}.")
+    elif cmd == "userhost":
         if not args:
             _err(s, b, HELP["userhost"])
         elif s.state != "connected":

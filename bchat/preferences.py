@@ -26,6 +26,7 @@ BUILT = ("Flood", "Text box", "Input box", "User list", "Channel switcher", "Win
 SUBPAGES = {"File transfers": ["Trusted people"]}       # shown one level deeper in the tree
 PAGE_FIT = 0.85                                         # the dialog never takes more of the screen's height than this
 SWITCHER_POS = ("Left", "Right", "Top", "Bottom", "Hidden")
+_OFFER_INDEX = {0: 0, 1: 2, 2: 1, 3: 3}   # menu index <-> dcc_auto / dcc_chat_auto value (its own inverse)
 PROXY_KINDS = ("none", "socks5", "http", "socks4", "socks4a")     # the Network setup Type menu, in order
 # 0.8.7 Settings > Windows: (label, saved value)
 SHOW_WHERE = (("Active window", "active"), ("Server tab", "server"), ("Messages tab", "messages"), ("Query, if open", "query"))
@@ -1399,10 +1400,11 @@ class PreferencesDialog(FramedDialog):
         page, lay = self._new_page()
         lay.addWidget(_heading("Files and Directories"))
         g = QGridLayout()
-        self.dcc_auto = self._menu(g, 0, "Auto accept file offers:", ("No, ask me", "From trusted people only", "From everyone"),
-                                   {0: 0, 2: 1, 1: 2}.get(c.dcc_auto, 0))
-        self.dcc_dir = self._folder_row(g, 1, "Download files to:", c.dcc_dir)
-        self.dcc_done = self._folder_row(g, 2, "Move completed files to:", c.dcc_done_dir)
+        how = ("Ask me", "Accept from trusted people", "Accept from everyone", "Ignore them")   # 0.8.10: + chats, Ignore
+        self.dcc_auto = self._menu(g, 0, "File offers:", how, _OFFER_INDEX.get(c.dcc_auto, 0))
+        self.chat_auto = self._menu(g, 1, "Direct chat offers:", how, _OFFER_INDEX.get(c.dcc_chat_auto, 0))
+        self.dcc_dir = self._folder_row(g, 2, "Download files to:", c.dcc_dir)
+        self.dcc_done = self._folder_row(g, 3, "Move completed files to:", c.dcc_done_dir)
         self.dcc_dir.setPlaceholderText(str(self.win.cfg_dir / "downloads"))   # 0.8.6: empty showed no folder at all
         self.dcc_done.setPlaceholderText("Leave them where they were downloaded")
         lay.addLayout(g)
@@ -1573,6 +1575,12 @@ class PreferencesDialog(FramedDialog):
                                      kinds.index(c.proxy_type) if c.proxy_type in kinds else 0)
         self.proxy_host = self._entry(g, 1, "Hostname:", c.proxy_host)
         self.proxy_port = self._number(g, 2, "Port:", c.proxy_port, 0, 65535)
+        self.proxy_skip = self._entry(g, 3, "Not for:", c.proxy_skip)                        # 0.8.10
+        self.proxy_skip.setPlaceholderText("localhost, 127.0.0.1, *.lan")
+        hint = QLabel("These servers connect directly. Commas between names; * stands for any part.")
+        hint.setStyleSheet(f"color: {c.theme.muted};")
+        hint.setWordWrap(True)
+        g.addWidget(hint, 4, 1)
         g.setColumnStretch(1, 1)                       # the Type menu stays left when the rows below hide
         g.setColumnMinimumWidth(0, max(g.itemAtPosition(r, 0).widget().sizeHint().width() for r in range(3)))
         lay.addLayout(g)                               # ...and does not shift right when they show
@@ -1618,9 +1626,11 @@ class PreferencesDialog(FramedDialog):
         """Only the rows that this proxy type uses are shown: none without a proxy, User ID alone for Socks4."""
         kind = PROXY_KINDS[self.proxy_type.currentIndex()]
         on, socks4 = kind != "none", kind in ("socks4", "socks4a")
-        for row in (1, 2):
+        for row in (1, 2, 3, 4):
             for col in (0, 1):
-                self._proxy_grid.itemAtPosition(row, col).widget().setVisible(on)
+                item = self._proxy_grid.itemAtPosition(row, col)
+                if item is not None:                   # the hint row has no label
+                    item.widget().setVisible(on)
         self.proxy_auth.setVisible(on and not socks4)
         login = on and (socks4 or self.proxy_auth.isChecked())
         self._login_grid.itemAtPosition(0, 0).widget().setText("User ID:" if socks4 else "Username:")
@@ -1847,7 +1857,9 @@ class PreferencesDialog(FramedDialog):
         c.connect_timeout = self.connect_timeout.value()
         c.invisible = self.invisible.isChecked()
         c.move_to_top = self.move_top.isChecked()
-        c.dcc_auto = {0: 0, 1: 2, 2: 1}[self.dcc_auto.currentIndex()]
+        c.dcc_auto = _OFFER_INDEX[self.dcc_auto.currentIndex()]
+        c.dcc_chat_auto = _OFFER_INDEX[self.chat_auto.currentIndex()]
+        c.proxy_skip = self.proxy_skip.text().strip()
         c.dcc_trusted = [dict(e) for e in self.trusted]
         c.flood_pace = ("careful", "normal", "fast")[self.flood_pace.currentIndex()]
         c.flood_on, c.flood_ctcp_on = self.flood_on.isChecked(), self.flood_ctcp_on.isChecked()

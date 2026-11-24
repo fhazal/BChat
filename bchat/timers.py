@@ -135,6 +135,17 @@ def listing(s: Session) -> list[str]:
 
 def command(ui, s: Session, b: Buffer, cmd: str, args: list[str], rest: str) -> None:
     say = lambda text, kind=INFO: s.add(b, kind, "*", text)      # noqa: E731
+    if cmd.startswith("timer") and cmd not in ("timer", "timers"):
+        # 0.8.10: /timer5 3 10 say hi, /timer5 off, /timernews ...: the name glued to the command
+        name = cmd[5:]
+        if not args:
+            got = _table(s).get(name.lower())
+            say(f"Timer {got.name}: {_when(got)}: {got.command}" if got else f"No timer called {name}.")
+        elif len(args) == 1 and args[0].lower() == "off":
+            say(f"Timer {name} stopped." if stop(s, name) else f"No timer called {name}.")
+        else:
+            _start_typed(ui, s, b, say, name, rest)
+        return
     if cmd == "timers":
         if args and args[0].lower() == "off":
             n = stop_all(s)
@@ -154,6 +165,10 @@ def command(ui, s: Session, b: Buffer, cmd: str, args: list[str], rest: str) -> 
     first, _, after = rest.partition(" ")
     if first and not first.isdigit():          # /timer news 3 60 ...: a name first
         name, tail = first, after.strip()
+    _start_typed(ui, s, b, say, name, tail)
+
+
+def _start_typed(ui, s, b, say, name: str, tail: str) -> None:
     words = tail.split(None, 2)
     try:
         times, seconds, what = int(words[0]), float(words[1]), words[2]

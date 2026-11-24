@@ -978,7 +978,7 @@ def run(ui, s: Session, b: Buffer, text: str, depth: int = 0) -> None:
         s.disconnect_from_network(rest or None)
     elif cmd == "close":
         ui.close_buffer(b)
-    elif cmd in ("timer", "timers"):
+    elif cmd in ("timer", "timers") or cmd.startswith("timer") and cmd[5:].isalnum():   # 0.8.10: /timer5, /timernews
         from . import timers
         timers.command(ui, s, b, cmd, args, rest)
     elif cmd == "alias":

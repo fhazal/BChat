@@ -119,6 +119,19 @@ IGNORE_KINDS = "CPNTDI"     # Unignore stays off unless asked for
 IGNORE_STATS: dict[str, int] = {}
 
 
+def skips_proxy(rules: str, host: str) -> bool:
+    """0.8.10: Preferences > Network setup > Proxy Server > Not for: names or addresses, commas or spaces
+    between them, * for any part, any case. 'localhost, 127.0.0.1, *.lan' -> those connect directly."""
+    host = host.strip().strip("[]").rstrip(".").lower()
+    if not host:
+        return False
+    for rule in re.split(r"[,\s;]+", rules.lower()):
+        rule = rule.strip().strip("[]").rstrip(".")
+        if rule and fnmatch.fnmatchcase(host, rule.replace("[", "[[]")):
+            return True
+    return False
+
+
 class Session(QObject):
     buffer_added = Signal(object)
     buffer_removed = Signal(object)
@@ -511,8 +524,9 @@ class Session(QObject):
         c = self.cfg
         kinds = {"socks5": QNetworkProxy.ProxyType.Socks5Proxy, "http": QNetworkProxy.ProxyType.HttpProxy}
         # 0.8.8: Qt has no Socks4: BChat dials the proxy itself and talks Socks4 / 4a before the IRC login
-        self._socks4 = c.proxy_type if c.proxy_type in ("socks4", "socks4a") and c.proxy_host else ""
-        use_proxy = (c.proxy_type in kinds and bool(c.proxy_host)) or bool(self._socks4)
+        direct = skips_proxy(c.proxy_skip, getattr(self, "_dial_host", ""))
+        self._socks4 = c.proxy_type if c.proxy_type in ("socks4", "socks4a") and c.proxy_host and not direct else ""
+        use_proxy = (c.proxy_type in kinds and bool(c.proxy_host) and not direct) or bool(self._socks4)
         # QSslSocket's inner socket keeps its old proxy and bound address, so these need a clean socket
         if use_proxy or c.bind_host or self._special_socket:
             self._new_socket()
@@ -582,6 +596,7 @@ class Session(QObject):
                                                      "Use wss:// in Edit Network.")
             return
         self._ws_path = s.ws_path
+        self._dial_host = s.host                   # 0.8.10: Proxy Server > Not for: is matched against it
         self._set_state("connecting")
         self._buf = b""
         self._rx.clear()
@@ -2861,6 +2876,7 @@ class Session(QObject):
             self._names(m)
         elif n == 366:
             self._names_fresh.discard(self.fold(m.param(1)))
+            self._rebuilt(m.param(1))
         elif n == 352:
             self._who_reply(m)
         elif n == 354:
@@ -3283,6 +3299,25 @@ class Session(QObject):
         if u is None:
             return ""
         return next((c for c in self.prefix_order if c in u.prefixes), "")
+
+    def rebuild_nicklist(self, chan: str) -> None:
+        """0.8.10 /updatenl: NAMES again; its reply replaces the list (see _names), and 366 prints the count."""
+        self.__dict__.setdefault("_rebuild_wait", set()).add(self.fold(chan))
+        self.send("NAMES", chan)
+
+    def _rebuilt(self, chan: str) -> None:
+        wait = self.__dict__.get("_rebuild_wait")
+        if not wait or self.fold(chan) not in wait:
+            return
+        wait.discard(self.fold(chan))
+        b = self.buffers.get(self.fold(chan))
+        if b is None:
+            return
+        users = list(b.users.values())
+        ops = sum("@" in u.prefixes for u in users)
+        voiced = sum("+" in u.prefixes for u in users)
+        self.add(b, INFO, "*", f"Nick list for {b.name} rebuilt: {len(users)} "
+                               f"{'person' if len(users) == 1 else 'people'}, {ops} op{'' if ops == 1 else 's'}, {voiced} voiced.")
 
     def _names(self, m: Message) -> None:
         b = self.buffers.get(self.fold(m.param(2)))

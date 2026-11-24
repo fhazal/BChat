@@ -265,7 +265,7 @@ def test_old_yes_setting_still_means_everyone(app, tmp_path):
     win.cfg.dcc_auto = 1
     from bchat.preferences import PreferencesDialog
     d = PreferencesDialog(win, "File transfers")
-    assert d.dcc_auto.currentText() == "From everyone"
+    assert d.dcc_auto.currentText() == "Accept from everyone"
     d.accept(); d.deleteLater()
     assert win.cfg.dcc_auto == 1
     win.close()

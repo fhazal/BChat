@@ -410,11 +410,13 @@ class Config:
     proxy_auth: bool = False
     proxy_user: str = ""
     proxy_password: str = ""
+    proxy_skip: str = ""            # 0.8.10: servers that connect directly ("localhost, *.lan"); * = any part
     identd_on: bool = False        # 0.8.8: answer ident (port 113) while connecting, until the welcome
     identd_user: str = ""          # the user ID it gives; "" = the network's username, else "bchat"
     upnp_on: bool = False          # 0.8.8: open the DCC port range on the router (UPnP)
     # File transfers
-    dcc_auto: int = 0              # 0 ask, 1 auto accept from everyone, 2 only from trusted people (never programs)
+    dcc_auto: int = 0              # file offers: 0 ask, 1 accept from everyone, 2 only from trusted people (never programs), 3 ignore
+    dcc_chat_auto: int = 0         # 0.8.10: direct chat offers, same values
     dcc_trusted: list = field(default_factory=list)   # 0.6.0: {"nick", "mask" (*!user@host), "net" ('' = all)}
     flood_pace: str = "normal"     # 0.6.0: careful / normal / fast (how quickly lines go out)
     flood_ctcp: int = 5            # CTCP answers in 30 s, then quiet for 2 min (0 = never answer)
@@ -621,6 +623,10 @@ def load(directory: Path) -> Config:
             cfg = _from_dict(d)
             if "local_lookup" not in d and not cfg.dcc_ip_from_server:
                 cfg.local_lookup = "normal"          # older settings: "Get my address from the IRC server" off
+            if "dcc_chat_auto" not in d:
+                # 0.8.10: chat offers get their own choice. Before, they were taken from trusted people whenever
+                # file offers were taken at all; keep that.
+                cfg.dcc_chat_auto = 2 if cfg.dcc_auto in (1, 2) else 0
             from .highlights import migrate
             migrate(cfg)
             if not d.get("ul_double_mirc"):
