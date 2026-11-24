@@ -77,7 +77,7 @@ def run(ui, s: Session, b: Buffer, cmd: str, args: list[str], rest: str) -> None
         else:
             setattr(cfg, field_, OFFER_WORDS[args[0].lower()])
             ui.save_config()
-            _info(s, b, f"{what}: {OFFER_SHOWN[getattr(cfg, field_)]}. (Settings > File transfers)")
+            _info(s, b, f"{what}: {OFFER_SHOWN[getattr(cfg, field_)]}. (Settings > File transfers > Options)")
     elif cmd == "updatenl":
         chan = args[0] if args else (b.name if b.kind == CHANNEL else "")
         if not chan:

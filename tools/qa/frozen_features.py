@@ -37,7 +37,7 @@ def note(name, fn):
         results[name + " (error)"] = traceback.format_exc()[-400:]
 def run(userdata):
     from bchat.mainwindow import MainWindow, speller
-    from bchat.preferences import BUILT, CATEGORIES, SUBPAGES, PreferencesDialog
+    from bchat.preferences import BUILT, CATEGORIES, PreferencesDialog
     win = [w for w in QApplication.topLevelWidgets() if isinstance(w, MainWindow)][0]
     s = win.session
     note("spell word list loads", lambda: speller() is not None and speller().known(["hello"]) and not speller().known(["helo"]))
@@ -67,7 +67,7 @@ def run(userdata):
         note("editor " + key, ed)
     def pages():
         d = PreferencesDialog(win)
-        names = [p for g in CATEGORIES.values() for p in g] + [p for g in SUBPAGES.values() for p in g]
+        names = [p for g in CATEGORIES.values() for p in g]
         for n in names:
             d.show_page(n)
         d.reject()

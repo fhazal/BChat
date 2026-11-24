@@ -670,7 +670,7 @@ class DccManager(QObject):
         clean = safe_name(name)
         if self.cfg.dcc_auto == 3:                 # 0.8.10: File offers: Ignore them
             self._ignored_line(s, nick, f"Ignored a file offer from {nick} ({clean}). "
-                                        "Settings > File transfers > File offers.")
+                                        "Settings > File transfers > Options > File offers.")
             return
         why = self.ignore_reason(clean)
         if why:
@@ -882,7 +882,7 @@ class DccManager(QObject):
         how = self.cfg.dcc_chat_auto
         if how == 3:                               # 0.8.10: Direct chat offers: Ignore them
             self._ignored_line(s, nick, f"Ignored a direct chat offer from {nick}. "
-                                        "Settings > File transfers > Direct chat offers.")
+                                        "Settings > File transfers > Options > Direct chat offers.")
             return
         t = self._add(Transfer(self, s, "chat", nick, "chat"))
         t.ip, t.port = ip, port

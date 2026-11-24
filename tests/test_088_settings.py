@@ -196,7 +196,11 @@ def test_router_status_hides_with_the_tick_and_escapes_text(app, dialog):
 def test_trusted_people_is_its_own_page_under_file_transfers(app, dialog):
     d = dialog("Trusted people")
     item = d._items["Trusted people"]
-    assert item.parent() is d._items["File transfers"] and d._items["File transfers"].isExpanded()
+    group = item.parent()                                  # 0.8.10: File transfers is a group of its own, every page one level deep
+    assert group.parent() is None and group.text(0) == "File transfers" and group.isExpanded()
+    assert [group.child(i).text(0) for i in range(group.childCount())] == ["Options", "Trusted people"]
+    assert d._items["File transfers"].parent() is group and not item.childCount()
+    assert d.title.text() == "Trusted people"
     assert d.page_widget("Trusted people").isAncestorOf(d.trust_list)
     files = d.page_widget("File transfers")
     assert not files.findChildren(QTableWidget)            # the list moved off the File transfers page

@@ -90,9 +90,9 @@ def test_creq_and_sreq_set_the_menus(app, tmp_path):
     run(win, s, b, "/creq")
     run(win, s, b, "/sreq maybe")
     t = [l.text for l in b.lines]
-    assert "Direct chat offers: Ignore them. (Settings > File transfers)" in t
-    assert "File offers: Accept from everyone. (Settings > File transfers)" in t
-    assert "File offers: Accept from trusted people. (Settings > File transfers)" in t
+    assert "Direct chat offers: Ignore them. (Settings > File transfers > Options)" in t
+    assert "File offers: Accept from everyone. (Settings > File transfers > Options)" in t
+    assert "File offers: Accept from trusted people. (Settings > File transfers > Options)" in t
     assert "Direct chat offers: Ignore them." in t
     assert "Use: /sreq ask|auto|trusted|ignore" in t
     assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["dcc_auto"] == 2
@@ -207,3 +207,30 @@ def test_timer_with_the_name_glued_on(app, tmp_path):
     assert any(n not in ("news",) for n in timers._table(s))
     timers.stop_all(s)
     win.close(); srv.stop()
+
+
+# --- Settings tree --------------------------------------------------------------------------------------------
+
+def test_file_transfers_is_its_own_group(app, tmp_path):
+    from bchat.preferences import CATEGORIES
+    assert list(CATEGORIES) == ["Interface", "Chatting", "Network", "File transfers", "BChat"]
+    assert CATEGORIES["Network"] == ["Network setup", "Flood", "Local"]
+    win, _net = make_win(tmp_path, 9)
+    d = PreferencesDialog(win, "File transfers")
+    t = d.tree
+    depth = lambda it: 0 if it.parent() is None else 1 + depth(it.parent())
+    pages = [it for it in d._items.values()]
+    assert {depth(it) for it in pages} == {1}                       # no page hangs a level deeper
+    assert {t.visualItemRect(it).x() for it in pages} == {t.visualItemRect(pages[0]).x()}   # one line-up
+    opts = d._items["File transfers"]
+    assert opts.text(0) == "Options" and t.currentItem() is opts
+    assert d.title.text() == "File transfers" and d.pages.currentWidget().isAncestorOf(d.dcc_auto)
+    group = opts.parent()
+    t.setCurrentItem(group)                                         # the group's own row opens no page
+    assert d.pages.currentWidget().isAncestorOf(d.dcc_auto) and d.title.text() == "File transfers"
+    t.setCurrentItem(d._items["Trusted people"])
+    assert d.title.text() == "Trusted people" and d.pages.currentWidget().isAncestorOf(d.trust_list)
+    d.show_page("Local")
+    assert d.title.text() == "Local"
+    d.reject(); d.deleteLater()
+    win.close()

@@ -20,10 +20,11 @@ from .widgets import FramedDialog, icon
 
 CATEGORIES = {"Interface": ["Text box", "Input box", "User list", "Channel switcher", "Windows", "Colors"],
               "Chatting": ["Alerts", "Highlights", "General", "Logging", "Sound", "Now Playing", "Advanced"],
-              "Network": ["Network setup", "Flood", "Local", "File transfers"],     # "Trusted people" hangs under File transfers
+              "Network": ["Network setup", "Flood", "Local"],
+              "File transfers": ["File transfers", "Trusted people"],     # 0.8.10: its own group, not a page under Network
               "BChat": ["Updates", "Lock"]}
 BUILT = ("Flood", "Text box", "Input box", "User list", "Channel switcher", "Windows", "Colors", "Alerts", "Highlights", "General", "Logging", "Sound", "Now Playing", "Advanced", "Network setup", "Local", "File transfers", "Trusted people", "Updates", "Lock")
-SUBPAGES = {"File transfers": ["Trusted people"]}       # shown one level deeper in the tree
+LABELS = {"File transfers": "Options"}                 # tree text where it differs from the page's name (the title)
 PAGE_FIT = 0.85                                         # the dialog never takes more of the screen's height than this
 SWITCHER_POS = ("Left", "Right", "Top", "Bottom", "Hidden")
 _OFFER_INDEX = {0: 0, 1: 2, 2: 1, 3: 3}   # menu index <-> dcc_auto / dcc_chat_auto value (its own inverse)
@@ -112,17 +113,13 @@ class PreferencesDialog(FramedDialog):
             ti.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.tree.addTopLevelItem(ti)
             for k in kids:
-                ki = QTreeWidgetItem([k])
+                ki = QTreeWidgetItem([LABELS.get(k, k)])
+                ki.setData(0, Qt.ItemDataRole.UserRole, k)      # the page's name: a group can share it (File transfers)
                 if k not in BUILT:
                     ki.setFlags(Qt.ItemFlag.NoItemFlags)    # greyed until it has a mockup, like the menus
                     ki.setToolTip(0, "Not built yet")
                 ti.addChild(ki)
                 self._items[k] = ki
-                for sub in SUBPAGES.get(k, ()):
-                    si = QTreeWidgetItem([sub])
-                    ki.addChild(si)
-                    self._items[sub] = si
-                ki.setExpanded(True)
             ti.setExpanded(True)
         right = QFrame(self)
         right.setFrameShape(QFrame.Shape.StyledPanel)
@@ -199,7 +196,7 @@ class PreferencesDialog(FramedDialog):
         self.resize(max(720, self.minimumSizeHint().width()), max(420, min(need + chrome + 2, most)))
 
     def _show(self, item, _prev=None) -> None:
-        name = item.text(0) if item else ""
+        name = item.data(0, Qt.ItemDataRole.UserRole) if item else None
         if name in self.page_of:
             self.pages.setCurrentIndex(self.page_of[name])
             self.title.setText(name)
@@ -1372,7 +1369,7 @@ class PreferencesDialog(FramedDialog):
         page, lay = self._new_page()
         lay.addWidget(_heading("Trusted People"))
         lay.addWidget(QLabel("Files and direct chats from these people are accepted by themselves\n"
-                             "when File transfers is set to \"From trusted people only\"."))
+                             "when Options sets File offers or Direct chat offers to \"Accept from trusted people\"."))
         self.trusted = [dict(e) for e in c.dcc_trusted]
         self.trust_list = QTreeWidget()
         self.trust_list.setHeaderLabels(["Nick", "Address", "Network"])

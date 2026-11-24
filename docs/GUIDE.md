@@ -339,20 +339,20 @@ Yes, in portable mode: start `BChat.exe -portable`, or put an empty file named `
 Right-click their name → **Send a File**, or type `/dcc send nick`. **Window → File Transfers...** shows every transfer.
 
 ### My file sends never start. I'm behind a router.
-People outside your home network can't connect to you, so send with **passive DCC**: the other person opens the connection and you connect to them. **Settings → Preferences → File transfers → Send files:** is **Auto** by default, which already does this when you're on a home network and the router hasn't opened a port. Pick **Passive** to always send this way, or type `/dcc psend nick` for one file. The other person's client must support passive DCC (most current ones do).
+People outside your home network can't connect to you, so send with **passive DCC**: the other person opens the connection and you connect to them. **Settings → Preferences → File transfers → Options → Send files:** is **Auto** by default, which already does this when you're on a home network and the router hasn't opened a port. Pick **Passive** to always send this way, or type `/dcc psend nick` for one file. The other person's client must support passive DCC (most current ones do).
 
 ### How do I receive a file?
-When someone offers a file, it appears in **Window → File Transfers...**. Select it and click **Accept**. Files go to the folder set in **Settings → Preferences → File transfers → Download files to:** (by default `%APPDATA%\BChat\downloads`).
+When someone offers a file, it appears in **Window → File Transfers...**. Select it and click **Accept**. Files go to the folder set in **Settings → Preferences → File transfers → Options → Download files to:** (by default `%APPDATA%\BChat\downloads`).
 
 ### Why does BChat warn me about some files?
 Programs (`.exe`, `.msi`, scripts and similar) can harm your PC, so BChat asks **Accept this file?** first, and never accepts them by itself. Hidden tricks that disguise a program as a picture are removed from the file name. Received files are marked as coming from the internet, so Windows checks them before they run.
 
 
 ### What if the file is already there?
-BChat asks **File already exists**: **Resume** carries on where an earlier download stopped, **Overwrite** replaces it, **Rename** saves it as `name (1).txt`, **Cancel** refuses it. For files accepted by themselves, choose what happens in **Settings → Preferences → File transfers → If the File Already Exists**. The same page has time-outs for offers and idle transfers, and a list of file types to never accept (or to accept only). `/dcc ignore on|off` turns that list on or off.
+BChat asks **File already exists**: **Resume** carries on where an earlier download stopped, **Overwrite** replaces it, **Rename** saves it as `name (1).txt`, **Cancel** refuses it. For files accepted by themselves, choose what happens in **Settings → Preferences → File transfers → Options → If the File Already Exists**. The same page has time-outs for offers and idle transfers, and a list of file types to never accept (or to accept only). `/dcc ignore on|off` turns that list on or off.
 
 ### Can BChat accept files from people I trust?
-Yes. Right-click someone → **Trust for Files and Chats**, then set **Settings → Preferences → File transfers → Auto accept file offers:** to **From trusted people only**. Their whole address must match (a nick alone never does), and programs still always ask. The trusted list is on the same page.
+Yes. Right-click someone → **Trust for Files and Chats**, then set **Settings → Preferences → File transfers → Options → File offers** (and **Direct chat offers**, if you like) to **Accept from trusted people**. Their whole address must match (a nick alone never does), and programs still always ask. The list itself is on **File transfers → Trusted people**.
 ### My antivirus blocked BChat after I received a program. Why?
 Some antivirus programs (Bitdefender, for example) treat "a new app received a program over the internet" as suspicious, even when the app is BChat. See [antivirus](#my-antivirus-blocked-or-removed-bchat) below. If you only want to see the warning, click **Cancel** at **Accept this file?**: nothing is downloaded then.
 
