@@ -3,7 +3,44 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.8.9 release (23 Nov 2026)
+## Current baseline: 0.8.10 release (24 Nov 2026)
+
+Released as `v0.8.10` from commit `2aec568` (File transfers gets its own Settings group with Options and Trusted
+people; *File offers* and *Direct chat offers* menus: Ask me / Accept from trusted people / Accept from everyone /
+Ignore them, also `/sreq` and `/creq`; proxy "Not for:" list; `/updatenl`, `/queryrn`, `/timerN`). Numbers from QA
+run `20261124-131848` on the release build (`build-check audit packaged ui perf`, full perf mode); source stages
+from TEST2 run `20261124-123301` (same code apart from the version number).
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.8.10` (`version_info` 0.8.10.0) |
+| Installer | `BChat-0.8.10-setup.exe`, 43,434,564 bytes |
+| Installer SHA-256 | `7b8c63e718159155094a05584bbdd4df966714dbd282f0a091552350192d1599` |
+| `BChat.exe` SHA-256 | `016f006167aa290fa34f981e7d10dde4546dcc174c7766cc549f73f909b608e0` |
+| Packaged files | 225 |
+| VirusTotal installer | 1 / 69 (DeepInstinct, new; false-positive report sent 24 Nov) |
+| VirusTotal `BChat.exe` | 2 / 70 (APEX and Zillya, as on 0.8.9) |
+
+### Performance (full mode)
+
+| Measure | 0.8.10 |
+| --- | --- |
+| Start to window | 0.57 s |
+| Start to joined (15 channels) | 1.6 s |
+| Idle working set | 110.0 MB |
+| Load 300 msg/s: CPU / worst UI stall | 66.7 % / 50 ms |
+| Burst of 5000 messages: time / worst UI stall | 5.5 s / 49 ms |
+| History 10k lines / all 15 tabs full | 176.5 / 294.8 MB |
+| 5-minute soak, all tabs full | -0.5 MB/min (no growth) |
+
+### Test results
+
+pytest 1245 collected, all passed (TEST2 run); release build: build-check, secret scan, packaged 5/5, ui 824
+controls no problems, perf PASS. Separate QA chat: QA PASSED 0.8.10. Published release checked: tag `v0.8.10`,
+latest, not draft/pre-release, anonymous download SHA-256 matches, the published update file is byte-identical to
+the signed one, 0.8.9 and 0.8.10-TEST2 are offered 0.8.10, 0.8.10 is not.
+
+## Previous baseline: 0.8.9 release (23 Nov 2026)
 
 Released as `v0.8.9` from commit `95954b4` (passive file sends: *Send files* Normal / Passive / Auto, Auto sends
 passive when UPnP opened nothing; closed dialogs are freed instead of staying hidden until quit). Numbers from QA
