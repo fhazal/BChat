@@ -34,12 +34,22 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 
 ---
 
-## 🆕 What's new in 0.8.10
+## 🆕 What's new in 0.9.0
+
+- 🐧 **BChat comes to Linux**: one file, `BChat-x86_64.AppImage`, for Ubuntu 22.04 or newer, Fedora and other current 64-bit distros. No install and no admin password.
+- 🔑 **Passwords in your desktop's keyring** (GNOME Keyring, KDE Wallet or KeePassXC), listed as *BChat IRC passwords*. If no keyring answers, BChat says so and keeps no passwords; it never writes them to a file.
+- 🏠 **Feels at home**: an app menu entry, `irc://` and `ircs://` links open in BChat, and *Start when I log in* works on Linux too.
+- 🎵 **`/np`, `/sysinfo` and speech on Linux**: `/np` reads any MPRIS music player, `/sysinfo` shows your distro and kernel, and *Speech* uses your desktop's voices.
+- 🔄 **Updates itself on Linux**: the AppImage is replaced in place and checked against its own signature, apart from the Windows one.
+
+<details><summary>0.8.10</summary>
 
 - 📁 **File transfers has its own place in Settings**: *Settings → File transfers* now holds **Options** and **Trusted people**.
 - 🚫 **Choose who may send you files and direct chats** (*File transfers → Options*): *File offers* and *Direct chat offers* each have Ask me, Accept from trusted people, Accept from everyone or Ignore them. An ignored offer leaves one grey line. `/sreq` and `/creq` set them too.
 - 🔌 **Proxy "Not for:"** (*Settings → Network setup*): list servers that should connect directly, without the proxy.
 - ⌨️ **Commands**: `/updatenl` reloads the nick list, `/queryrn old new` renames a private tab, and `/timer1 ...`, `/timer1 off` or `/timer<name>` give timers a name.
+
+</details>
 
 <details><summary>0.8.9</summary>
 

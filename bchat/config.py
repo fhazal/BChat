@@ -577,7 +577,7 @@ class Config:
     lock_removed_at: float = 0.0 # 0.6.0 Lock: when BChat found lock.json gone (shown on the Lock page)
 
 
-PORTABLE = False        # 0.6.0: settings in BChat-data next to BChat.exe; passwords never go to Windows' vault
+PORTABLE = False        # 0.6.0: settings in BChat-data next to BChat.exe (or the AppImage); passwords never go to the system vault/keyring
 LOCK_KEY: bytes | None = None   # 0.6.0: from the Lock password; seals portable passwords (lock.seal)
 
 
