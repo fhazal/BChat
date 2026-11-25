@@ -3,7 +3,53 @@
 The current known-good build and its measured numbers. New builds are compared against this.
 Only measured values are written here; anything not measured says so.
 
-## Current baseline: 0.8.10 release (24 Nov 2026)
+## Current baseline: 0.9.0 release (25 Nov 2026)
+
+Released as `v0.9.0` from commit `8f642ae` (BChat on Linux: one AppImage, passwords in the desktop keyring, app
+menu entry, `irc://` links, start when I log in, `/np` over MPRIS, `/sysinfo`, speech, self-update that replaces the
+AppImage in place with its own signed update file; Windows unchanged apart from a log-date parsing fix). Windows
+numbers from QA run `20261125-153538` on the release build (`build-check audit packaged ui perf`, full perf mode);
+source stages from TEST1 runs `20261125-143455` (same code apart from the version number). Linux: `frozen_linux.py`
+on the release AppImage in WSL Ubuntu 22.04.
+
+| Item | Value |
+| --- | --- |
+| Version string | `0.9.0` (`version_info` 0.9.0.0) |
+| Installer | `BChat-0.9.0-setup.exe`, 43,468,395 bytes |
+| Installer SHA-256 | `a6c6b760912fa0186266c3f1ed29aa2c221bbc8f4ae9e3a4caae4b82e5935e73` |
+| `BChat.exe` SHA-256 | `22f09c182857f7d7eae52cb0f5752471c9a5edf0311d552d36d744825642a9e3` |
+| Packaged files | 225 |
+| AppImage | `BChat-x86_64.AppImage`, 74,660,344 bytes |
+| AppImage SHA-256 | `96cdebfa45f2c08b8a53c23e089f5f591a0538f1abdf73648eb25c96410153a9` |
+| VirusTotal installer | 1 / 69 (DeepInstinct, as on 0.8.10; TEST1 of the same code was 0 / 69) |
+| VirusTotal `BChat.exe` | 2 / 70 (APEX and Zillya, as on 0.8.10) |
+| VirusTotal AppImage | 0 / 63 |
+
+### Performance (full mode, Windows)
+
+| Measure | 0.9.0 |
+| --- | --- |
+| Start to window | 0.58 s |
+| Start to joined (15 channels) | 1.6 s |
+| Idle working set | 108.3 MB |
+| Load 300 msg/s: CPU / worst UI stall | 48.0 % / 46 ms |
+| Burst of 5000 messages: time / worst UI stall | 4.4 s / 64 ms |
+| History 10k lines / all 15 tabs full | 175.6 / 293.6 MB |
+| 5-minute soak, all tabs full | +0.02 MB/min (no growth) |
+
+### Test results
+
+pytest 1299 collected; all pass apart from `test_notify.py::test_flood_stays_calm_and_bchat_stays_responsive`,
+which fails only inside the full suite under load ("Signal source has been deleted" from a leftover object of an
+earlier test during setup) and passes alone: a test-isolation flake, not a BChat bug. Release build: build-check,
+secret scan, packaged 5/5, ui 824 controls no problems, perf PASS. Linux AppImage: frozen_linux 57 OK / 0 FAIL;
+update_linux TEST1 -> TEST2 18 OK / 0 FAIL (from c76e3d8). Separate QA chat: QA PASSED 0.9.0-dev. Published
+release checked: tag `v0.9.0` = `8f642ae`, latest, not draft/pre-release, anonymous download SHA-256 of the
+installer and the AppImage match, both published update files are byte-identical to the signed ones, signatures
+check out, a changed copy and a Windows/Linux swap are refused, 0.8.10 and 0.9.0-TEST1 are offered 0.9.0, 0.9.0
+is not.
+
+## Previous baseline: 0.8.10 release (24 Nov 2026)
 
 Released as `v0.8.10` from commit `2aec568` (File transfers gets its own Settings group with Options and Trusted
 people; *File offers* and *Direct chat offers* menus: Ask me / Accept from trusted people / Accept from everyone /
