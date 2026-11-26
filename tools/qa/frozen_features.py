@@ -73,7 +73,7 @@ def run(userdata):
         d.reject()
         return set(names) == set(BUILT)
     note("all preferences pages", pages)
-    note("no disabled menu items", lambda: all(a.isEnabled() for a in win.named_actions().values()))
+    note("no disabled menu items", lambda: all(a.isEnabled() for a in win.named_actions().values() if a.isVisible()))  # hidden = add-on off
     def detach():
         b = s.buffers["#skinhead"]
         win.detach(b)

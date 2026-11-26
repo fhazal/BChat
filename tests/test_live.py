@@ -3243,7 +3243,7 @@ def test_tree_icons_are_mirc_size_and_sharp(live):
     dpr = app.primaryScreen().devicePixelRatio()
     pts = icon_points()
     assert win.tree.iconSize().width() == pts and abs(pts * dpr - 16) <= max(1, 11 * dpr - 16 + 1)
-    for kind in ("server", "folder", "channel", "query"):
+    for kind in ("server", "folder", "channel", "query", "notices"):
         pm = tree_icon(kind).pixmap(win.tree.iconSize(), dpr)
         assert not pm.isNull() and pm.width() <= int(pts * dpr) + 1
         img = pm.toImage()

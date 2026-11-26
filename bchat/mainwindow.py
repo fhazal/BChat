@@ -1070,7 +1070,7 @@ class MainWindow(FramelessWindow):
         if it is not None:
             folder = it.parent()
             (folder or self.tree.invisibleRootItem()).removeChild(it)
-            if folder is not None:
+            if self._is_folder(folder):
                 self._folder_changed(b.session, folder)
         self.chat.forget(b)
         if self.buf is b:
@@ -1236,10 +1236,27 @@ class MainWindow(FramelessWindow):
             return False
         return True
 
+    @staticmethod
+    def _is_folder(it: QTreeWidgetItem | None) -> bool:
+        return it is not None and it.data(0, Qt.ItemDataRole.UserRole + 1) is not None
+
     def _file_item(self, b: Buffer) -> None:
-        """Puts a tab in its server's Channel or Private folder, making the folder when it's the first one."""
+        """Puts a tab in its server's Channel or Private folder, making the folder when it's the first one.
+        The server notices tab is the server talking, not a person: it sits right under the network, after the folders."""
         s = b.session
         it = self.items[id(b)]
+        top = self.items[id(s.server_buffer)]
+        if b.kind != CHANNEL and b.name == "(notices)":
+            old = it.parent()
+            if old is not top:
+                if old is not None:
+                    old.removeChild(it)
+                    if self._is_folder(old):
+                        self._folder_changed(s, old)
+                top.addChild(it)
+                top.setExpanded(True)
+            it.setIcon(0, tree_icon("notices"))
+            return
         kind = "Channel" if b.kind == CHANNEL else "Private"
         key = (id(s), kind)
         folder = self.folders.get(key)
@@ -1249,15 +1266,16 @@ class MainWindow(FramelessWindow):
             folder.setFlags(Qt.ItemFlag.ItemIsEnabled)
             folder.setData(0, Qt.ItemDataRole.UserRole, None)
             folder.setData(0, Qt.ItemDataRole.UserRole + 1, kind)
-            top = self.items[id(s.server_buffer)]
-            top.insertChild(0 if kind == "Channel" else top.childCount(), folder)
+            folders = [n for n in range(top.childCount()) if self._is_folder(top.child(n))]
+            top.insertChild(0 if kind == "Channel" else (folders[-1] + 1 if folders else 0), folder)
             top.setExpanded(True)
         old = it.parent()
         if old is folder:
             return
         if old is not None:
             old.removeChild(it)
-            self._folder_changed(s, old)
+            if self._is_folder(old):
+                self._folder_changed(s, old)
         folder.addChild(it)
         it.setIcon(0, tree_icon("channel" if b.kind == CHANNEL else "query"))
         folder.setExpanded(True)
@@ -1283,7 +1301,10 @@ class MainWindow(FramelessWindow):
             order.append(top)
             for j in range(top.childCount()):
                 folder = top.child(j)
-                order.extend(folder.child(n) for n in range(folder.childCount()))
+                if self._is_folder(folder):
+                    order.extend(folder.child(n) for n in range(folder.childCount()))
+                else:
+                    order.append(folder)        # the (notices) tab sits right under the network
         return order
 
     def _switcher_order(self) -> list[Buffer]:
