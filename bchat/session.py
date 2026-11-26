@@ -2395,6 +2395,7 @@ class Session(QObject):
                 self._notify(b, "kicked")
                 self._notify(b, "kick")
                 self.close_buffer(b)                     # not joined any more, so no PART goes out
+                self._left.discard(self.fold(b.name))    # a kick isn't leaving on purpose: autojoin still joins it
                 return
             self.te("You Kicked", b, PART, (b.name, m.nick, reason))
             self._notify(b, "kicked")

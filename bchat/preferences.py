@@ -322,6 +322,11 @@ class PreferencesDialog(FramedDialog):
     def _sync_keep_kick(self) -> None:
         """0.9.2: 'keep the tab when kicked' is greyed while rejoin is on: the tab has to stay for the rejoin."""
         rejoin = self.rejoin_kick.isChecked()
+        if rejoin and self.keep_kick.isEnabled():   # QA 0.9.2: greyed shows ticked (the tab IS kept); own choice kept aside
+            self._keep_kick_own = self.keep_kick.isChecked()
+            self.keep_kick.setChecked(True)
+        elif not rejoin and not self.keep_kick.isEnabled():
+            self.keep_kick.setChecked(self._keep_kick_own)
         self.keep_kick.setEnabled(not rejoin)
         self.keep_kick.setToolTip("Stays open while Rejoin is on, so BChat can rejoin" if rejoin
                                   else "Off: the tab closes and the kick shows in the server tab")
@@ -723,6 +728,7 @@ class PreferencesDialog(FramedDialog):
         self.rejoin_kick = self._check(lay, "Rejoin a channel when I'm kicked", c.rejoin_on_kick,
                                        "Waits 3 seconds and tries once, so a kick loop can't flood the channel")
         self.keep_kick = self._check(lay, "Keep the channel tab open when I'm kicked", c.keep_on_kick)
+        self._keep_kick_own = c.keep_on_kick
         self.rejoin_kick.toggled.connect(self._sync_keep_kick)
         self._sync_keep_kick()
         self.keep_part = self._check(lay, "Keep the channel tab open when I leave it", c.keep_on_part,
@@ -1862,7 +1868,8 @@ class PreferencesDialog(FramedDialog):
         c.away_reason = self.away_msg.text() or "I'm busy"
         c.announce_away, c.away_once, c.auto_unaway = self.announce.isChecked(), self.away_once.isChecked(), self.auto_unaway.isChecked()
         c.rejoin_on_kick, c.whois_on_query = self.rejoin_kick.isChecked(), self.whois_query.isChecked()
-        c.keep_on_kick, c.keep_on_part = self.keep_kick.isChecked(), self.keep_part.isChecked()
+        c.keep_on_kick = self.keep_kick.isChecked() if self.keep_kick.isEnabled() else self._keep_kick_own
+        c.keep_on_part = self.keep_part.isChecked()
         c.single_msg_window = self.single_msg.isChecked()
         c.single_msg_friends, c.single_msg_copy = self.single_friends.isChecked(), self.single_copy.isChecked()
         c.skip_motd, c.short_joins = self.skip_motd.isChecked(), self.short_joins.isChecked()

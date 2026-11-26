@@ -124,9 +124,49 @@ def test_settings_checkboxes(app, tmp_path):
     win.close()
 
 
+def test_greyed_keep_on_kick_shows_ticked_and_keeps_own_choice(app, tmp_path):
+    """QA 0.9.2: while Rejoin is on the tab IS kept, so the greyed box shows a tick; the own choice comes back."""
+    win, _net = make_win(tmp_path, 9)
+    win.cfg.keep_on_kick, win.cfg.rejoin_on_kick = False, False
+    d = PreferencesDialog(win, "General")
+    assert not d.keep_kick.isChecked() and d.keep_kick.isEnabled()
+    d.rejoin_kick.setChecked(True)
+    assert d.keep_kick.isChecked() and not d.keep_kick.isEnabled()
+    d.rejoin_kick.setChecked(False)
+    assert not d.keep_kick.isChecked() and d.keep_kick.isEnabled()
+    d.rejoin_kick.setChecked(True)
+    d.accept(); d.deleteLater()
+    assert win.cfg.keep_on_kick is False and win.cfg.rejoin_on_kick is True
+    d = PreferencesDialog(win, "General")                # opened with Rejoin on: ticked, greyed, saves the own choice
+    assert d.keep_kick.isChecked() and not d.keep_kick.isEnabled()
+    d.accept(); d.deleteLater()
+    assert win.cfg.keep_on_kick is False
+    d = PreferencesDialog(win, "General")
+    d.rejoin_kick.setChecked(False)
+    assert not d.keep_kick.isChecked()
+    d.deleteLater()
+    win.close()
+
+
 def test_greyed_options_read_greyed():
     from bchat.config import make_theme
     from bchat.widgets import _sheet
     for name in ("Catppuccin Mocha", "Catppuccin Latte"):
         t = make_theme(name)
         assert f"QCheckBox:disabled, QRadioButton:disabled {{ color: {t.disabled}; }}" in _sheet(t)
+
+
+def test_kicked_autojoin_channel_is_joined_again_after_a_reconnect(app):
+    """QA 0.9.2 bug 1: a kick is not leaving on purpose, so a closed kicked tab still autojoins after an outage."""
+    from test_085_reconnect import back, drop, feed, joined as joined_raw, joins, make
+    for keep in (False, True):
+        s = make(app, autojoin="#qa,#a")
+        s.cfg.keep_on_kick, s.cfg.rejoin_on_kick = keep, False
+        joined_raw(s, "#qa")
+        joined_raw(s, "#a")
+        feed(s, ":Op!o@h KICK #qa Belon :out", ":Belon!u@h PART #a")
+        assert ("#qa" in s.buffers) is keep
+        drop(s)
+        back(s)
+        s._join_all(s._conn_gen)
+        assert joins(s) == ["JOIN #qa"]              # the parted #a stays out
