@@ -97,8 +97,8 @@ modules:
     sources:
       - type: git
         url: https://github.com/fhazal/BChat.git
-        tag: v0.9.0
-        commit: 8f642aedadbbb32e8aaa676684011dee73a7eeb3
+        tag: v0.9.1
+        commit: 6d7f627919f420b9ff8ab7dab79961ff9f43fa63
         x-checker-data:
           type: git
           tag-pattern: ^v([\d.]+)$

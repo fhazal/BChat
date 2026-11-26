@@ -49,6 +49,12 @@ installer and the AppImage match, both published update files are byte-identical
 check out, a changed copy and a Windows/Linux swap are refused, 0.8.10 and 0.9.0-TEST1 are offered 0.9.0, 0.9.0
 is not.
 
+**0.9.1 (2026-11-26):** pytest 1317 collected, 1303 passed, 0 failed, 14 skipped (Windows; Linux packaged too).
+The `test_notify` flood failure above turned out to be a real BChat bug, not a flake: a name lookup answering
+after its tab or window closed. Fixed in 0.9.1 (`session.look_up`), with a regression test in `test_next3.py`.
+VirusTotal: installer 0/69, BChat.exe 1/70 (APEX, the usual false alarm), AppImage 0/63, Flatpak 0/61. Published
+release checked: tag `v0.9.1` = `6d7f627`, latest, anonymous downloads match, both update files verify.
+
 ## Previous baseline: 0.8.10 release (24 Nov 2026)
 
 Released as `v0.8.10` from commit `2aec568` (File transfers gets its own Settings group with Options and Trusted
