@@ -49,6 +49,10 @@ installer and the AppImage match, both published update files are byte-identical
 check out, a changed copy and a Windows/Linux swap are refused, 0.8.10 and 0.9.0-TEST1 are offered 0.9.0, 0.9.0
 is not.
 
+**0.9.3 (2026-11-27):** pytest 1436, ui 826 (Windows qa.py all + Linux packaged: all PASS). VirusTotal: installer
+1/69 (DeepInstinct), BChat.exe 2/70 (Zillya, APEX), AppImage 0/63, Flatpak 0/58. Published release checked: tag
+`v0.9.3` = `44a02ec`, latest, anonymous downloads match, both update files verify.
+
 **0.9.2 (2026-11-26):** pytest 1329, ui 826 (Windows qa.py all + Linux packaged: all PASS). The ZNC autojoin test
 failed once under full-suite load and passes alone (timing in the test). VirusTotal: installer 0/68, BChat.exe 1/70
 (APEX), AppImage 1/62 (Microsoft Wacatac.B!ml, a machine-learning guess), Flatpak 0/61. Published release checked: tag
