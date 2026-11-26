@@ -134,7 +134,8 @@ def test_the_remove_line_per_server_software():
 def test_the_list_lines_and_the_other_oper_lines():
     assert list_lines("charybdis") == ["STATS K", "STATS D"]
     assert list_lines("inspircd") == ["STATS G", "STATS Z", "STATS K", "STATS H"]
-    assert list_lines("beeircd") == ["STATS k"]
+    assert list_lines("beeircd") == ["STATS k", "PRIVMSG OperServ :AKILL LIST", "PRIVMSG OperServ :ZLINE LIST",
+                                     "PRIVMSG OperServ :SHUN LIST"]
     assert list_lines("unknown") == ["STATS K"]
     assert wallops_line("hello all") == "WALLOPS :hello all"
     assert global_line("charybdis", "Restart soon") == "NOTICE $$* :Restart soon"
@@ -441,7 +442,7 @@ def test_ban_dialog_wildcard_masks_and_an_empty_ip_box(app, tmp_path):
     d = BanDialog(win, s, "zed", "~z@host.example.net")
     assert [d.mask_box.itemText(i) for i in range(d.mask_box.count())] == ["*@host.example.net", "*@*.example.net", "~z@host.example.net"]
     d.kind.setCurrentIndex(1)                                  # DLINE: not an address, so the box is empty and Ban is off
-    assert d.mask_box.currentText() == "" and not d.go.isEnabled() and d.sends.text() == ""
+    assert d.mask_box.currentText() == "" and not d.go.isEnabled() and d.sends.text() == "Type an IP address in Ban:"
     d.mask_box.setEditText("203.0.113.7")
     assert d.go.isEnabled() and d.sends.text() == "DLINE 1440 203.0.113.7 :Spam"
     d.mask_box.setEditText("bad mask")
@@ -584,12 +585,12 @@ def test_server_bans_window_hides_when_you_stop_being_oper(app, tmp_path):
     done(srv, win)
 
 
-def test_server_bans_beeircd_shows_the_services_note(app, tmp_path):
+def test_server_bans_beeircd_has_no_note_and_asks_operserv(app, tmp_path):
     srv, win, s = connected(app, tmp_path, VERSIONS["beeircd"])
     make_oper(app, srv, s)
     w = oper.open_server_bans(win, s)
-    assert "kept by services" in w.note.text() and w.note.isVisibleTo(w)
-    assert wait(app, lambda: "STATS k" in srv.received)
+    assert w.note.text() == "" and not w.note.isVisibleTo(w)
+    assert wait(app, lambda: "STATS k" in srv.received and "PRIVMSG OperServ :SHUN LIST" in srv.received)
     done(srv, win)
 
 

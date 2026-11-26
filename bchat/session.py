@@ -259,6 +259,8 @@ class Session(QObject):
         self.is_oper = False               # 0.9.3 Oper tools: 381 or user mode +o; off again on -o, on a lost link or a new one
         self.ircd_version = ""              # 0.9.3 Oper tools: the server software, from 004 (oper.ircd_family picks the ban commands)
         self.oper_sink = None              # 0.9.3 the Server bans window reading STATS answers: (n, message) -> consumed
+        #                                    (n 0 = a notice from OperServ: BeeIRCd lists AKILL / ZLINE / SHUN that way)
+        self.wallops_on = False            # 0.9.3 user mode +w: the server sends us wallops (our own ones too)
         self.control = Control(self)       # 0.5.0 Auto-Op / Auto-Voice / Protect
         from .protection import Protection
         self.protection = Protection(self)  # 0.9.3 Channel Protection (an add-on, off until ticked)
@@ -881,6 +883,7 @@ class Session(QObject):
         self.state = st
         if st != "connected":
             self._set_oper(False)               # 0.9.3: a lost link or a new one is never an oper link
+            self.wallops_on = False
         self.state_changed.emit()
 
     def _set_oper(self, on: bool) -> None:
@@ -2297,6 +2300,8 @@ class Session(QObject):
             self._reconnect.stop()
             self.add(self.server_buffer, ERROR, "*", f"-OperServ- {text} BChat will not retry: repeated attempts can get this IP banned.")
             return
+        if self.oper_sink is not None and self.fold(m.nick) == "operserv" and self.oper_sink(0, m):
+            return                                  # the Server bans window reading OperServ's ban lists
         if not self._welcomed and not self.bouncer and "psybnc" in (m.prefix + " " + text).lower():
             self.bouncer = "psyBNC"
         if not self._replaying and "batch" not in m.tags and self.fold(m.nick) != self.fold(self.nick) and "!" in m.prefix:
@@ -2624,6 +2629,8 @@ class Session(QObject):
                 sign = c
             elif c == "o":
                 self._set_oper(sign == "+")
+            elif c == "w":
+                self.wallops_on = sign == "+"
 
     def _note_ircd(self, n: int, p: list[str], rest: str) -> None:
         """0.9.3 Oper tools: the server software from 004 (version), or from 002 / 351 when 004 didn't say."""
@@ -2842,6 +2849,7 @@ class Session(QObject):
             self._note_ircd(n, p, rest)             # 0.9.3 Oper tools: which server software this is
         elif n == 221:
             self._set_oper("o" in m.param(1).split("-")[0])      # our own user modes in full (+iow): oper or not
+            self.wallops_on = "w" in m.param(1).split("-")[0]
         if self.oper_sink is not None and n in (216, 219, 223, 225, 280) and self.oper_sink(n, m):
             return                                  # the Server bans window's STATS answers
         if n == 1:

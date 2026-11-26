@@ -327,6 +327,7 @@ class Config:
     oper_notices: bool = True       # 0.9.3 Oper > Show server notices tab: an oper's server notices go to their own tab
     oper_for: str = "1 day"         # 0.9.3 Oper tools: the last 'For:' picked in Kill / Ban from server (remembered)
     oper_reasons: list = field(default_factory=lambda: ["Spam", "Flooding", "Clones", "Abuse"])  # 0.9.3 remembered ban reasons
+    oper_global_via: dict = field(default_factory=dict)  # 0.9.3 Global notice: network -> "server" or "services"
     protect_on: bool = True         # 0.9.3 the Channel Protection list in use (it does nothing while empty or the add-on is off)
     protect_rules: list = field(default_factory=list)  # one per channel: see protection.DEFAULTS
     send_typing: bool = False      # 0.3.0: let others see when I'm typing (+typing); off until the user turns it on

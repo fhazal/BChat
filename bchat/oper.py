@@ -22,7 +22,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QPushButton, QTreeWidget, QTreeWidgetItem)
 
-from .session import INFO
+from .session import INFO, NOTICE
 from .tools import ToolWindow
 from .widgets import FramedDialog, icon
 
@@ -104,13 +104,16 @@ def remove_line(family: str, kind: str, mask: str) -> str:
     return f"UN{kind} {mask}"                                # UNKLINE / UNDLINE
 
 
+OS_LISTS = {"AKILL": "GLINE", "ZLINE": "ZLINE", "SHUN": "SHUN"}   # BeeIRCd: OperServ's lists, and the type each one is
+
+
 def list_lines(family: str) -> list[str]:
     """The STATS lines whose answers (216 / 223 / 225 / 280) are the server's ban lists."""
     return {
         "charybdis": ["STATS K", "STATS D"],
         "inspircd": ["STATS G", "STATS Z", "STATS K", "STATS H"],
         "unreal": ["STATS gline", "STATS shun"],
-        "beeircd": ["STATS k"],
+        "beeircd": ["STATS k"] + [f"PRIVMSG OperServ :{k} LIST" for k in OS_LISTS],
     }.get(family, ["STATS K"])
 
 
@@ -124,6 +127,18 @@ def wallops_line(text: str) -> str:
 
 def global_line(family: str, text: str) -> str:
     return f"NOTICE {'$$*' if family == 'charybdis' else '$*'} :{text}"
+
+
+def global_lines(family: str, text: str, via: str = "server", services: str = "") -> list[str]:
+    """Global notice: the server's own NOTICE $* or the services' GLOBAL. BeeIRCd only has the services one.
+    Services: Anope 2 has a Global bot; Atheme's OperServ GLOBAL keeps lines until GLOBAL SEND; BeeIRCd uses OperServ."""
+    if family == "beeircd":
+        return [f"PRIVMSG OperServ :GLOBAL {text}"]
+    if via != "services":
+        return [global_line(family, text)]
+    if services == "atheme":
+        return [f"PRIVMSG OperServ :GLOBAL {text}", "PRIVMSG OperServ :GLOBAL SEND"]
+    return [f"PRIVMSG Global :GLOBAL {text}"]
 
 
 def opers_line(family: str) -> str:
@@ -167,6 +182,20 @@ def mask_ok(kind: str, mask: str) -> bool:
     if kind in IP_TYPES:
         return bool(re.fullmatch(r"[0-9A-Fa-f:.*/]+", mask))
     return "@" in mask and not mask.startswith("@") and not mask.endswith("@")
+
+
+NICK_RE = re.compile(r"[A-Za-z\[\]\\`_^{|}][-A-Za-z0-9\[\]\\`_^{|}]*")
+
+
+def typed_nick(s, text: str) -> tuple[str, str] | None:
+    """A nick typed where a mask goes: (their nick, user@host) when we can see them in one of our channels."""
+    if not text or not NICK_RE.fullmatch(text):
+        return None
+    for b in s.all_buffers():
+        u = b.users.get(s.fold(text))
+        if u is not None and "@" in u.host:
+            return u.nick, u.host
+    return None
 
 
 def mask_matches(mask: str, userhost: str) -> bool:
@@ -347,12 +376,13 @@ class KillDialog(_OperDialog):
 
 
 class BanDialog(_OperDialog):
-    """Oper > Ban from server... (no nick: type the mask) and a nick's Oper > Ban from server..."""
+    """Oper > Ban from server... (no nick: type a nick or the mask) and a nick's Oper > Ban from server..."""
 
     def __init__(self, win, s, nick: str = "", userhost: str = ""):
         super().__init__(f"Ban from server: {nick}" if nick else "Ban from server", win, s)
         self.nick, self.userhost = nick, userhost
         self.family = family_of(s)
+        self._offered: list[str] = []                       # the masks in the list for a nick typed into Ban:
         types = ban_types(self.family)
         if nick:
             self.form.addRow("Nick:", QLabel(_person(nick, userhost)))
@@ -363,14 +393,14 @@ class BanDialog(_OperDialog):
             self.form.addRow("Type:", self.kind)
         self.mask_box = QComboBox()
         self.mask_box.setEditable(True)
-        self.mask_box.setFixedWidth(220)
+        self.mask_box.setFixedWidth(260)
         self.form.addRow("Ban:", self.mask_box)
         self.why = _muted(win, "")
         self.why.setFixedWidth(390)                         # a set width: no stray room above the wrapped hint
         self.form.addRow("", self.why)
         self.length = QComboBox()
-        self.length.addItems([name for name, _ in FOR])
         names = [name for name, _ in FOR]
+        self.length.addItems(names)
         self.length.setCurrentIndex(names.index(win.cfg.oper_for) if win.cfg.oper_for in names else 1)
         self.length.setFixedWidth(120)
         self.form.addRow("For:", self.length)
@@ -384,42 +414,103 @@ class BanDialog(_OperDialog):
         self.go = _buttons(self, self.body, "&Ban")
         self._fill_masks()
         self.kind.currentIndexChanged.connect(lambda *_: self._fill_masks())
-        for sig in (self.mask_box.editTextChanged, self.length.currentIndexChanged, self.reason.editTextChanged):
+        self.mask_box.editTextChanged.connect(lambda *_: self._typed())
+        for sig in (self.length.currentIndexChanged, self.reason.editTextChanged):
             sig.connect(lambda *_: self.refresh())
 
     def type(self) -> str:
         return self.kind.currentData() or ban_types(self.family)[0]
 
-    def _fill_masks(self) -> None:
+    def example(self) -> str:
+        return "1.2.3.4" if self.type() in IP_TYPES else "*@1.2.3.4"
+
+    def _set_items(self, items: list[str], keep: str | None) -> None:
+        """Fill the Ban: list; keep = the text to leave in the box (None: show the first mask)."""
+        le = self.mask_box.lineEdit()
+        pos = le.cursorPosition()
         self.mask_box.blockSignals(True)
         self.mask_box.clear()
-        self.mask_box.addItems(mask_choices(self.userhost, self.type()))
-        self.mask_box.setCurrentIndex(0 if self.mask_box.count() else -1)
-        if not self.mask_box.count():
-            self.mask_box.setEditText("")
+        self.mask_box.addItems(items)
+        if keep is None and items:
+            self.mask_box.setCurrentIndex(0)
+        else:
+            self.mask_box.setCurrentIndex(-1)
+            self.mask_box.setEditText(keep or "")
+            le.setCursorPosition(min(pos, len(keep or "")))
         self.mask_box.blockSignals(False)
-        host = self.userhost.partition("@")[2]
-        no_ip = self.type() in IP_TYPES and bool(host) and not _is_ip(host)
-        self.why.setText(f"{self.type()} needs an IP address; {host} is a host name. Type the IP, or pick another type."
-                         if no_ip else "")
-        self.why.setVisible(no_ip)
+        le.setPlaceholderText("nick, or " + self.example())
+
+    def _fill_masks(self) -> None:
+        if self.nick:
+            self._set_items(mask_choices(self.userhost, self.type()), None)
+            self.refresh()
+        else:                                               # what was typed stays; a typed nick gets this type's masks
+            self._offered = []
+            self._set_items([], self.mask_box.currentText())
+            self._typed()
+
+    def _typed(self) -> None:
+        """No nick given: a nick typed into Ban: is looked up and its masks go into the list; a mask is used as it is."""
+        if not self.nick:
+            text = self.mask_box.currentText().strip()
+            if text not in self._offered:                    # picking one of the offered masks keeps the list
+                found = typed_nick(self.s, text)
+                offer = mask_choices(found[1], self.type()) if found else []
+                if offer != self._offered:
+                    self._offered = offer
+                    self._set_items(offer, self.mask_box.currentText())
         self.refresh()
 
     def mins(self) -> int:
         return FOR[self.length.currentIndex()][1]
 
+    def mask(self) -> str:
+        """The mask the ban is for: what is in Ban:, or for a typed nick the first of its masks."""
+        text = self.mask_box.currentText().strip()
+        if mask_ok(self.type(), text):
+            return text
+        if not self.nick and self._offered and typed_nick(self.s, text):
+            return self._offered[0]
+        return ""
+
     def command(self) -> str:
-        mask = self.mask_box.currentText().strip()
-        if not mask_ok(self.type(), mask):
-            return ""
-        return ban_line(self.family, self.type(), mask, self.mins(), self.reason.currentText())
+        mask = self.mask()
+        return ban_line(self.family, self.type(), mask, self.mins(), self.reason.currentText()) if mask else ""
 
     def victims(self) -> list[str]:
-        mask = self.mask_box.currentText().strip()
-        return matching(self.s, mask) if mask_ok(self.type(), mask) else []
+        mask = self.mask()
+        return matching(self.s, mask) if mask else []
+
+    def hint(self) -> str:
+        """The muted line under Ban: (empty: no line)."""
+        kind, text = self.type(), self.mask_box.currentText().strip()
+        if self.nick:
+            host = self.userhost.partition("@")[2]
+            if kind in IP_TYPES and host and not _is_ip(host):
+                return f"{kind} needs an IP address; {host} is a host name. Type the IP, or pick another type."
+            return ""
+        if not text or mask_ok(kind, text):
+            return ""
+        found = typed_nick(self.s, text)
+        if found:
+            nick, uh = found
+            if not self._offered:
+                return (f"{kind} needs an IP address; {nick} is on {uh.partition('@')[2]}, a host name. "
+                        "Type the IP, or pick another type.")
+            more = " Open the list for the other masks." if len(self._offered) > 1 else ""
+            return f"{nick} is {nick}!{uh}: this bans {self._offered[0]}.{more}"
+        if NICK_RE.fullmatch(text):
+            return f"No one called {text} is in your channels. Type their address instead, like {self.example()}."
+        return ""
 
     def refresh(self) -> None:
         super().refresh()
+        if not self.command():
+            what = "an IP address" if self.type() in IP_TYPES else "a mask (user@host)"
+            self.sends.setText(f"Type {what} in Ban:" if self.nick else f"Type a nick or {what} in Ban:")
+        tip = self.hint()
+        self.why.setText(tip)
+        self.why.setVisible(bool(tip))
         who = self.victims()
         self.also.setVisible(bool(who))                       # nobody to disconnect: nothing to tick
         n = len(who)
@@ -439,6 +530,8 @@ class BanDialog(_OperDialog):
 class MessageDialog(_OperDialog):
     """Oper > Wallops... and Oper > Global notice...: one line to every operator, or to everyone on the network."""
 
+    VIA = (("Server", "server"), ("Services", "services"))
+
     def __init__(self, win, s, kind: str):
         super().__init__("Wallops" if kind == "wallops" else "Global notice", win, s, 560)
         self.kind, self.family = kind, family_of(s)
@@ -447,17 +540,45 @@ class MessageDialog(_OperDialog):
         self.text.textChanged.connect(lambda *_: self.refresh())
         self.form.addRow("To:", QLabel("every operator who listens to wallops" if kind == "wallops"
                                        else "everyone on the network"))
+        self.via = QComboBox()
+        for label, key in self.VIA:
+            self.via.addItem(label, key)
+        if kind == "global" and self.family != "beeircd":    # BeeIRCd: only its services can send to everyone
+            saved = win.cfg.oper_global_via.get(s.net.name, "server")
+            self.via.setCurrentIndex(1 if saved == "services" else 0)
+            self.via.setFixedWidth(120)
+            self.via.currentIndexChanged.connect(lambda *_: self.refresh())
+            self.form.addRow("Via:", self.via)
         self.form.addRow("Text:", self.text)
         self.form.addRow("Sends:", self.sends)
         self.body.addLayout(self.form)
         self.go = _buttons(self, self.body, "&Send")
         self.refresh()
 
-    def command(self) -> str:
-        t = " ".join(self.text.text().split())
+    def _text(self) -> str:
+        return " ".join(self.text.text().split())
+
+    def lines(self) -> list[str]:
+        t = self._text()
         if not t:
-            return ""
-        return wallops_line(t) if self.kind == "wallops" else global_line(self.family, t)
+            return []
+        if self.kind == "wallops":
+            return [wallops_line(t)]
+        return global_lines(self.family, t, self.via.currentData(), getattr(self.s, "services", ""))
+
+    def command(self) -> str:
+        return "\n".join(self.lines())
+
+    def send(self) -> None:
+        super().send()
+        if self.kind == "wallops" and not getattr(self.s, "wallops_on", False):
+            # without user mode +w the server doesn't send our own wallops back: show what went out
+            self.s.add(self.s.server_buffer, NOTICE, f"-{self.s.nick}/Wallops-", self._text())
+
+    def done_ok(self) -> None:
+        if self.kind == "global" and self.family != "beeircd":
+            self.win.cfg.oper_global_via[self.s.net.name] = self.via.currentData()
+            self.win.save_config()
 
 
 # --- Server bans ----------------------------------------------------------------------------
@@ -523,8 +644,7 @@ class ServerBansWindow(ToolWindow):
         self.family = family_of(s)
         self.titlebar.set_title(f"BChat: Server bans ({s.net.name})")
         self.setWindowTitle(f"BChat: Server bans ({s.net.name})")
-        self.note.setText("GLINE, ZLINE and SHUN are kept by services on this server: type /GLINE (or /ZLINE, /SHUN) "
-                          "with no mask to list them. The list here shows the KLINEs (STATS k)." if self.family == "beeircd" else "")
+        self.note.setText("")
         self.note.setVisible(bool(self.note.text()))
         self.view.clear()
         self._buttons()
@@ -542,6 +662,8 @@ class ServerBansWindow(ToolWindow):
         self._giveup.start()
 
     def feed(self, n: int, m) -> bool:
+        if n == 0:
+            return self._feed_operserv(m.param(-1))
         if n == 219:
             self._wait -= 1
             if self._wait <= 0:
@@ -552,6 +674,28 @@ class ServerBansWindow(ToolWindow):
             return False
         self.view.addTopLevelItem(QTreeWidgetItem(list(got)))
         return True
+
+    def _feed_operserv(self, text: str) -> bool:
+        """BeeIRCd: one of OperServ's AKILL / ZLINE / SHUN LIST lines. Lines that aren't part of a list are left alone."""
+        if self.family != "beeircd" or self._wait <= 0:
+            return False
+        names = "|".join(OS_LISTS)
+        head = re.fullmatch(rf"({names})s:", text)
+        if head:
+            self._os_kind = OS_LISTS[head.group(1)]
+            return True
+        row = re.fullmatch(r"\s*\d+\s+(\S+)\s+by \S+ \u00b7 (.*?) \u00b7 (.*)", text)
+        if row and getattr(self, "_os_kind", ""):
+            mask, left, reason = row.groups()
+            self.view.addTopLevelItem(QTreeWidgetItem([self._os_kind, mask, f"{reason}  ({left})"]))
+            return True
+        if re.fullmatch(rf"(No |\d+ )({names})s?\.", text):
+            self._os_kind = ""
+            self._wait -= 1
+            if self._wait <= 0:
+                self._stop()
+            return True
+        return False
 
     def _after_add(self) -> None:
         if self.isVisible():
