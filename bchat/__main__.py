@@ -8,9 +8,10 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QProxyStyle, QStyle
 
-from . import __version__, config, xchat_import
+from . import config, full_version, xchat_import
 from .mainwindow import MainWindow
 
 
@@ -138,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bchat")
     ap.add_argument("--config-dir", type=Path, default=config.default_dir())
     ap.add_argument("--no-autoconnect", action="store_true")
-    ap.add_argument("--version", action="version", version=__version__)
+    ap.add_argument("--version", action="version", version=full_version())   # the build's own, not the source default
     ap.add_argument("-s", "--server", default="", help="connect: a saved network's name, or host/port (host/+port for SSL)")
     ap.add_argument("-j", "--join", default="", help="channels to join on that server: #chat,#BChat")
     ap.add_argument("-n", "--nick", default="", help="the nick for that server")
@@ -153,6 +154,8 @@ def main(argv: list[str] | None = None) -> int:
     link = args.link if args.link.lower().startswith(("irc://", "ircs://")) else ""
 
     app = QApplication(sys.argv[:1] + linuxdesk.platform_args())    # Linux Wayland: X11 so cards sit in the corner
+    if linuxdesk.in_flatpak():          # the window matches the desktop file the Flatpak exports under its app ID
+        QGuiApplication.setDesktopFileName(linuxdesk.APP_ID)
     if link and hand_to_running(args.config_dir, link):
         return 0
     app.setStyle(AlwaysUnderline("Fusion"))

@@ -195,11 +195,11 @@ class AboutDialog(FramedDialog):
         from .updatepage import about_parts, icon_pixmap
         parts = about_parts(updater, theme)
         self.update_status.setText(parts[2] if parts else "")
-        if parts:
+        if parts and parts[0]:
             self.update_icon.setPixmap(icon_pixmap(parts[0], parts[1], 14, self.devicePixelRatioF()))
         else:
             self.update_icon.clear()
-        self.update_icon.setVisible(bool(parts))
+        self.update_icon.setVisible(bool(parts and parts[0]))
 
     def text(self) -> str:
         """Everything the window says, for tests and a quick copy."""

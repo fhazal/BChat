@@ -172,3 +172,41 @@ old one has quit. Check it with a real TEST-to-TEST update (local server, throwa
 
 **Every release:** VirusTotal on the AppImage too; never distribute an AppImage built on a newer distro (Fedora
 builds only run on that Fedora version or newer).
+
+## Release (one command)
+
+`dev-tools/release.py` (local, not in git) runs the release steps in order. Each step prints one PASS or FAIL
+line and the run stops at the first FAIL:
+
+    python dev-tools/release.py <version> [--stage NAME ...] [--dry-run] [--bump] [--redo]
+
+| Stage | What it does |
+| --- | --- |
+| `check` | `version_info.txt`, `V=` in `build/build-test.sh`, the newest `<release>` in the Flatpak metainfo and `dist/release-notes-<version>.md` all agree; `--bump` sets only `version_info.txt` and `V=` |
+| `build-win` | `bash build/build-test.sh` (Git Bash); SHA-256 and size of the installer and `BChat.exe` |
+| `build-linux` | AppImage in WSL Ubuntu 22.04 (`/opt/bchat-venv`), copied to `dist/BChat-x86_64.AppImage` |
+| `build-flatpak` | `packaging/flatpak/build-flatpak.sh` in WSL (`/srv/fp-src`, `FP_SCOPE=--system`) -> `dist/BChat-<version>.flatpak` |
+| `qa` | `tools/qa.py all` on Windows, then `tools/qa.py packaged` on the AppImage in WSL; never two QA runs at once |
+| `vt` | VirusTotal on the installer, `BChat.exe`, the AppImage and the Flatpak bundle; fills the `VIRUSTOTAL-LINE` placeholder in the release notes; a detection prints a warning, it never blocks |
+| `sign` | signs `bchat-update.json` and `bchat-update-linux.json` (`dev-tools/make_manifest.py`), then checks both signatures, that each is refused on the other system and that a tampered copy is refused |
+| `publish-check` | read-only, after publishing: tag, not draft or pre-release, the asset names, anonymous "latest", and the downloaded files' SHA-256 equal the local ones |
+
+With no `--stage` it runs `check` to `vt`, then stops and prints the next steps: `--stage sign` (in a
+terminal tab), the `gh release create` command (after the owner's OK, commit and push), and `--stage
+publish-check`. It never signs on its own, commits, pushes, publishes, runs the installer or touches an installed
+BChat. `--dry-run` prints every command and WSL script without running or writing anything.
+
+**State:** `dist/release-<version>.json` keeps each stage's result, the files' SHA-256 and the VirusTotal results,
+so a run picks up where it stopped (passed stages are skipped; `--redo` or `--stage` runs them again). A rebuilt
+file with a new hash clears the old QA, VirusTotal and signing results.
+
+**Update notes** (the `--note` lines that get signed): put them in the release notes as
+
+    <!-- NOTES:
+    Windows: shown only to Windows users
+    Linux: shown only to Linux users
+    shown to both
+    -->
+
+Without that block, the first two `- ` bullets of the notes are used for both systems (markdown removed, first
+sentence only).

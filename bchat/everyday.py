@@ -11,7 +11,7 @@ from PySide6.QtCore import QTimer
 
 from . import filetypes, tabopts
 from .protocol import lower, strip_format
-from .session import ACTION, CHANNEL, ERROR, HILITE, INFO, MSG, QUERY, SELF, Buffer, Session
+from .session import ACTION, CHANNEL, ERROR, HILITE, INFO, MSG, QUERY, SELF, Buffer, Session, look_up
 
 NAMES = ("describe", "omsg", "qmsg", "qme", "ctcpreply", "tnick", "mnick", "fullname", "autojoin", "perform",
          "clearall", "markasread", "savebuf", "loadbuf", "strip", "timestamp", "log", "titlebar", "dns", "links", "uwho",
@@ -287,7 +287,7 @@ def _resolve(s, b, host: str, who: str = "") -> None:
         else:
             ips = [a.toString() for a in info.addresses()]
             _info(s, b, f"{label} is {', '.join(ips)}" if ips else f"No address found for {label}.")
-    QHostInfo.lookupHost(host, done)
+    look_up(s, host, done)                 # dropped if the session is gone by the time it answers
 
 
 def _dns(ui, s, b, args) -> None:

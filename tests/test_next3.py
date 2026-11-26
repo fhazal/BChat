@@ -431,3 +431,19 @@ def test_network_list_favourites_get_their_own_group_on_top(app, tmp_path, monke
     d.list.setCurrentRow(2); d._favor()                                          # and back down; empty group goes away
     assert d.list.group("fav") is None and names("mine") == ["Alpha", "Beta", "Gamma"]
     d.reject(); win.close()
+
+
+def test_a_late_name_lookup_on_a_closed_session_is_dropped(app):
+    """0.9.1: the Local host lookup (and /dns, SOCKS, the address-family check) handed its answer straight to the
+    session's signal. A closed tab or freed window whose lookup answered later raised 'Signal source has been
+    deleted' in the middle of whatever ran next. Now a late answer for a session that is gone is dropped."""
+    from PySide6.QtCore import QObject
+    from bchat.session import look_up
+    gone, alive, got = QObject(), QObject(), []
+    look_up(gone, "localhost", lambda info: got.append("gone"))
+    look_up(alive, "localhost", lambda info: got.append("alive"))
+    from shiboken6 import delete
+    delete(gone)                                  # the tab closed before the answer came
+    assert wait(app, lambda: "alive" in got, 8000)
+    wait(app, lambda: False, 300)
+    assert got == ["alive"]

@@ -146,6 +146,18 @@ def parse_offer(rest: str) -> tuple[str, list[str]] | None:
     return verb.upper(), [first, *others]
 
 
+
+def default_folder(cfg_dir: Path) -> Path:
+    """Where received files go when no folder is set: 'downloads' in the settings folder. In a Flatpak that folder
+    is hidden inside the sandbox, so the Downloads folder (the one place outside it BChat may write) instead."""
+    from . import linuxdesk
+    if linuxdesk.in_flatpak():
+        from PySide6.QtCore import QStandardPaths
+        d = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
+        if d:
+            return Path(d)
+    return cfg_dir / "downloads"
+
 class Transfer(QObject):
     """One send, receive or chat."""
     changed = Signal(object)
@@ -694,7 +706,7 @@ class DccManager(QObject):
             self.win.open_transfers()
 
     def target_path(self, clean: str, nick: str) -> Path:
-        folder = Path(self.cfg.dcc_dir) if self.cfg.dcc_dir else self.win.cfg_dir / "downloads"
+        folder = Path(self.cfg.dcc_dir) if self.cfg.dcc_dir else default_folder(self.win.cfg_dir)
         name = f"{safe_name(nick)}.{clean}" if self.cfg.dcc_with_nick else clean
         return folder / name
 

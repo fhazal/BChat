@@ -252,6 +252,8 @@ def about_parts(u: up.Updater, t) -> tuple[str, str, str] | None:
     """The few words after the version in About: (icon name, colour, rich text), or None when there is nothing to say.
     The icon is shown by its own label (see AboutDialog), so it is drawn sharp at the screen's scale and centred
     with the words; a rich-text <img> was shrunk without smoothing and sat on the text's baseline."""
+    if u.inert:                                   # a Flatpak: Flathub and the software centre bring new versions
+        return "", t.motd_text, f'<span style="color:{t.motd_text};">&nbsp;&nbsp;· updated by your software centre</span>'
     s = u.state
     v = (u.entry or {}).get("version", "")
     colour = state_colour(t, s)

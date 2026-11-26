@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QColorDial
                                QHeaderView, QStyle, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .config import DARK_THEMES, LIGHT_THEME_ORDER, PALETTES, THEME_NAMES, Config, Theme, is_custom, make_theme
-from .dcc import home_address  # noqa: F401  (tests import it from here)
+from .dcc import default_folder as dcc_default_folder, home_address  # noqa: F401  (tests import home_address from here)
 from . import linuxdesk
 from .widgets import FramedDialog, icon
 
@@ -122,6 +122,8 @@ class PreferencesDialog(FramedDialog):
                     ki.setToolTip(0, "Not built yet")
                 ti.addChild(ki)
                 self._items[k] = ki
+                if k == "Updates" and linuxdesk.in_flatpak():
+                    ki.setHidden(True)                # the software centre updates a Flatpak
             ti.setExpanded(True)
         right = QFrame(self)
         right.setFrameShape(QFrame.Shape.StyledPanel)
@@ -736,6 +738,10 @@ class PreferencesDialog(FramedDialog):
             self.irc_links.setStyleSheet("margin-left: 20px;")
             self.app_menu.toggled.connect(self.irc_links.setEnabled)
             self.irc_links.setEnabled(c.app_menu)
+            if linuxdesk.in_flatpak():                # the Flatpak always has its menu entry and irc:// links
+                self.app_menu.hide()
+                self.irc_links.hide()
+                self.start_win.setToolTip("Your desktop asks once if BChat may start when you log in")
         else:
             self.start_win = self._check(lay, "Start with Windows", c.start_with_windows, "Only for the installed BChat")
         g = QGridLayout()
@@ -1414,7 +1420,7 @@ class PreferencesDialog(FramedDialog):
         self.chat_auto = self._menu(g, 1, "Direct chat offers:", how, _OFFER_INDEX.get(c.dcc_chat_auto, 0))
         self.dcc_dir = self._folder_row(g, 2, "Download files to:", c.dcc_dir)
         self.dcc_done = self._folder_row(g, 3, "Move completed files to:", c.dcc_done_dir)
-        self.dcc_dir.setPlaceholderText(str(self.win.cfg_dir / "downloads"))   # 0.8.6: empty showed no folder at all
+        self.dcc_dir.setPlaceholderText(str(dcc_default_folder(self.win.cfg_dir)))   # 0.8.6: empty showed no folder at all
         self.dcc_done.setPlaceholderText("Leave them where they were downloaded")
         lay.addLayout(g)
         self.dcc_nick = self._check(lay, "Save nick name in filenames", c.dcc_with_nick)

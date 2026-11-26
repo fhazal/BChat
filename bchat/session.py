@@ -27,6 +27,13 @@ MSG, SELF, ACTION, JOIN, PART, TOPIC, INFO, WHOIS, NOW_TALKING, HILITE, NOTICE, 
 SERVER, CHANNEL, QUERY = "server", "channel", "query"
 
 
+def look_up(owner: QObject, host: str, done) -> None:
+    """QHostInfo.lookupHost, but the answer is dropped when owner is gone by then (a tab closed, a window freed):
+    a name lookup can take seconds, and a late answer on a deleted session raised 'Signal source has been deleted'."""
+    from shiboken6 import isValid
+    QHostInfo.lookupHost(host, lambda info: done(info) if isValid(owner) else None)
+
+
 def duration(secs: float) -> str:
     """3 h 12 min, 45 min, 20 s: /online and the network tooltip."""
     secs = int(max(0, secs))
@@ -740,7 +747,7 @@ class Session(QObject):
             return self._socks_request(host, "")
         gen = self._conn_gen
         st["step"] = "lookup"
-        QHostInfo.lookupHost(host, lambda info, g=gen: self._socks_looked_up(info, g))
+        look_up(self, host, lambda info, g=gen: self._socks_looked_up(info, g))
 
     def _socks_looked_up(self, info, gen: int) -> None:
         if gen != self._conn_gen or not self._socks or self._socks["step"] != "lookup":
@@ -1067,7 +1074,7 @@ class Session(QObject):
                 info.setAddresses([literal])
                 self._family_found(info)
             else:
-                QHostInfo.lookupHost(host, self.family_info.emit)
+                look_up(self, host, lambda info: self.family_info.emit(info))
         elif err == QAbstractSocket.SocketError.HostNotFoundError and self.typed_by_hand:
             self._typo_stop()
         if self.sock.state() == QAbstractSocket.SocketState.UnconnectedState:
@@ -3084,7 +3091,7 @@ class Session(QObject):
         if not getattr(self, "_host_info_wired", False):
             self.host_info.connect(self._own_host_found)
             self._host_info_wired = True
-        QHostInfo.lookupHost(host, self.host_info.emit)
+        look_up(self, host, lambda info: self.host_info.emit(info))
 
     def _own_host_found(self, info) -> None:
         from ipaddress import ip_address

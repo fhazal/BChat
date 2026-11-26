@@ -901,7 +901,8 @@ class MainWindow(FramelessWindow):
         h = m.addMenu("&Help")
         self._act(h, "&Contents", self.open_help, "F1", "help")
         self._act(h, "Report a &Problem...", lambda: self.report_problem(), "", "report")
-        self._act(h, "Check for &Updates...", self.check_updates, "", "refresh")
+        chk = self._act(h, "Check for &Updates...", self.check_updates, "", "refresh")
+        chk.setVisible(not self.updater.inert)       # a Flatpak: the software centre updates BChat
         self._act(h, "&Support BChat on Ko-fi...", self.open_support, "", "support")
         self._act(h, "&About", self._about, "", "about")
         # after Help: shows only while an update waits, downloads, is ready or failed
@@ -1439,7 +1440,10 @@ class MainWindow(FramelessWindow):
 
     def set_autostart(self, on: bool) -> None:
         """Start with Windows, for the installed BChat only: a run from source has nothing stable to point at."""
-        from . import autostart
+        from . import autostart, linuxdesk
+        if linuxdesk.in_flatpak():              # no file to point at: the Background portal does it
+            linuxdesk.sync_autostart(on, None, changed=True)
+            return
         autostart.sync(on, autostart.installed_exe())
 
     def check_autostart(self) -> str:

@@ -1,4 +1,5 @@
-"""Linux desktop entries for the BChat AppImage (an AppImage has no installer, so BChat writes its own):
+"""Linux desktop entries for the BChat AppImage (an AppImage has no installer, so BChat writes its own; the Flatpak
+needs none, and starts at login through the Background portal):
 
 - the app menu:  $XDG_DATA_HOME/applications/bchat.desktop (+ the icon), with the irc:// and ircs:// link types
   when 'Open irc:// and ircs:// links' is ticked, and BChat set as their default in $XDG_CONFIG_HOME/mimeapps.list
@@ -12,10 +13,13 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 SUPPORTED = sys.platform.startswith("linux")
 FILE = "bchat.desktop"
+APP_ID = "io.github.fhazal.BChat"           # the Flatpak's app ID (Flathub); it exports its own desktop file under it
+FLATPAK_INFO = "/.flatpak-info"
 SCHEMES = ("x-scheme-handler/irc", "x-scheme-handler/ircs")
 ICON = Path(__file__).with_name("assets") / "bchat.png"
 _RESERVED = set(' \t\n"\'\\><~|&;$*?#()`')
@@ -70,8 +74,18 @@ def safe_sound_backend(env=None, dirs=None) -> None:
         env["QT_AUDIO_BACKEND"] = "pulseaudio"
 
 
+def in_flatpak(env=None, info: str | None = None) -> bool:
+    """Running inside a Flatpak sandbox (it sets $FLATPAK_ID and has /.flatpak-info). There Flathub updates BChat and
+    exports its menu entry, link types and icon, so BChat writes no desktop files and never updates itself."""
+    env = os.environ if env is None else env
+    return SUPPORTED and bool(env.get("FLATPAK_ID") or os.path.exists(info or FLATPAK_INFO))
+
+
 def installed_exe() -> str | None:
-    """The BChat AppImage being run (its runtime sets $APPIMAGE), or None from source: nothing stable to point at."""
+    """The BChat AppImage being run (its runtime sets $APPIMAGE), or None from source: nothing stable to point at.
+    Never in a Flatpak: the app there is not a file BChat could point a menu entry at."""
+    if in_flatpak():
+        return None
     path = os.environ.get("APPIMAGE", "")
     return path if path and os.path.isfile(path) else None
 
@@ -160,6 +174,8 @@ def _sync_file(path: Path, on: bool, want: str, exe: str) -> str:
 def set_default_links(on: bool, mimeapps: Path | None = None) -> None:
     """Makes BChat the default for irc:// and ircs:// in mimeapps.list, or takes back only BChat's own lines.
     A line-by-line edit: every other line, comment and section stays exactly as it was."""
+    if in_flatpak():
+        return                # the Flatpak's exported desktop file already carries the link types
     mimeapps = mimeapps or config_home() / "mimeapps.list"
     lines = (_read(mimeapps) or "").splitlines()
     out, section, seen_default = [], "", False
@@ -207,7 +223,7 @@ def _refresh_menu() -> None:
 def sync_menu(menu: bool, links: bool, exe: str | None) -> str:
     """App-menu entry (+ icon, + link types) matching the ticks. 'added', 'fixed', 'removed', 'ok', 'skipped'
     (not Linux, or from source) or 'failed'."""
-    if exe is None or not SUPPORTED:
+    if exe is None or not SUPPORTED or in_flatpak():
         return "skipped"
     try:
         links = menu and links
@@ -228,7 +244,49 @@ def sync_menu(menu: bool, links: bool, exe: str | None) -> str:
         return "failed"
 
 
-def sync_autostart(on: bool, exe: str | None) -> str:
+def background_message(on: bool):
+    """The XDG Background portal's RequestBackground call: the Flatpak way to start BChat when the user logs in
+    (the portal writes the autostart entry outside the sandbox). jeepney is imported here: Linux only."""
+    from jeepney import DBusAddress, new_method_call
+    portal = DBusAddress("/org/freedesktop/portal/desktop", bus_name="org.freedesktop.portal.Desktop",
+                         interface="org.freedesktop.portal.Background")
+    options = {"reason": ("s", "Start BChat when you log in"), "autostart": ("b", on),
+               "commandline": ("as", ["bchat"]), "dbus-activatable": ("b", False)}
+    return new_method_call(portal, "RequestBackground", "sa{sv}", ("", options))
+
+
+def _send_background(msg, opener=None, timeout: float = 5.0) -> None:
+    from jeepney.io.blocking import open_dbus_connection
+    with (opener or open_dbus_connection)(bus="SESSION") as conn:
+        conn.send_and_get_reply(msg, timeout=timeout)       # the reply is just the request handle; the answer comes
+                                                            # later as a Response signal that BChat doesn't wait for
+
+
+def request_background(on: bool, opener=None, block: bool = False) -> str:
+    """Asks the portal to start (or stop starting) BChat at login. Fire and forget on a thread, so a slow or missing
+    portal never holds up the window. 'requested' or 'failed'. Never raises."""
+    try:
+        msg = background_message(on)
+    except Exception:                     # jeepney missing
+        return "failed"
+
+    def send() -> None:
+        try:
+            _send_background(msg, opener)
+        except Exception:                 # no session bus, no portal, a timeout: autostart simply isn't set
+            pass
+    if block:
+        send()
+    else:
+        threading.Thread(target=send, daemon=True, name="bchat-portal").start()
+    return "requested"
+
+
+def sync_autostart(on: bool, exe: str | None, changed: bool = False) -> str:
+    """Start when I log in. In a Flatpak through the Background portal, only when the tick changed or when it is on
+    (the portal remembers 'off'); otherwise the autostart file for the AppImage."""
+    if in_flatpak():
+        return request_background(on) if on or changed else "ok"
     if exe is None or not SUPPORTED:
         return "skipped"
     try:

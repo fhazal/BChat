@@ -165,8 +165,10 @@ class Updater(QObject):
         self.install_after = False        # Install Now pressed before the download finished
         self._download_after_check = False
         self.launcher = swap_appimage if LINUX else launch_installer
+        self.inert = False                      # Flatpak: Flathub updates BChat, so it never checks, downloads or installs
         if LINUX:                               # only a running AppImage has a file to swap
             from . import linuxdesk
+            self.inert = linuxdesk.in_flatpak()
             self.can_install = getattr(sys, "frozen", False) and linuxdesk.installed_exe() is not None
         else:
             self.can_install = getattr(sys, "frozen", False)
@@ -191,7 +193,7 @@ class Updater(QObject):
 
     def visible(self) -> bool:
         """The menu bar entry shows only when there's something to do or something going on."""
-        return self.state in (AVAILABLE, DOWNLOADING, READY, FAILED)
+        return not self.inert and self.state in (AVAILABLE, DOWNLOADING, READY, FAILED)
 
     def label(self) -> str:
         v = (self.entry or {}).get("version", "")
@@ -210,7 +212,7 @@ class Updater(QObject):
     def _resume_ready(self) -> None:
         """A download from an earlier run: still ready if it's newer than what's running and still checks out."""
         path, entry = self.cfg.update_ready_file, self.cfg.update_ready_entry
-        if not path:
+        if not path or self.inert:
             return
         ok = (isinstance(entry, dict) and Path(path).is_file()
               and version_key(entry.get("version", "")) > version_key(self.current)
@@ -232,11 +234,11 @@ class Updater(QObject):
 
     def start(self) -> None:
         """At start-up: first check a few seconds in, then once a day."""
-        if self.cfg.update_check and self.url:
+        if self.cfg.update_check and self.url and not self.inert:
             self.timer.start(5000)
 
     def check(self, manual: bool = False) -> None:
-        if self.state in (DOWNLOADING, CHECKING):
+        if self.inert or self.state in (DOWNLOADING, CHECKING):
             return
         self.manual = manual
         if self.state == READY:
