@@ -36,12 +36,15 @@ def has(name: str) -> bool:
     return name in NAMES
 
 
-def image(name: str, colour: str, px: int) -> QImage:
-    """The icon drawn px x px in colour, on transparent."""
+def image(name: str, colour: str, px: int, fill: float = 0.0) -> QImage:
+    """The icon drawn px x px in colour, on transparent. fill > 0 also fills its closed shapes with the same
+    colour at that opacity (Lucide ships outlines only; the tree uses a soft fill, owner's pick 0.9.3 "C2")."""
     lucide = NAMES.get(name, name)
     if lucide not in _svg:
         _svg[lucide] = (DIR / f"{lucide}.svg").read_bytes()
     data = _svg[lucide].replace(b"currentColor", colour.encode())
+    if fill > 0:
+        data = data.replace(b'fill="none"', f'fill="{colour}" fill-opacity="{fill:g}"'.encode(), 1)
     img = QImage(px, px, QImage.Format.Format_ARGB32_Premultiplied)
     img.fill(Qt.GlobalColor.transparent)
     p = QPainter(img)

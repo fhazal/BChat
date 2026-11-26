@@ -77,7 +77,7 @@ def test_messages_tab_stays_in_private(live):
 
 
 def test_lucide_icons_take_the_theme_colours():
-    """Server = blue monitor, folder = yellow, channel = text-coloured #, private = green person, notices = yellow bell."""
+    """Outlines in the (contrast-guarded) theme colours. Server = blue monitor, folder = yellow, channel = text-coloured #, private = green person, notices = yellow bell."""
     from PySide6.QtCore import QSize
     from PySide6.QtGui import QColor
     from bchat.config import make_theme
@@ -95,7 +95,7 @@ def test_lucide_icons_take_the_theme_colours():
             st.set_tree_theme(t)
             for kind, field in (("server", "new_highlight"), ("folder", "highlight"), ("channel", "text"),
                                 ("query", "join"), ("notices", "highlight")):
-                assert ink(kind) == QColor(getattr(t, field)).name(), (name, kind)
+                assert ink(kind) == QColor(st.guard(getattr(t, field), t.panel)).name(), (name, kind)
         # a theme change gives new icons, not the cached ones
         st.set_tree_theme(make_theme("Catppuccin Mocha"))
         dark = st.tree_icon("channel").cacheKey()
@@ -104,6 +104,58 @@ def test_lucide_icons_take_the_theme_colours():
     finally:
         st.set_tree_theme(None)
 
+
+def test_tree_icons_reach_text_contrast_on_every_theme():
+    """0.9.3 C2: every icon outline is at least 4.5:1 on the tree panel, same hue; dark themes keep their colours."""
+    import colorsys
+    from PySide6.QtGui import QColor
+    from bchat.config import THEME_NAMES, make_theme
+    try:
+        for name in THEME_NAMES:
+            t = make_theme(name)
+            st.set_tree_theme(t)
+            for kind, field in st._INK.items():
+                base, got = getattr(t, field), st._ink(kind)
+                assert st.contrast(got, t.panel) >= 4.5, (name, kind, got)
+                if st.contrast(base, t.panel) >= 4.5:
+                    assert got == base, (name, kind)      # already clear: untouched
+                else:
+                    h0 = colorsys.rgb_to_hls(*QColor(base).getRgbF()[:3])[0]
+                    h1 = colorsys.rgb_to_hls(*QColor(got).getRgbF()[:3])[0]
+                    assert min(abs(h0 - h1), 1 - abs(h0 - h1)) < 0.02, (name, kind, base, got)
+        for name in ("Catppuccin Mocha", "Dracula", "Nord"):
+            t = make_theme(name)
+            st.set_tree_theme(t)
+            assert all(st._ink(k) == getattr(t, f) for k, f in st._INK.items()), name
+    finally:
+        st.set_tree_theme(None)
+
+
+def test_guard_handles_custom_colours():
+    assert st.guard("#ffe680", "#ffffff") != "#ffe680"                      # pale yellow on white gets darker
+    assert st.contrast(st.guard("#ffe680", "#ffffff"), "#ffffff") >= 4.5
+    assert st.contrast(st.guard("#202040", "#1e1e2e"), "#1e1e2e") >= 4.5     # dark ink on dark panel gets lighter
+    assert st.guard("#000000", "#ffffff") == "#000000"
+    assert st.guard("not a colour", "#ffffff") == "not a colour"             # bad input left alone, no crash
+
+
+def test_closed_icons_get_a_soft_fill_and_hash_stays_an_outline():
+    from PySide6.QtCore import QSize
+    from bchat.config import make_theme
+    st._cache.clear()
+
+    def soft(kind):
+        img = st.tree_icon(kind).pixmap(QSize(32, 32)).toImage()
+        return sum(1 for x in range(img.width()) for y in range(img.height())
+                   if 45 <= img.pixelColor(x, y).alpha() <= 70)   # 22% fill = alpha 56
+    try:
+        for name in ("Catppuccin Mocha", "Catppuccin Latte"):
+            st.set_tree_theme(make_theme(name))
+            for kind in ("server", "folder", "query", "notices"):
+                assert soft(kind) > 20, (name, kind)
+            assert soft("channel") < 10, name
+    finally:
+        st.set_tree_theme(None)
 
 def test_preferences_theme_change_recolours_the_tree(live):
     from dataclasses import fields
