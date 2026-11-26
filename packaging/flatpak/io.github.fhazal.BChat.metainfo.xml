@@ -75,6 +75,16 @@
   </screenshots>
 
   <releases>
+    <release version="0.9.3" date="2026-11-27">
+      <description>
+        <p>Add-ons you can switch on or off: Channel Protection and Oper tools.</p>
+        <ul>
+          <li>Channel Protection (off until you turn it on) guards channels you run against floods, clones and bad words</li>
+          <li>Oper tools for IRC operators: Kill, Ban, Server bans, Wallops and Global notice</li>
+          <li>A (notices) tab under each network and new tree icons</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.2" date="2026-11-26">
       <description>
         <p>Choose whether a channel tab stays open after a kick or after you leave.</p>
