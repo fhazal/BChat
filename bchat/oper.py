@@ -181,7 +181,8 @@ def mask_ok(kind: str, mask: str) -> bool:
         return False
     if kind in IP_TYPES:
         return bool(re.fullmatch(r"[0-9A-Fa-f:.*/]+", mask))
-    return "@" in mask and not mask.startswith("@") and not mask.endswith("@")
+    # user@host only: servers reject nick!user@host in a GLINE / KLINE / SHUN
+    return "@" in mask and "!" not in mask and not mask.startswith("@") and not mask.endswith("@")
 
 
 NICK_RE = re.compile(r"[A-Za-z\[\]\\`_^{|}][-A-Za-z0-9\[\]\\`_^{|}]*")

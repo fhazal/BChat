@@ -194,3 +194,23 @@ def test_operserv_notices_still_show_when_the_bans_window_isnt_reading(app, tmp_
     assert wait(app, lambda: any("Password accepted." in l.text for b in s.all_buffers() for l in b.lines))
     w.hide()
     done(srv, win)
+
+
+def test_mask_with_a_nick_part_is_refused_for_user_host_bans():
+    from bchat.oper import mask_ok
+    assert mask_ok("GLINE", "*@10.0.0.1") and mask_ok("KLINE", "~x@host.example")
+    assert not mask_ok("GLINE", "bob!*@10.0.0.1") and not mask_ok("SHUN", "n!u@h")
+
+
+def test_operserv_lookalike_without_a_server_host_cant_feed_the_bans_window(app, tmp_path):
+    srv, win, s = connected(app, tmp_path, VERSIONS["beeircd"])
+    make_oper(app, srv, s)
+    w = open_server_bans(win, s)
+    assert wait(app, lambda: "PRIVMSG OperServ :SHUN LIST" in srv.received)
+    fake = ":OperServ!x@nodots NOTICE " + ME + " :"
+    srv.send(fake + "AKILLs:")
+    srv.send(fake + "  1   *@6.6.6.6  by Mallory · until removed · fake")
+    assert wait(app, lambda: any("6.6.6.6" in l.text for b in s.all_buffers() for l in b.lines))
+    assert all(w.view.topLevelItem(i).text(1) != "*@6.6.6.6" for i in range(w.view.topLevelItemCount()))
+    w.hide()
+    done(srv, win)

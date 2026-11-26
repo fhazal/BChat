@@ -2300,7 +2300,8 @@ class Session(QObject):
             self._reconnect.stop()
             self.add(self.server_buffer, ERROR, "*", f"-OperServ- {text} BChat will not retry: repeated attempts can get this IP banned.")
             return
-        if self.oper_sink is not None and self.fold(m.nick) == "operserv" and self.oper_sink(0, m):
+        if (self.oper_sink is not None and self.fold(m.nick) == "operserv" and "." in m.userhost.partition("@")[2]
+                and self.oper_sink(0, m)):
             return                                  # the Server bans window reading OperServ's ban lists
         if not self._welcomed and not self.bouncer and "psybnc" in (m.prefix + " " + text).lower():
             self.bouncer = "psyBNC"
