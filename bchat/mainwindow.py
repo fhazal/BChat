@@ -38,7 +38,7 @@ from .filetypes import is_program
 from .safety import CertDialog, FileExistsDialog, LinkDialog, ProgramDialog, link_risk
 from .updater import READY, Updater
 from .updatewindow import UpdateBadge, UpdateDialog
-from .switchertree import SwitcherTree, tree_icon
+from .switchertree import SwitcherTree, set_tree_theme, tree_icon
 from .quitdialog import QuitDialog
 from .dcc import DccManager
 from .upnp import Manager as UpnpManager
@@ -624,6 +624,7 @@ class MainWindow(FramelessWindow):
         self.split.setHandleWidth(3)
         self.split.setChildrenCollapsible(False)
 
+        set_tree_theme(self.cfg.theme)
         self.tree = SwitcherTree(self.cfg.theme, self.split)
         self.tree.setHeaderHidden(True)
         self.tree.setRootIsDecorated(True)
@@ -1242,7 +1243,8 @@ class MainWindow(FramelessWindow):
 
     def _file_item(self, b: Buffer) -> None:
         """Puts a tab in its server's Channel or Private folder, making the folder when it's the first one.
-        The server notices tab is the server talking, not a person: it sits right under the network, after the folders."""
+        The server notices tab is the server talking, not a person: it is the first row under the network, above the
+        folders, so its tree line is one short step (0.9.3, owner's pick "Line A")."""
         s = b.session
         it = self.items[id(b)]
         top = self.items[id(s.server_buffer)]
@@ -1253,7 +1255,7 @@ class MainWindow(FramelessWindow):
                     old.removeChild(it)
                     if self._is_folder(old):
                         self._folder_changed(s, old)
-                top.addChild(it)
+                top.insertChild(0, it)
                 top.setExpanded(True)
             it.setIcon(0, tree_icon("notices"))
             return
@@ -1267,7 +1269,8 @@ class MainWindow(FramelessWindow):
             folder.setData(0, Qt.ItemDataRole.UserRole, None)
             folder.setData(0, Qt.ItemDataRole.UserRole + 1, kind)
             folders = [n for n in range(top.childCount()) if self._is_folder(top.child(n))]
-            top.insertChild(0 if kind == "Channel" else (folders[-1] + 1 if folders else 0), folder)
+            lead = next((n for n in range(top.childCount()) if self._is_folder(top.child(n))), top.childCount())
+            top.insertChild(lead if kind == "Channel" else (folders[-1] + 1 if folders else lead), folder)
             top.setExpanded(True)
         old = it.parent()
         if old is folder:
@@ -1280,6 +1283,20 @@ class MainWindow(FramelessWindow):
         it.setIcon(0, tree_icon("channel" if b.kind == CHANNEL else "query"))
         folder.setExpanded(True)
         self._folder_changed(s, folder)
+
+    def _retheme_tree_icons(self) -> None:
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            top.setIcon(0, tree_icon("server"))
+            for j in range(top.childCount()):
+                row = top.child(j)
+                if not self._is_folder(row):
+                    row.setIcon(0, tree_icon("notices"))
+                    continue
+                row.setIcon(0, tree_icon("folder"))
+                for n in range(row.childCount()):
+                    b = row.child(n).data(0, Qt.ItemDataRole.UserRole)
+                    row.child(n).setIcon(0, tree_icon("channel" if b is not None and b.kind == CHANNEL else "query"))
 
     def _folder_changed(self, s: Session, folder: QTreeWidgetItem) -> None:
         kind = folder.data(0, Qt.ItemDataRole.UserRole + 1)
@@ -1304,7 +1321,7 @@ class MainWindow(FramelessWindow):
                 if self._is_folder(folder):
                     order.extend(folder.child(n) for n in range(folder.childCount()))
                 else:
-                    order.append(folder)        # the (notices) tab sits right under the network
+                    order.append(folder)        # the (notices) tab: the first row under the network
         return order
 
     def _switcher_order(self) -> list[Buffer]:
@@ -3168,6 +3185,8 @@ class MainWindow(FramelessWindow):
             self.topic.edit.set_topic(self.topic.edit.raw)   # redraw the topic with the colour setting
         self.userlist.set_buffer(self.buf if self.buf is not None and self.buf.kind == CHANNEL else None)
         self.userlist.viewport().update()
+        set_tree_theme(self.cfg.theme)
+        self._retheme_tree_icons()             # the Lucide tree icons take the theme's colours
         self.tree.viewport().update()          # tree lines and boxes come from the theme
         self.update_badge.update()
         self.topic.restyle()

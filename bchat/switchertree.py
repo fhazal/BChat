@@ -1,111 +1,33 @@
-"""The server and channel tree: server > Channel: N and Private: N folders > tabs, with icons and thin lines.
-Everything is drawn in code so it stays sharp at any screen scale."""
+"""The server and channel tree: server > (notices), Channel: N and Private: N folders > tabs, with icons and thin lines.
+Icons are Lucide outlines drawn from SVG at the screen's real size, so they stay sharp at any scale."""
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient
+from PySide6.QtCore import QSize
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QTreeWidget
 
 
-def _server(p: QPainter) -> None:
-    """The monitor: the server icon, with a glass screen and a stand."""
-    p.setPen(QPen(QColor("#1e66f5"), 1))
-    p.setBrush(QColor("#313244"))
-    p.drawRoundedRect(QRectF(1, 1.5, 14, 10), 2, 2)
-    g = QLinearGradient(0, 3, 0, 10)
-    g.setColorAt(0, QColor("#b4d4ff"))
-    g.setColorAt(0.5, QColor("#74a8f7"))
-    g.setColorAt(1, QColor("#3a6fd8"))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(g)
-    p.drawRoundedRect(QRectF(2.6, 3, 10.8, 7), 1, 1)
-    p.setBrush(QColor(255, 255, 255, 90))               # the glare
-    p.drawPolygon([QPointF(2.6, 3), QPointF(9, 3), QPointF(5, 10), QPointF(2.6, 10)])
-    p.setBrush(QColor("#7f849c"))
-    p.drawRect(QRectF(7, 11.5, 2, 2))
-    p.drawRoundedRect(QRectF(4, 13.2, 8, 1.6), 0.8, 0.8)
+# 0.9.3 (owner's pick, "Line A + Lucide"): the tree uses the app's one icon style, Lucide outlines in theme colours.
+_LUCIDE = {"server": "monitor", "folder": "folder", "channel": "hash", "query": "user", "notices": "bell"}
+_INK = {"server": "new_highlight", "folder": "highlight", "channel": "text", "query": "join", "notices": "highlight"}
+_theme = None
 
 
-def _folder(p: QPainter) -> None:
-    p.setPen(QPen(QColor("#c07a10"), 0.8))
-    p.setBrush(QColor("#e8a838"))
-    p.drawRoundedRect(QRectF(1, 2.5, 6.5, 4), 1.2, 1.2)
-    p.drawRoundedRect(QRectF(1, 4, 14, 9.5), 1.2, 1.2)
-    g = QLinearGradient(0, 5.5, 0, 13.5)
-    g.setColorAt(0, QColor("#ffe08a"))
-    g.setColorAt(1, QColor("#f5b83d"))
-    p.setBrush(g)
-    p.drawRoundedRect(QRectF(1, 5.8, 14, 7.7), 1.2, 1.2)
+def set_tree_theme(theme) -> None:
+    """The theme the tree icons take their colours from (set at start and after Preferences > OK)."""
+    global _theme
+    _theme = theme
 
 
-def _channel(p: QPainter) -> None:
-    """A blue chat bubble with a white #: a room."""
-    bubble = QPainterPath()
-    bubble.addRoundedRect(QRectF(1, 1.5, 14, 10.5), 3, 3)
-    tail = QPainterPath()
-    tail.moveTo(3.5, 11)
-    tail.lineTo(3.5, 15)
-    tail.lineTo(7.5, 11.5)
-    tail.closeSubpath()
-    g = QLinearGradient(0, 1.5, 0, 12)
-    g.setColorAt(0, QColor("#8fb8ff"))
-    g.setColorAt(1, QColor("#2f6be0"))
-    p.setPen(QPen(QColor("#1d4fb8"), 0.8))
-    p.setBrush(g)
-    p.drawPath(bubble.united(tail))
-    pen = QPen(QColor("white"), 1.3)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    p.setPen(pen)
-    p.drawLine(QPointF(6.4, 3.8), QPointF(5.6, 10))
-    p.drawLine(QPointF(10.2, 3.8), QPointF(9.4, 10))
-    p.drawLine(QPointF(4, 5.6), QPointF(12.2, 5.6))
-    p.drawLine(QPointF(3.6, 8.2), QPointF(11.8, 8.2))
+def _ink(kind: str) -> str:
+    t = _theme
+    if t is None:
+        from .config import Theme
+        t = Theme()
+    return getattr(t, _INK[kind])
 
 
-def _private(p: QPainter) -> None:
-    """A green person: one other person."""
-    head = QRadialGradient(QPointF(7, 4), 4)
-    head.setColorAt(0, QColor("#c8f5c0"))
-    head.setColorAt(1, QColor("#40a02b"))
-    p.setPen(QPen(QColor("#2d7a1f"), 0.8))
-    p.setBrush(head)
-    p.drawEllipse(QPointF(8, 5), 3.3, 3.3)
-    body = QPainterPath()
-    body.moveTo(2, 15)
-    body.cubicTo(2, 9.5, 14, 9.5, 14, 15)
-    body.closeSubpath()
-    g = QLinearGradient(0, 9.5, 0, 15)
-    g.setColorAt(0, QColor("#8ee07e"))
-    g.setColorAt(1, QColor("#3a9a28"))
-    p.setBrush(g)
-    p.drawPath(body)
-
-
-def _notices(p: QPainter) -> None:
-    """An amber bell: the server notices tab, the server talking rather than a person."""
-    bell = QPainterPath()
-    bell.moveTo(8, 1.5)
-    bell.cubicTo(4, 1.5, 3.6, 5, 3.6, 7.5)
-    bell.lineTo(3.6, 10)
-    bell.lineTo(2, 12.2)
-    bell.lineTo(14, 12.2)
-    bell.lineTo(12.4, 10)
-    bell.lineTo(12.4, 7.5)
-    bell.cubicTo(12.4, 5, 12, 1.5, 8, 1.5)
-    bell.closeSubpath()
-    g = QLinearGradient(0, 1.5, 0, 12.2)
-    g.setColorAt(0, QColor("#ffe08a"))
-    g.setColorAt(1, QColor("#e5940f"))
-    p.setPen(QPen(QColor("#b06d05"), 0.8))
-    p.setBrush(g)
-    p.drawPath(bell)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor("#b06d05"))
-    p.drawEllipse(QPointF(8, 13.6), 1.7, 1.5)
-
-
-_DRAW = {"server": _server, "folder": _folder, "channel": _channel, "query": _private, "notices": _notices}
-_cache: dict[tuple[str, float], QIcon] = {}
+_cache: dict[tuple[str, float, str], QIcon] = {}
 
 
 def _dpr() -> float:
@@ -119,26 +41,19 @@ def icon_points() -> int:
 
 
 def tree_icon(kind: str) -> QIcon:
+    from . import lucide
     dpr = _dpr()
-    key = (kind, dpr)
+    colour = _ink(kind)
+    key = (kind, dpr, colour)
     if key not in _cache:
         size = max(16, int(icon_points() * dpr))
-        pm = QPixmap(size, size)
+        pm = QPixmap.fromImage(lucide.image(_LUCIDE[kind], colour, size))
         pm.setDevicePixelRatio(dpr)
-        pm.fill(Qt.GlobalColor.transparent)
-        p = QPainter(pm)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        k = size / 16 / dpr
-        p.scale(k, k)
-        _DRAW[kind](p)
-        p.end()
         icon = QIcon()
         for mode in (QIcon.Mode.Normal, QIcon.Mode.Selected, QIcon.Mode.Active):
             icon.addPixmap(pm, mode)   # the same colours when selected, Qt would tint them
         _cache[key] = icon
     return _cache[key]
-
-
 
 
 class SwitcherTree(QTreeWidget):

@@ -3277,8 +3277,8 @@ def test_no_line_joins_one_server_to_the_next(app, tmp_path):
     win.close(); a.stop(); c.stop()
 
 
-def test_server_icon_is_the_drawn_monitor_and_about_has_no_icon_credit(live):
-    """The user's choice (11-07): the code-drawn monitor everywhere, no picture file, no Flaticon credit."""
+def test_server_icon_is_the_monitor_and_about_has_no_icon_credit(live):
+    """A monitor in the theme's blue (Lucide since 0.9.3, the owner's pick), no Flaticon picture or credit."""
     from bchat import switchertree as st
     app, srv, win, s = live
     dpr = app.primaryScreen().devicePixelRatio()
