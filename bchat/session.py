@@ -2350,6 +2350,10 @@ class Session(QObject):
             b.joined = False
             b.users.clear()
             self._left.add(self.fold(b.name))            # 0.8.5: left on purpose: a reconnect doesn't join it again
+            if not self.cfg.keep_on_part:                # 0.9.2: the tab closes; the line shows in the server tab
+                self.te("You Part", self.server_buffer, PART, (b.name,))
+                self.close_buffer(b)                     # not joined any more, so no second PART goes out
+                return
             self.te("You Part", b, PART, (b.name,))
             self.users_changed.emit(b)
             self.buffer_changed.emit(b)
@@ -2386,6 +2390,12 @@ class Session(QObject):
         if self.fold(victim) == self.fold(self.nick):
             b.joined = False
             b.users.clear()
+            if not self.cfg.keep_on_kick and not self.cfg.rejoin_on_kick:   # 0.9.2: rejoining needs the tab
+                self.te("You Kicked", self.server_buffer, PART, (b.name, m.nick, reason))
+                self._notify(b, "kicked")
+                self._notify(b, "kick")
+                self.close_buffer(b)                     # not joined any more, so no PART goes out
+                return
             self.te("You Kicked", b, PART, (b.name, m.nick, reason))
             self._notify(b, "kicked")
             self.buffer_changed.emit(b)

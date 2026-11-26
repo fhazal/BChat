@@ -375,6 +375,8 @@ class Config:
     away_once: bool = True
     auto_unaway: bool = False
     rejoin_on_kick: bool = False       # once, after 3 seconds
+    keep_on_kick: bool = True          # 0.9.2: off = the channel tab closes when I'm kicked (ignored while rejoin_on_kick is on)
+    keep_on_part: bool = True          # 0.9.2: off = the channel tab closes when I leave it
     whois_on_query: bool = True        # who someone is, at the top of a private chat they open
     single_msg_window: bool = False    # 0.8.6: private messages go to one (messages) tab per network; /query opens a real one
     single_msg_friends: bool = False   # 0.8.6: ... but nicks on the Friends list still get their own private chat

@@ -292,6 +292,7 @@ def _sheet(t: Theme) -> str:
     QCheckBox::indicator:hover {{ border: 1px solid {t.check}; }}
     QCheckBox::indicator:checked {{ background: {t.check}; border: 1px solid {t.check}; image: url({_svg_file("tick", "#11111b")}); }}
     QCheckBox::indicator:checked:disabled {{ background: {t.disabled}; border: 1px solid {t.disabled}; }}
+    QCheckBox:disabled, QRadioButton:disabled {{ color: {t.disabled}; }}  /* 0.9.2: a greyed option reads greyed */
     QScrollBar:vertical {{ background: {t.bar}; width: 13px; margin: 0; }}
     QScrollBar::handle:vertical {{ background: {t.thumb}; min-height: 24px; }}
     QScrollBar::handle:vertical:hover {{ background: {t.thumb_hover}; }}
