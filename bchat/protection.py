@@ -24,6 +24,9 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QHBoxLayout, Q
                                QTreeWidget, QTreeWidgetItem)
 
 from .control import SERVICES, _ban_hits, rule_for
+
+# Network service bots that are not called *Serv (QA 0.9.3): QuakeNet Q / L, Undernet X, Libera ALIS and friends.
+BOTS = {"q", "l", "x", "alis", "saslserv", "infoserv", "statserv", "helpserv", "groupserv", "chanfix", "spamserv"}
 from .protocol import lower, mask_ban, strip_format
 from .tools import ToolWindow
 from .widgets import FramedDialog, icon
@@ -210,7 +213,7 @@ class Protection:
     def _exempt(self, b, u, r: dict) -> bool:
         s = self.s
         n = lower(u.nick)
-        if s.fold(u.nick) == s.fold(s.nick) or n in SERVICES or "." in u.nick or getattr(u, "oper", False):
+        if s.fold(u.nick) == s.fold(s.nick) or n in SERVICES or n in BOTS or "." in u.nick or getattr(u, "oper", False):
             return True
         if "services" in _host(u).split("."):
             return True
@@ -524,8 +527,10 @@ def _muted(t, text: str, wrap: bool = True) -> QLabel:
 
 
 def _heading(t, text: str) -> QLabel:
+    from .widgets import is_light
     h = QLabel(text)
-    h.setStyleSheet(f"color: {t.title}; font-size: 11pt; font-weight: bold;")
+    colour = t.text if is_light(t) else t.title             # QA 0.9.3: pink on a light grey was hard to read
+    h.setStyleSheet(f"color: {colour}; font-size: 11pt; font-weight: bold;")
     return h
 
 

@@ -123,6 +123,7 @@ def test_the_remove_line_per_server_software():
     assert remove_line("charybdis", "DLINE", "203.0.113.7") == "UNDLINE 203.0.113.7"
     assert remove_line("inspircd", "GLINE", "*@h") == "GLINE *@h"
     assert remove_line("inspircd", "ZLINE", "203.0.113.7") == "ZLINE 203.0.113.7"
+    assert remove_line("inspircd", "DLINE", "203.0.113.7") == "ZLINE 203.0.113.7"   # InspIRCd has no DLINE
     assert remove_line("unreal", "GLINE", "*@h") == "GLINE -*@h"
     assert remove_line("unreal", "SHUN", "*@h") == "SHUN -*@h"
     assert remove_line("beeircd", "GLINE", "*@h") == "GLINE -*@h"
@@ -557,7 +558,8 @@ def test_server_bans_lists_adds_and_removes(app, tmp_path):
     assert w.sends.text() == f"Remove sends:  {remove_line('charybdis', rows[0][0], rows[0][1])}"
     w.remove()
     assert wait(app, lambda: any(x.startswith("UN") and "LINE" in x for x in srv.received))
-    assert w.view.topLevelItemCount() == 1
+    assert w.view.topLevelItemCount() == 2 and not w.remove_btn.isEnabled()   # QA 0.9.3: kept until the server says
+    assert wait(app, lambda: srv.received.count("STATS K") >= 2, ms=5000)  # the list reloads to show what really went
     done(srv, win)
 
 
@@ -686,3 +688,27 @@ def test_no_other_client_names_in_the_app_text():
     for name in ("xchat", "mirc", "adiirc", "hexchat", "irssi", "weechat"):
         # the module docstring and comments may talk about servers only; user-facing text never names a client
         assert f'"{name}' not in text and f"'{name}" not in text
+
+
+def test_kill_after_losing_oper_sends_nothing(app, tmp_path):
+    srv, win, s = connected(app, tmp_path)
+    make_oper(app, srv, s)
+    d = KillDialog(win, s, "zed", "~z@203.0.113.7")
+    srv.send(f":{ME} MODE {ME} :-o")
+    assert wait(app, lambda: not s.is_oper)
+    d.accept()
+    wait(app, lambda: False, ms=300)
+    assert not sent(srv, "KILL") and not d.go.isEnabled() and "no longer" in d.sends.text()
+    done(srv, win)
+
+
+def test_ip_ban_on_a_host_name_says_why(app, tmp_path):
+    srv, win, s = connected(app, tmp_path, VERSIONS["solanum"])
+    make_oper(app, srv, s)
+    d = BanDialog(win, s, "zed", "~z@host.example.net")
+    assert not d.why.isVisibleTo(d)
+    d.kind.setCurrentIndex(1)                                  # DLINE
+    assert d.why.isVisibleTo(d) and "host.example.net is a host name" in d.why.text()
+    d.kind.setCurrentIndex(0)
+    assert not d.why.isVisibleTo(d)
+    done(srv, win)

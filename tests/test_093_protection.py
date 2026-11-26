@@ -345,7 +345,7 @@ def test_someone_else_unbanning_cancels_our_unban(app, tmp_path, quick):
 # --- who is never touched, and when BChat stays out of it ----------------------------------------
 
 def test_exemptions(app, tmp_path, quick):
-    srv, win, s, b = setup(app, tmp_path, others="@Wira %Half +Vee Pal ChanServ Belon")
+    srv, win, s, b = setup(app, tmp_path, others="@Wira %Half +Vee Pal ChanServ Q Belon")
     win.cfg.friends = ["Pal"]
     win.cfg.control_rules = [{"who": "*!*@good.net", "by": "mask", "give": "", "protect": False, "channels": "#skinhead",
                               "network": ""}]
@@ -354,7 +354,7 @@ def test_exemptions(app, tmp_path, quick):
     srv.send(":irc.example.net NOTICE #skinhead :server notice")
     assert wait(app, lambda: "oper" in b.users and "listed" in b.users)
     b.users["oper"].oper = True                              # WHO said "*"
-    for nick in ("Wira", "Half", "Vee", "Pal", "ChanServ", "Listed", "Oper", s.nick):
+    for nick in ("Wira", "Half", "Vee", "Pal", "ChanServ", "Q", "Listed", "Oper", s.nick):
         for _ in range(3):
             say(srv, "same thing", nick=nick, host=f"{nick.lower()}@{nick.lower()}.net")
     settle(app, 400)

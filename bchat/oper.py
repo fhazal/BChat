@@ -96,7 +96,7 @@ def ban_line(family: str, kind: str, mask: str, mins: int, reason: str) -> str:
 def remove_line(family: str, kind: str, mask: str) -> str:
     """The exact line that lifts a server ban."""
     if family == "inspircd":
-        return f"{kind} {mask}"
+        return f"{'ZLINE' if kind == 'DLINE' else kind} {mask}"   # InspIRCd has no DLINE: an IP ban there is a ZLINE
     if family == "unreal":
         return f"{kind} -{mask}"
     if family == "beeircd":
@@ -302,6 +302,10 @@ class _OperDialog(FramedDialog):
     def accept(self) -> None:
         if not self.go.isEnabled():
             return
+        if not self.win.oper_active(self.s):                  # QA 0.9.3: no longer an oper since the window opened
+            self.sends.setText("You are no longer an IRC operator on this network, so nothing was sent.")
+            self.go.setEnabled(False)
+            return
         self.send()
         self.done_ok()
         super().accept()
@@ -361,6 +365,9 @@ class BanDialog(_OperDialog):
         self.mask_box.setEditable(True)
         self.mask_box.setFixedWidth(220)
         self.form.addRow("Ban:", self.mask_box)
+        self.why = _muted(win, "")
+        self.why.setFixedWidth(390)                         # a set width: no stray room above the wrapped hint
+        self.form.addRow("", self.why)
         self.length = QComboBox()
         self.length.addItems([name for name, _ in FOR])
         names = [name for name, _ in FOR]
@@ -391,6 +398,11 @@ class BanDialog(_OperDialog):
         if not self.mask_box.count():
             self.mask_box.setEditText("")
         self.mask_box.blockSignals(False)
+        host = self.userhost.partition("@")[2]
+        no_ip = self.type() in IP_TYPES and bool(host) and not _is_ip(host)
+        self.why.setText(f"{self.type()} needs an IP address; {host} is a host name. Type the IP, or pick another type."
+                         if no_ip else "")
+        self.why.setVisible(no_ip)
         self.refresh()
 
     def mins(self) -> int:
@@ -574,8 +586,9 @@ class ServerBansWindow(ToolWindow):
         if it is None:
             return
         self.s.send_raw(remove_line(self.family, it.text(0), it.text(1)))
-        self.view.takeTopLevelItem(self.view.indexOfTopLevelItem(it))
-        self._buttons()
+        self.remove_btn.setEnabled(False)
+        self.sends.setText("Removing... the list reloads when the server answers.")
+        self._soon.start()                                    # QA 0.9.3: the reload shows whether it really went
 
 
 # --- Add-ons > Oper tools > Settings... ----------------------------------------------------------
