@@ -870,8 +870,28 @@ class MainWindow(FramelessWindow):
         s.addSeparator()
         self.away_act = self._act(s, "Marked Away", self._toggle_away, "Alt+A", checkable=True)
 
+        # 0.9.3: Oper tools. This menu shows only while the server says you're an IRC operator on this tab's
+        # network (addons_changed); every item is one click by you, nothing runs on its own.
+        o = self.oper_menu = m.addMenu("&Oper")
+        self._act(o, "Kill...", lambda: self._oper("kill"))
+        self._act(o, "Ban from server...", lambda: self._oper("ban"))
+        self._act(o, "Server bans...", lambda: self._oper("bans"))
+        o.addSeparator()
+        self._act(o, "Wallops...", lambda: self._oper("wallops"))
+        self._act(o, "Global notice...", lambda: self._oper("global"))
+        o.addSeparator()
+        info = o.addMenu("Server info")
+        for name in ("Uptime", "Opers online", "Links", "Who is on (count)"):
+            self._act(info, name, lambda _=False, n=name: self._oper("info", n))
+        self._act(o, "Rehash server", lambda: self._oper("rehash"))
+        o.addSeparator()
+        self.oper_notices_act = self._act(o, "Show server notices tab", self.set_oper_notices, checkable=True,
+                                          checked=self.cfg.oper_notices)
+        self._act(o, "Stop being oper", lambda: self._oper("stop"))
+
         st = m.addMenu("S&ettings")
         self._act(st, "&Preferences", self.open_preferences, "", "preferences")
+        self._act(st, "Add-ons...", self.open_addons)             # 0.9.3: Channel Protection, Oper tools
         adv = st.addMenu(icon("justify"), "Advanced")
         for name, key in (("Auto Replace...", "replace"), ("CTCP Replies...", "ctcp"), ("Dialog Buttons...", "dialog"),
                           ("Keyboard Shortcuts...", "keys"), ("Popups...", "popups"), ("Slaps...", "slaps"), ("Text Events...", "events"),
@@ -883,6 +903,8 @@ class MainWindow(FramelessWindow):
         self._act(w, "Address Book...", lambda: self.open_address_book(), "", "book")
         self._act(w, "Auto-Op && Protect...", lambda: self.open_control())
         self._act(w, "Ban List...", self.open_ban_list)
+        # 0.9.3: only while Settings > Add-ons > Channel Protection is ticked (addons_changed)
+        self.protection_act = self._act(w, "Channel Protection...", lambda: self.open_protection())
         self._act(w, "Character Chart...", lambda: self.open_tool("chart"))
         self._act(w, "Direct Chat...", self.open_chats)
         self._act(w, "File Transfers...", self.open_transfers)
@@ -922,6 +944,7 @@ class MainWindow(FramelessWindow):
             a.setShortcut(QKeySequence(f"Alt+{n}"))
             a.triggered.connect(lambda _=False, i=n: self._change_page(number=i))
             self.addAction(a)
+        self.addons_changed()
 
     # --- sessions -------------------------------------------------------------
 
@@ -958,6 +981,7 @@ class MainWindow(FramelessWindow):
             s.state_changed.connect(lambda s=s: self.plugins.on_state(s))
             s.print_hook = self.plugins.on_print
             s.state_changed.connect(self._state_changed)
+            s.oper_changed.connect(self.addons_changed)      # 0.9.3: the Oper menu shows or hides
             s.raw_line.connect(self._raw)
             self._buffer_added(s.server_buffer)
         return s
@@ -1087,6 +1111,7 @@ class MainWindow(FramelessWindow):
 
     def _state_changed(self) -> None:
         self._refresh_title()
+        self.addons_changed()
         s = self.session
         if s is not None:
             self.away_act.blockSignals(True)
@@ -1471,6 +1496,7 @@ class MainWindow(FramelessWindow):
         self.chat.show_buffer(b)
         self._refresh_all()
         self._rebuild_tabs()
+        self.addons_changed()                   # 0.9.3: the Oper menu follows the network of this tab
         self.input.setFocus()
 
     def reload_buffer(self, b: Buffer) -> None:
@@ -1763,6 +1789,13 @@ class MainWindow(FramelessWindow):
         kb.addSeparator()
         for i, mask in enumerate(masks):
             kb.addAction(f"KickBan {mask}", lambda i=i: [s.ban(b, n, i, kick=True) for n in nicks])
+        if len(users) == 1 and self.oper_active(s):    # 0.9.3: Oper tools, one person at a time, only while you're an oper
+            from . import oper
+            om = menu.addMenu("Oper")
+            om.addAction("Whois (all info)", lambda: oper.whois_all(s, one.nick))
+            om.addAction("Kill...", lambda: oper.open_kill(self, s, one.nick, one.host))
+            om.addAction("Ban from server...", lambda: oper.open_ban(self, s, one.nick, one.host))
+            om.addAction("Find clones", lambda: oper.find_clones(self, s, one.nick))
         ctcp = menu.addMenu("CTCP")                     # mIRC's CTCP menu; the answers show in the current tab
         ctcp.addAction("Ping", lambda: [self._run_with(f"ping {n}") for n in nicks])
         ctcp.addAction("Time", lambda: [self._run_with(f"ctcp {n} TIME") for n in nicks])
@@ -1908,6 +1941,8 @@ class MainWindow(FramelessWindow):
         menu.addAction(icon("favourite"), "Favourite Channels...", self.open_favourites)
         if b.kind == CHANNEL:
             menu.addAction(icon("preferences"), "Channel Central...", lambda: self.open_channel_central(b))
+            if self.cfg.addon_protection:           # 0.9.3: only when the Channel Protection add-on is on
+                menu.addAction("Channel Protection...", lambda: self.protect_channel(b))
         menu.addSeparator()
         if b.kind in (CHANNEL, QUERY):
             self._tab_settings_menu(menu, b)       # 0.6.0: this tab's own settings, Log to Disk among them
@@ -3238,6 +3273,109 @@ class MainWindow(FramelessWindow):
         if u is not None:
             w.add(nick=u.nick, account=u.account, host=u.host, network=s.net.name if s else "",
                   channel=b.name if b is not None and b.kind == CHANNEL else "")
+        return w
+
+    def open_addons(self):
+        """Settings > Add-ons... (0.9.3): tick Channel Protection or Oper tools on or off."""
+        from .addons import AddonsDialog
+        d = self.addons_dialog = AddonsDialog(self)
+        d.open()
+        return d
+
+    def addons_changed(self) -> None:
+        """An add-on was ticked or unticked: show or hide its menus. Off = no menu item, nothing running."""
+        on = self.cfg.addon_protection
+        self.protection_act.setVisible(on)
+        self.protection_act.setEnabled(on)
+        w = self.tools.get("protection")
+        if not on and w is not None:
+            w.hide()
+        if getattr(self, "oper_menu", None) is None:
+            return
+        s = self.session
+        show = self.oper_active(s)
+        self.oper_menu.menuAction().setVisible(show)
+        self.oper_notices_act.blockSignals(True)
+        self.oper_notices_act.setChecked(self.cfg.oper_notices)
+        self.oper_notices_act.blockSignals(False)
+        w = self.tools.get("serverbans")
+        if w is not None and (not show or w.s is not s):
+            w.hide()
+
+    # --- Oper tools (0.9.3): bchat/oper.py ---------------------------------------------------
+
+    def oper_active(self, s: Session | None = None) -> bool:
+        """The Oper menu and the nick's Oper submenu show only while Add-ons > Oper tools is ticked AND the server
+        says you're an IRC operator on this network (381, or user mode +o)."""
+        return bool(s is not None and self.cfg.addon_oper and s.is_oper)
+
+    def _oper(self, what: str, arg: str = "") -> None:
+        s = self.session
+        if not self.oper_active(s):
+            return
+        from . import oper
+        if what == "kill":
+            oper.open_kill(self, s)
+        elif what == "ban":
+            oper.open_ban(self, s)
+        elif what == "bans":
+            oper.open_server_bans(self, s)
+        elif what in ("wallops", "global"):
+            oper.open_message(self, s, what)
+        elif what == "info":
+            oper.server_info(self, s, arg)
+        elif what == "rehash":
+            oper.rehash(s)
+        elif what == "stop":
+            oper.stop_being_oper(s)
+
+    def set_oper_notices(self, on: bool) -> None:
+        """Oper > Show server notices tab (also in Add-ons > Oper tools > Settings...)."""
+        self.cfg.oper_notices = bool(on)
+        self.save_config()
+        if on:
+            for s in self.sessions.values():
+                if self.oper_active(s):
+                    s.buffer("(notices)")
+        self.addons_changed()
+
+    def protect_channel(self, b: Buffer):
+        """Channel tab right-click > Channel Protection... (0.9.3): this channel's rule, or a new one for it."""
+        w = self.open_protection()
+        if w is None:
+            return None
+        net, f = b.session.net.name, b.session.fold
+        for i, r in enumerate(self.cfg.protect_rules):
+            if f(r.get("channel", "")) == f(b.name) and r.get("network", "") in ("", net):
+                w.select(i)
+                return w.edit()
+        return w.add(channel=b.name, network=net if b.session.net in self.cfg.networks else "")
+
+    def open_protection(self):
+        """Window > Channel Protection... and Add-ons > Settings... (0.9.3): the list of protected channels."""
+        if not self.cfg.addon_protection:
+            return None
+        from .protection import ProtectionWindow
+        w = self.tools.get("protection")
+        if w is None:
+            w = self.tools["protection"] = ProtectionWindow(self)
+        else:
+            w.on.setChecked(self.cfg.protect_on)
+            w.fill()
+        w.show()
+        w.raise_()
+        return w
+
+    def open_oper_tools(self):
+        """Add-ons > Oper tools > Settings... (0.9.3): the notices tab, the usual ban time, the remembered reasons."""
+        from .oper import OperSettings
+        w = self.tools.get("opersettings")
+        if w is None:
+            w = self.tools["opersettings"] = OperSettings(self)
+        else:
+            w.fill()
+        w.show()
+        w.raise_()
         return w
 
     def open_address_book(self, nick: str = "", real: str = ""):

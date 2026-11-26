@@ -322,6 +322,13 @@ class Config:
     address_book: list = field(default_factory=list)   # 0.3.0 cards: {"nick", "other", "real", "email", "web", "notes", "colour"}
     control_on: bool = True        # 0.5.0 Auto-Op / Auto-Voice / Protect list in use (it does nothing while empty)
     control_rules: list = field(default_factory=list)  # {"who", "by": account|mask, "give": @|+, "protect", "channels", "network"}
+    addon_protection: bool = False  # 0.9.3 Settings > Add-ons: Channel Protection (off until the user ticks it)
+    addon_oper: bool = True         # 0.9.3 Settings > Add-ons: Oper tools (only show while you're an IRC operator)
+    oper_notices: bool = True       # 0.9.3 Oper > Show server notices tab: an oper's server notices go to their own tab
+    oper_for: str = "1 day"         # 0.9.3 Oper tools: the last 'For:' picked in Kill / Ban from server (remembered)
+    oper_reasons: list = field(default_factory=lambda: ["Spam", "Flooding", "Clones", "Abuse"])  # 0.9.3 remembered ban reasons
+    protect_on: bool = True         # 0.9.3 the Channel Protection list in use (it does nothing while empty or the add-on is off)
+    protect_rules: list = field(default_factory=list)  # one per channel: see protection.DEFAULTS
     send_typing: bool = False      # 0.3.0: let others see when I'm typing (+typing); off until the user turns it on
     strip_colors: bool = False     # drop mIRC colours from what people say
     do_not_disturb: bool = False   # 0.7.0 /donotdisturb + tray menu: no sounds, flashes or pop-up cards

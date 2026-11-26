@@ -68,6 +68,7 @@ class User:
     account: str = ""
     away_reason: str = ""
     last_msg: float = 0.0
+    oper: bool = False      # 0.9.3: WHO flags have * (an IRC operator): Channel Protection never touches them
 
 
 class Buffer:
@@ -160,6 +161,7 @@ class Session(QObject):
     invited = Signal(object, str, str)   # session, channel, who: the window offers Join / Ignore (never joins by itself)
     typing_changed = Signal(object)      # buffer: someone started or stopped typing (+typing)
     servers_moved = Signal()             # 0.8.6: 'move to top on connect' changed the network's server order
+    oper_changed = Signal()              # 0.9.3: the server made us an IRC operator, or took it away (Oper tools)
 
     MAX_LINES = 5000
     LAG_WARN_MS = 5000
@@ -254,7 +256,12 @@ class Session(QObject):
         self.online_since = 0.0            # /online: when this connection got its welcome
         self.motd_asked = False            # /motd typed: show it even with "Skip the MOTD"
         from .control import Control
+        self.is_oper = False               # 0.9.3 Oper tools: 381 or user mode +o; off again on -o, on a lost link or a new one
+        self.ircd_version = ""              # 0.9.3 Oper tools: the server software, from 004 (oper.ircd_family picks the ban commands)
+        self.oper_sink = None              # 0.9.3 the Server bans window reading STATS answers: (n, message) -> consumed
         self.control = Control(self)       # 0.5.0 Auto-Op / Auto-Voice / Protect
+        from .protection import Protection
+        self.protection = Protection(self)  # 0.9.3 Channel Protection (an add-on, off until ticked)
         self.services = ""                 # "anope" or "atheme", from ChanServ's VERSION answer (ChanServ Access)
         self.services_guessed = False
         self._services_wait: list = []
@@ -605,6 +612,7 @@ class Session(QObject):
         self._ws_path = s.ws_path
         self._dial_host = s.host                   # 0.8.10: Proxy Server > Not for: is matched against it
         self._set_state("connecting")
+        self.ircd_version = ""
         self._buf = b""
         self._rx.clear()
         self._welcomed = False
@@ -871,7 +879,22 @@ class Session(QObject):
 
     def _set_state(self, st: str) -> None:
         self.state = st
+        if st != "connected":
+            self._set_oper(False)               # 0.9.3: a lost link or a new one is never an oper link
         self.state_changed.emit()
+
+    def _set_oper(self, on: bool) -> None:
+        """0.9.3 Oper tools: the server says we are (381 / +o) or are no more (-o / link gone) an IRC operator."""
+        on = bool(on)
+        if on == self.is_oper:
+            return
+        self.is_oper = on
+        if on and self.cfg.addon_oper:
+            if self.cfg.oper_notices:
+                self.buffer("(notices)")             # the Server notices tab shows up under the network
+            more = "; server notices go to their own tab." if self.cfg.oper_notices else "."
+            self.add(self.server_buffer, INFO, "*", f"14BChat: you're an IRC operator on {self.net.name}. The Oper menu is on{more}")
+        self.oper_changed.emit()
 
     def _use_client_cert(self) -> None:
         """Log in with: Certificate. The certificate goes in the SSL handshake; the key stays on this PC."""
@@ -1978,6 +2001,8 @@ class Session(QObject):
         ctcp = text.startswith("\x01") and not text.startswith("\x01ACTION")
         dcc = text.startswith("\x01DCC")
         kind = "D" if dcc else "T" if ctcp else "C" if self.is_channel(target) else "P"
+        if not self._replaying and "batch" not in m.tags and self.fold(m.nick) != self.fold(self.nick):
+            self.protection.heard(target, m.nick, text)     # 0.9.3: before /ignore, an ignored flooder still floods
         if self.ignored(m.prefix, kind):
             return
         if not ctcp and self.ignored(m.prefix, "K"):      # 0.8.5 /ignore -k: their colours, bold and codes taken out
@@ -2274,6 +2299,8 @@ class Session(QObject):
             return
         if not self._welcomed and not self.bouncer and "psybnc" in (m.prefix + " " + text).lower():
             self.bouncer = "psyBNC"
+        if not self._replaying and "batch" not in m.tags and self.fold(m.nick) != self.fold(self.nick) and "!" in m.prefix:
+            self.protection.heard(target, m.nick, text, notice=True)    # 0.9.3 Channel Protection
         if text.startswith("\x01") and text.endswith("\x01"):
             verb, _, rest = text.strip("\x01").partition(" ")
             if self._services_wait and self.fold(m.nick) == "chanserv" and verb.upper() == "VERSION":
@@ -2300,7 +2327,8 @@ class Session(QObject):
         if self.chanserv_sink is not None and self.fold(m.nick) == "chanserv" and self.chanserv_sink(text):
             return
         if not m.nick or "." in m.nick or self.state != "connected":
-            where = self.buffer("(notices)") if self.cfg.notices_tab else self.server_buffer
+            snotice = self.is_oper and self.cfg.addon_oper and self.cfg.oper_notices and self.state == "connected"
+            where = self.buffer("(notices)") if self.cfg.notices_tab or snotice else self.server_buffer    # 0.9.3: an oper's server notices
             self.add(where, NOTICE, "-" + (m.nick or "server") + "-", text, self._ts(m))
             return
         b = self.buffers.get(self.fold(target)) if self.is_channel(target) else self._notice_channel(m, text)
@@ -2338,6 +2366,8 @@ class Session(QObject):
         b.users[self.fold(m.nick)] = joined
         self.users_changed.emit(b)
         self.control.check(b, m.nick)
+        if not self._replaying and "batch" not in m.tags:
+            self.protection.joined(b, m.nick)
         if not self.cfg.hide_joinpart:
             self._bump(b, 1)
 
@@ -2370,6 +2400,7 @@ class Session(QObject):
 
     def _irc_quit(self, m: Message) -> None:
         key = self.fold(m.nick)
+        self.protection.quit(m.nick, m.param(-1))     # 0.9.3: netsplit rejoins are not a mass join
         for b in self.buffers.values():
             if key in b.users:
                 del b.users[key]
@@ -2386,6 +2417,7 @@ class Session(QObject):
         victim, reason = m.param(1), m.param(2)
         if b is None or not victim:                 # 0.8.5: a KICK naming nobody kicks nobody (not us)
             return
+        self.protection.kicked(b, m.nick, victim)
         b.users.pop(self.fold(victim), None)
         if self.fold(victim) == self.fold(self.nick):
             b.joined = False
@@ -2542,6 +2574,8 @@ class Session(QObject):
                 u.nick = new
                 b.users[self.fold(new)] = u
                 seen = True
+                if not was_me and b.kind == CHANNEL:
+                    self.protection.nick_changed(b, old, u)
                 if shared and was_me:
                     self.te("Your Nick Changing", b, INFO, (new,))
                 elif shared:
@@ -2571,6 +2605,8 @@ class Session(QObject):
     def _irc_mode(self, m: Message) -> None:
         target = m.param(0)
         if not self.is_channel(target):
+            if self.fold(target) == self.fold(self.nick):
+                self._own_modes(m.param(1))
             self.te("Your Modes", self.server_buffer, INFO, (target, " ".join(m.params[1:])))
             return
         b = self.buffer(target)
@@ -2579,6 +2615,23 @@ class Session(QObject):
             self._apply_modes(b, m.params[1:], actor=m.nick)
         else:
             self._apply_modes(b, m.params[1:], m.nick)
+
+    def _own_modes(self, modes: str) -> None:
+        """0.9.3 Oper tools: our own user modes changed; +o turns the Oper tools on, -o off."""
+        sign = "+"
+        for c in modes:
+            if c in "+-":
+                sign = c
+            elif c == "o":
+                self._set_oper(sign == "+")
+
+    def _note_ircd(self, n: int, p: list[str], rest: str) -> None:
+        """0.9.3 Oper tools: the server software from 004 (version), or from 002 / 351 when 004 didn't say."""
+        if n == 4:
+            self.ircd_version = p[2] if len(p) > 2 else self.ircd_version
+        elif not self.ircd_version:
+            found = re.search(r"version (\S+)", rest) if n == 2 else None
+            self.ircd_version = found.group(1) if found else (p[1] if n == 351 and len(p) > 1 else "")
 
     @staticmethod
     def _keep_key(b: Buffer, key: str) -> None:
@@ -2609,6 +2662,7 @@ class Session(QObject):
                     elif sign == "-":
                         u.prefixes = u.prefixes.replace(pfx, "")
                     changed = True
+                    self.protection.mode(b, actor, sign, c, nick, prefix=True)
                     if sign == "-":
                         self.control.mode_taken(b, actor, pfx, nick)
                     elif pfx == "@" and self.fold(nick) == self.fold(self.nick):
@@ -2626,6 +2680,7 @@ class Session(QObject):
                 arg = args.pop(0) if has_arg and args else ""
                 if c == "b" and sign == "+":
                     self.control.banned(b, actor, arg)
+                self.protection.mode(b, actor, sign, c, arg)
                 if c not in self.modes_list:
                     if sign == "+":
                         if c not in b.modes:
@@ -2783,6 +2838,12 @@ class Session(QObject):
             return
         p = m.params
         rest = " ".join(p[1:])
+        if n in (2, 4, 351):
+            self._note_ircd(n, p, rest)             # 0.9.3 Oper tools: which server software this is
+        elif n == 221:
+            self._set_oper("o" in m.param(1).split("-")[0])      # our own user modes in full (+iow): oper or not
+        if self.oper_sink is not None and n in (216, 219, 223, 225, 280) and self.oper_sink(n, m):
+            return                                  # the Server bans window's STATS answers
         if n == 1:
             self.nick = m.param(0) or self.nick     # 0.8.5: a 001 without a nick doesn't empty ours
             self._ison_asked.clear()                # 0.8.5: answers to the last link's ISONs never come
@@ -2921,6 +2982,7 @@ class Session(QObject):
             self._login_refused(m.param(-1))       # 0.8.5: only before 001; a wrong /oper password later is just an error line
         elif n == 381:
             self.add(self._oper_tab(), INFO, "*", rest)
+            self._set_oper(True)                    # 0.9.3 Oper tools turn on
         elif n in self.JOIN_REFUSED and self._join_refused(n, m):
             pass
         elif n == 471:
@@ -3357,6 +3419,8 @@ class Session(QObject):
             prev = old.get(self.fold(nick))
             b.users[self.fold(nick)] = User(nick, pfx, host or (prev.host if prev else ""),
                                          prev.away if prev else False, prev.realname if prev else "")
+            if prev is not None:
+                b.users[self.fold(nick)].oper = prev.oper
         self.users_changed.emit(b)
 
     def _who_reply(self, m: Message) -> None:
@@ -3372,6 +3436,7 @@ class Session(QObject):
         host = f"{m.param(2)}@{m.param(3)}"
         changed = u.away != away
         u.away, u.host, u.realname, u.server = away, host, real, m.param(4)
+        u.oper = "*" in m.param(6)
         if changed:
             self.users_changed.emit(b)
 
@@ -3387,6 +3452,7 @@ class Session(QObject):
         away = m.param(7).startswith("G") and self.cfg.away_track
         changed = u.away != away
         u.away, u.host, u.server = away, f"{m.param(3)}@{m.param(4)}", m.param(5)
+        u.oper = "*" in m.param(7)
         u.account = "" if m.param(8) == "0" else m.param(8)
         u.realname = m.param(-1)
         if changed:
