@@ -34,13 +34,27 @@ Classic XChat feel · seventeen themes · safe by default · notification cards 
 
 ---
 
-## 🆕 What's new in 0.9.0
+## 🆕 What's new in 0.9.2
+
+- 🚪 **Keep the channel tab open, or not** (*Settings → General*): *Keep the channel tab open when I'm kicked* and *Keep the channel tab open when I leave it*. Both are on, as before; turn one off and the tab closes, and the line about it goes to the server tab.
+- 🩶 **Greyed-out options look greyed out**: an option you can't use right now has grey text everywhere in BChat.
+
+<details><summary>0.9.1</summary>
+
+- 📦 **BChat as a Flatpak**: `BChat-0.9.1.flatpak` installs BChat in its own sandbox and is updated by your software centre.
+- 🐛 **Fixed**: closing a tab or window while BChat was still looking up a server name could cause an error a few seconds later.
+
+</details>
+
+<details><summary>0.9.0</summary>
 
 - 🐧 **BChat comes to Linux**: one file, `BChat-x86_64.AppImage`, for Ubuntu 22.04 or newer, Fedora and other current 64-bit distros. No install and no admin password.
 - 🔑 **Passwords in your desktop's keyring** (GNOME Keyring, KDE Wallet or KeePassXC), listed as *BChat IRC passwords*. If no keyring answers, BChat says so and keeps no passwords; it never writes them to a file.
 - 🏠 **Feels at home**: an app menu entry, `irc://` and `ircs://` links open in BChat, and *Start when I log in* works on Linux too.
 - 🎵 **`/np`, `/sysinfo` and speech on Linux**: `/np` reads any MPRIS music player, `/sysinfo` shows your distro and kernel, and *Speech* uses your desktop's voices.
 - 🔄 **Updates itself on Linux**: the AppImage is replaced in place and checked against its own signature, apart from the Windows one.
+
+</details>
 
 <details><summary>0.8.10</summary>
 

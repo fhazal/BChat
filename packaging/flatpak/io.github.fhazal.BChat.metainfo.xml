@@ -75,6 +75,15 @@
   </screenshots>
 
   <releases>
+    <release version="0.9.2" date="2026-11-26">
+      <description>
+        <p>Choose whether a channel tab stays open after a kick or after you leave.</p>
+        <ul>
+          <li>Keep the channel tab open when I'm kicked, and when I leave it, in Settings, General</li>
+          <li>Options you can't use right now have grey text everywhere</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.1" date="2026-11-25">
       <description>
         <p>BChat is now available as a Flatpak.</p>
